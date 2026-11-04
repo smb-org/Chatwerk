@@ -1,9 +1,19 @@
+import { handleApiRequest } from "./api";
+import { handleAuthRequest } from "./auth";
+import { handleBadgeRequest, type BadgeEnvironment } from "./badges";
+
 export { OverlayObject } from "./overlay-object";
 
 const worker = {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const authResponse = await handleAuthRequest(request, env);
+    if (authResponse) return authResponse;
+    const badgeResponse = await handleBadgeRequest(request, env as BadgeEnvironment, fetch, (promise) => ctx.waitUntil(promise));
+    if (badgeResponse) return badgeResponse;
+    const apiResponse = await handleApiRequest(request, env);
+    if (apiResponse) return apiResponse;
 
+    const url = new URL(request.url);
     switch (`${request.method} ${url.pathname}`) {
       case "GET /health":
         return Response.json({ ok: true });
@@ -11,7 +21,6 @@ const worker = {
         if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
           return Response.json({ error: "Not found" }, { status: 404 });
         }
-
         return env.ASSETS.fetch(request);
     }
   },

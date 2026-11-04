@@ -22,12 +22,13 @@ describe("Worker scaffold", () => {
     expect(await response.json()).toEqual({ error: "Not found" });
   });
 
-  it("keeps the Durable Object counter between calls", async () => {
+  it("keeps the Durable Object config and revision between calls", async () => {
     const id = env.OVERLAY.newUniqueId();
     const overlay = env.OVERLAY.get(id);
 
-    expect(await overlay.ping()).toBe(1);
-    expect(await overlay.ping()).toBe(2);
+    expect((await overlay.get(1)).revision).toBe(0);
+    await overlay.save({ fontSize: 24 }, 0, 1);
+    expect(await overlay.get(1)).toMatchObject({ revision: 1, config: { fontSize: 24 } });
   });
 
   it("applies the D1 migration and enforces unique overlay link tokens", async () => {

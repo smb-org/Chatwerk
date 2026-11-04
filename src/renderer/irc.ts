@@ -1,3 +1,4 @@
+import type { ChatStatus } from "../shared/protocol";
 import { parseIrcLine, type IrcEvent } from "./irc-parse";
 
 const IRC_URL = "wss://irc-ws.chat.twitch.tv:443";
@@ -17,6 +18,7 @@ export interface IrcClientOptions {
   channel: string;
   transportFactory?: (url: string) => IrcTransport;
   onEvent?: (event: IrcEvent) => void;
+  onStatus?: (status: ChatStatus) => void;
   random?: () => number;
   randomValues?: () => number;
 }
@@ -29,6 +31,8 @@ export class IrcClient {
   private readonly channel: string;
   private readonly transportFactory: (url: string) => IrcTransport;
   private readonly onEvent: (event: IrcEvent) => void;
+  private readonly onStatus: (status: ChatStatus) => void;
+  private status: ChatStatus = "idle";
   private readonly random: () => number;
   private readonly randomValues: () => number;
   private transport: IrcTransport | undefined;
@@ -43,6 +47,7 @@ export class IrcClient {
     this.channel = options.channel.toLowerCase().replace(/^#/u, "");
     this.transportFactory = options.transportFactory ?? createBrowserTransport;
     this.onEvent = options.onEvent ?? (() => undefined);
+    this.onStatus = options.onStatus ?? (() => undefined);
     this.random = options.random ?? Math.random;
     this.randomValues = options.randomValues ?? browserRandomValue;
   }
@@ -51,6 +56,7 @@ export class IrcClient {
     if (this.started || !isValidChannel(this.channel)) return;
     this.started = true;
     this.reconnectAttempt = 0;
+    this.setStatus("reconnecting");
     this.connect();
   }
 
@@ -62,6 +68,7 @@ export class IrcClient {
     const transport = this.transport;
     this.transport = undefined;
     transport?.close();
+    this.setStatus("idle");
   }
 
   private connect(): void {
@@ -97,6 +104,7 @@ export class IrcClient {
           this.reconnectImmediately(transport);
           return;
         } else if (isLoginCollision(event)) {
+          this.setStatus("reconnecting");
           this.transport = undefined;
           this.clearConnectionTimers();
           transport.close();
@@ -106,6 +114,7 @@ export class IrcClient {
           if (event.type === "ROOMSTATE" && !receivedRoomState) {
             this.reconnectAttempt = 0;
             receivedRoomState = true;
+            this.setStatus("connected");
           }
           this.onEvent(event);
         }
@@ -123,6 +132,7 @@ export class IrcClient {
 
   private reconnectImmediately(transport: IrcTransport): void {
     if (this.transport !== transport) return;
+    this.setStatus("reconnecting");
     this.transport = undefined;
     this.clearConnectionTimers();
     transport.close();
@@ -131,10 +141,17 @@ export class IrcClient {
 
   private disconnect(transport: IrcTransport): void {
     if (this.transport !== transport) return;
+    this.setStatus("reconnecting");
     this.transport = undefined;
     this.clearConnectionTimers();
     transport.close();
     this.scheduleReconnect();
+  }
+
+  private setStatus(status: ChatStatus): void {
+    if (this.status === status) return;
+    this.status = status;
+    this.onStatus(status);
   }
 
   private scheduleReconnect(): void {

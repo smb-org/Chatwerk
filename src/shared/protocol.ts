@@ -1,5 +1,8 @@
 import { DEFAULTS, SCHEMA_VERSION, migrate, type ThemeConfig } from "./theme";
 
+export type ChatStatus = "connected" | "reconnecting" | "idle";
+export type OverlayClientType = "browser" | "obs" | "widget" | "studio";
+
 export interface ConfigWireMessage {
   type: "config";
   schemaVersion: number;
@@ -11,8 +14,34 @@ export interface ConfigWireMessage {
 export interface ClientHelloWireMessage {
   type: "hello";
   schemaVersion: number;
-  client: "browser" | "obs" | "widget" | "studio";
+  client: OverlayClientType;
   [key: string]: unknown;
+}
+
+export interface ClientAckWireMessage {
+  type: "ack";
+  revision: number;
+  chatStatus: ChatStatus;
+  testId?: string;
+  [key: string]: unknown;
+}
+
+export interface TestLineWireMessage {
+  type: "test-line";
+  id: string;
+}
+
+export interface ClientCountsWireMessage {
+  type: "clients";
+  counts: Record<OverlayClientType, number>;
+  clients: Array<{ client: OverlayClientType; revision: number; chatStatus: ChatStatus }>;
+}
+
+export interface TestProgressWireMessage {
+  type: "test-progress";
+  id: string;
+  shown: number;
+  total: number;
 }
 
 export interface PingWireMessage {
@@ -20,7 +49,14 @@ export interface PingWireMessage {
   [key: string]: unknown;
 }
 
-export type OverlayWireMessage = ConfigWireMessage | ClientHelloWireMessage | PingWireMessage;
+export type OverlayWireMessage =
+  | ConfigWireMessage
+  | ClientHelloWireMessage
+  | ClientAckWireMessage
+  | TestLineWireMessage
+  | ClientCountsWireMessage
+  | TestProgressWireMessage
+  | PingWireMessage;
 
 export type ConfigUpdateDecision =
   | { status: "applied"; config: ThemeConfig; shouldReload: false }

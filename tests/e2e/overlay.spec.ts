@@ -183,11 +183,13 @@ test("keeps chat rows inside the viewport and anchors the newest row for each li
   expect(1080 - shortRows.at(-1)!.bottom)
     .toBeLessThanOrEqual(shortRows.at(-1)!.height + shortRows.at(-1)!.spacing);
 
-  await page.evaluate(() => localStorage.setItem("chatwerk-theme", JSON.stringify({
-    schemaVersion: 1,
-    lineOrder: "message-first",
-  })));
-  await page.goto("/overlay?reverse=1#channel=test&client=browser");
+  const reverseToken = "R".repeat(43);
+  await page.evaluate((token) => localStorage.setItem(`chatwerk-theme:${token}`, JSON.stringify({
+    revision: 0,
+    config: { schemaVersion: 1, lineOrder: "message-first" },
+    channel: "test",
+  })), reverseToken);
+  await page.goto(`/overlay?reverse=1#token=${reverseToken}&client=browser`);
   await page.reload();
   await expect(page.locator(".chat-line")).toHaveCount(100);
   const reversedRows = await page.locator(".chat-line").evaluateAll((rows) => rows.map((row) => ({

@@ -6,6 +6,9 @@
   "workers_dev": false,
   "preview_urls": false,
   "routes": [{ "pattern": "chatwerk.esembe.app", "custom_domain": true }],
+  "vars": {
+    "TWITCH_CLIENT_ID": "fl0p8o3ci86ubuv14ljn21qa7z5sry"
+  },
   "assets": {
     "binding": "ASSETS",
     "directory": "./dist/client",

@@ -96,12 +96,20 @@ describe("deployment headers", () => {
     }
   });
 
+
+  it("allows direct overlay service worker registration without caching the script", () => {
+    const headers = headersForPath("/overlay-sw.js");
+    expect(headers).toContain("Service-Worker-Allowed: /");
+    expect(headers).toContain("Cache-Control: no-cache");
+    expect(headers.join("\n")).not.toContain("frame-ancestors");
+  });
+
   it("requires a bare HTTPS origin for non-local builds", () => {
     expect(() => publicOriginFor("production", undefined)).toThrow(/PUBLIC_ORIGIN/);
     expect(() => publicOriginFor("production", "http://chat.example.com")).toThrow(/HTTPS/);
     expect(() => publicOriginFor("production", "https://chat.example.com/path")).toThrow(/bare|path/i);
     expect(publicOriginFor("production", "https://chat.example.com/")).toEqual({
-      origin: "https://chat.example.com", wssOrigin: "wss://chat.example.com",
+      origin: "https://chat.example.com", wssOrigin: "wss://chat.example.com", socketOrigin: "wss://chat.example.com",
     });
     expect(publicOriginFor("local", undefined).origin).toContain("localhost");
   });
@@ -111,5 +119,14 @@ describe("deployment headers", () => {
     expect(rendered).toContain("https://chat.example.com");
     expect(rendered).toContain("wss://chat.example.com");
     expect(rendered).not.toContain("__PUBLIC_");
+  });
+
+  it("allows the local overlay socket from an opaque-origin iframe", () => {
+    const rendered = renderHeaders(source, publicOriginFor("local", undefined));
+    const overlayRules = rendered.split("/overlay\n")[1]?.split("\n/overlay/*")[0] ?? "";
+
+    expect(overlayRules).toContain("ws://localhost:*");
+    expect(overlayRules).toContain("ws://127.0.0.1:*");
+    expect(overlayRules).not.toContain("frame-ancestors");
   });
 });
