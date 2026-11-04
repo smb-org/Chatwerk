@@ -9,10 +9,32 @@ const root = dom.window.document.querySelector("main") as HTMLElement;
 
 afterEach(() => {
   root.replaceChildren();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 describe("text renderer", () => {
+  it("keeps a default-theme message after 12 seconds and removes it after 120 seconds", () => {
+    vi.useFakeTimers();
+    const renderer = createChatRenderer({
+      root,
+      theme: DEFAULTS,
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=default-lifetime :viewer!viewer@host PRIVMSG #room :still here")!);
+    const row = root.querySelector<HTMLElement>(".chat-line");
+
+    vi.advanceTimersByTime(12_001);
+    expect(row?.textContent).toContain("still here");
+    expect(row?.style.getPropertyValue("opacity")).toBe("1");
+
+    vi.advanceTimersByTime(107_999);
+    expect(row?.style.getPropertyValue("opacity")).toBe("0");
+    vi.advanceTimersByTime(200);
+    expect(root.children).toHaveLength(0);
+    renderer.dispose();
+  });
+
   it("keeps HTML in chat messages as text", () => {
     const renderer = createChatRenderer({ root, theme: DEFAULTS, scheduler: (callback) => callback() });
     renderer.handle(parseIrcLine("@display-name=Viewer :viewer!viewer@host PRIVMSG #room :<img onerror=x>" )!);

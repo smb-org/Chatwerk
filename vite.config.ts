@@ -5,6 +5,7 @@ export default defineConfig({
   root: "src/studio",
   publicDir: "../../public",
   build: {
+    target: "chrome95",
     outDir: "../../dist/client",
     emptyOutDir: true,
     rollupOptions: {
