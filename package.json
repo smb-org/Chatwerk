@@ -13,6 +13,7 @@
     "dev": "pnpm run build && node scripts/wrangler-dev.mjs 17173",
     "build": "vite build && node scripts/render-headers.mjs ${CLOUDFLARE_ENV:-local}",
     "build:production": "vite build && node scripts/render-headers.mjs production",
+    "deploy": "PUBLIC_ORIGIN=https://chatwerk.esembe.app pnpm run build:production && pnpm exec wrangler d1 migrations apply chatwerk --remote && pnpm exec wrangler deploy",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run --config vitest.config.ts",
