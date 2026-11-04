@@ -4,12 +4,22 @@ import type { ChatStatus } from "../shared/protocol";
 import { IrcClient, isValidChannel } from "./irc";
 import { createChatRenderer } from "./render";
 import { parseLiveLocation, showTestLine, startLiveUpdates, type LiveHandle } from "./live";
+import { createEmoteLookup } from "./emotes";
+import { createBadgeLookup } from "./badges";
+import { createPaintLookup } from "./paints";
+import { createPronounLookup } from "./pronouns";
+import { createSevenTvEventApi } from "./seventv-events";
 
 const chat = document.querySelector<HTMLElement>("#chat");
 if (chat) {
   const liveLocation = parseLiveLocation(window.location.hash, navigator.userAgent);
   chat.dataset.placement = liveLocation.placement;
-  const renderer = createChatRenderer({ root: chat, theme: DEFAULTS });
+  const sevenTvEvents = createSevenTvEventApi();
+  const emotes = createEmoteLookup({ eventApi: sevenTvEvents });
+  const badges = createBadgeLookup({ source: { type: "route" } });
+  const paints = createPaintLookup({ eventApi: sevenTvEvents });
+  const pronouns = createPronounLookup();
+  const renderer = createChatRenderer({ root: chat, theme: DEFAULTS, emotes, badges, paints, pronouns });
   let irc: IrcClient | undefined;
   let ircChannel = "";
   let chatStatus: ChatStatus = "idle";
@@ -25,7 +35,16 @@ if (chat) {
     chatStatus = "reconnecting";
     irc = new IrcClient({
       channel: normalized,
-      onEvent: (event) => renderer.handle(event),
+      onEvent: (event) => {
+        if (event.type === "ROOMSTATE" && event.channel.toLowerCase().replace(/^#/u, "") === normalized) {
+          const roomId = event.tags["room-id"];
+          if (roomId) {
+            emotes.setChannelId(roomId);
+            paints.setChannelId(roomId);
+          }
+        }
+        renderer.handle(event);
+      },
       onStatus: (status) => {
         chatStatus = status;
         live.handle?.acknowledge();
@@ -56,6 +75,7 @@ if (chat) {
       irc?.stop();
       irc = undefined;
       renderer.dispose();
+      sevenTvEvents.dispose();
     },
     getChatStatus: () => chatStatus,
   });
@@ -65,5 +85,6 @@ if (chat) {
     live.handle?.stop();
     irc?.stop();
     renderer.dispose();
+    sevenTvEvents.dispose();
   }, { once: true });
 }

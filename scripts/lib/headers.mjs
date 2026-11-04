@@ -24,13 +24,15 @@ export const publicOriginFor = (environment, publicOrigin) => {
   return { origin: parsed.origin, wssOrigin: `wss://${parsed.host}`, socketOrigin: `wss://${parsed.host}` };
 };
 
-export const renderHeaders = (source, { origin, wssOrigin, socketOrigin }) => {
+export const renderHeaders = (source, { origin, wssOrigin, socketOrigin }, hosts = { connectOrigins: [], imageHosts: [] }) => {
   const rendered = source
     .replaceAll("__PUBLIC_ORIGIN__", origin)
     .replaceAll("__PUBLIC_WSS__", wssOrigin)
-    .replaceAll("__PUBLIC_SOCKET__", socketOrigin);
-  if (rendered.includes("__PUBLIC_")) {
-    throw new Error("public/_headers contains an unknown __PUBLIC_* placeholder.");
+    .replaceAll("__PUBLIC_SOCKET__", socketOrigin)
+    .replaceAll("__OVERLAY_CONNECT_ORIGINS__", hosts.connectOrigins.join(" "))
+    .replaceAll("__OVERLAY_IMAGE_ORIGINS__", hosts.imageHosts.map((host) => `https://${host}`).join(" "));
+  if (rendered.includes("__")) {
+    throw new Error("public/_headers contains an unknown build placeholder.");
   }
   return rendered;
 };

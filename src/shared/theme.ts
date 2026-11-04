@@ -11,7 +11,7 @@ export const THEME_UI_GROUPS = [
 ] as const;
 
 export type ThemeUiGroup = (typeof THEME_UI_GROUPS)[number];
-export type ThemeControl = "select" | "range" | "color" | "segmented";
+export type ThemeControl = "select" | "range" | "color" | "segmented" | "toggle";
 
 export const FONT_FAMILIES = [
   "Arial",
@@ -91,6 +91,13 @@ export const THEME_FIELDS = {
     { min: 0, max: 4, step: 0.5, unit: "px" }),
   motion: field<Motion>("fade", (value): value is Motion => value === "fade" || value === "none",
     (value) => value, { group: "Messages", order: 3, label: "Motion", control: "segmented" }),
+  emoteScale: field(1.5, numberIn(0.5, 3, 0.1), (value) => `${value}em`,
+    { group: "Messages", order: 4, label: "Emote size", control: "range" },
+    { min: 0.5, max: 3, step: 0.1, unit: "em" }),
+  showBadges: field(true, (value): value is boolean => typeof value === "boolean", (value) => String(value),
+    { group: "Messages", order: 5, label: "Show badges", control: "toggle" }),
+  showPronouns: field(false, (value): value is boolean => typeof value === "boolean", (value) => String(value),
+    { group: "Messages", order: 6, label: "Show pronouns", control: "toggle" }),
 } as const;
 
 export type ThemeFieldName = keyof typeof THEME_FIELDS;
@@ -113,6 +120,9 @@ export const DEFAULTS: ThemeConfig = {
   lifetime: 120_000,
   outline: 0,
   motion: "fade",
+  emoteScale: 1.5,
+  showBadges: true,
+  showPronouns: false,
 };
 
 export class ThemeValidationError extends TypeError {

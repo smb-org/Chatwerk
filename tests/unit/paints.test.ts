@@ -1,0 +1,246 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildPaintStyle, createPaintLookup } from "../../src/renderer/paints";
+import type { SevenTvEvent } from "../../src/renderer/seventv-events";
+
+const json = (value: unknown): Response => new Response(JSON.stringify(value), { status: 200 });
+const changeMap = (id: string, object: unknown) => ({ id, kind: 0, actor: { id: "actor" }, updated: [], pushed: [], pulled: [], object });
+
+afterEach(() => vi.useRealTimers());
+
+describe("7TV paints", () => {
+  it("subscribes by channel and applies real entitlement and cosmetic change maps", () => {
+    const callbacks = new Map<string, (event: SevenTvEvent) => void>();
+    const eventApi = {
+      subscribe: vi.fn((type: string, condition: Record<string, string>, listener: (event: SevenTvEvent) => void) => {
+        callbacks.set(`${type}:${condition.id}`, listener);
+        return vi.fn();
+      }),
+      onReconnect: vi.fn(() => vi.fn()),
+      dispose: vi.fn(),
+    };
+    const paints = createPaintLookup({ eventApi, fetcher: vi.fn() });
+    paints.setChannelId("1234");
+    expect(eventApi.subscribe).toHaveBeenCalledTimes(3);
+    for (const type of ["cosmetic.create", "entitlement.create", "entitlement.delete"]) {
+      expect(eventApi.subscribe).toHaveBeenCalledWith(type, { ctx: "channel", platform: "TWITCH", id: "1234" }, expect.any(Function));
+    }
+
+    callbacks.get("entitlement.create:1234")?.({ type: "entitlement.create", body: changeMap("ent-1", {
+      kind: "PAINT",
+      ref_id: "paint-1",
+      user: { connections: [{ platform: "TWITCH", id: "42" }] },
+    }) });
+    callbacks.get("cosmetic.create:1234")?.({ type: "cosmetic.create", body: changeMap("paint-1", {
+      id: "paint-1", kind: "PAINT", data: { color: -3648769 },
+    }) });
+    expect(paints.resolve("42")).toEqual({ type: "solid", value: "#ffc852ff" });
+
+    callbacks.get("cosmetic.create:1234")?.({ type: "cosmetic.create", body: changeMap("paint-1", {
+      id: "paint-1", kind: "PAINT", data: {
+        id: "paint-1", function: "LINEAR_GRADIENT", angle: 0, repeat: false,
+        stops: [{ at: 0, color: -3_648_769 }, { at: 1, color: "#ffffff" }],
+        shadows: [{ x_offset: 1, y_offset: 0, radius: 2, color: -3_648_769 }],
+      },
+    }) });
+    expect(paints.resolve("42")).toMatchObject({
+      type: "gradient",
+      value: "linear-gradient(0deg, #ffc852ff 0%, #ffffff 100%)",
+      filter: "drop-shadow(1px 0px 2px #ffc852ff)",
+    });
+
+    callbacks.get("cosmetic.create:1234")?.({ type: "cosmetic.create", body: {
+      id: "paint-1", kind: 0, actor: { id: "actor" },
+      updated: [{ key: "color", value: -3648769 }], pushed: [], pulled: [],
+    } });
+    expect(paints.resolve("42")).toEqual({ type: "solid", value: "#ffc852ff" });
+
+    callbacks.get("entitlement.delete:1234")?.({ type: "entitlement.delete", body: changeMap("ent-1", {
+      kind: "PAINT",
+      ref_id: "paint-1",
+      user: { connections: [{ platform: "TWITCH", id: "42" }] },
+    }) });
+    expect(paints.resolve("42")).toBeUndefined();
+    paints.dispose();
+  });
+
+  it("batches connection aliases and fetches paint definitions with the v3 cosmetics query", async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { query: string; variables: Record<string, unknown> };
+      if (request.query.includes("userByConnection")) {
+        return json({ data: Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`u${i}`, {
+          id: `7tv-${i}`, style: { paint_id: `paint-${i}` },
+        }])) });
+      }
+      return json({ data: { cosmetics: { paints: (request.variables.ids as string[]).map((id) => ({
+        id, kind: "PAINT", color: -3648769,
+      })) } } });
+    });
+    const paints = createPaintLookup({ fetcher });
+    for (let i = 0; i < 25; i += 1) void paints.load(String(100 + i));
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const first = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body)) as { query: string };
+    expect((first.query.match(/userByConnection/gu) ?? [])).toHaveLength(25);
+    expect(first.query).toContain("u0:");
+    expect(first.query).toContain("u24:");
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const second = JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body)) as { query: string; variables: { ids: string[] } };
+    expect(second.query).toContain("cosmetics(list: $ids)");
+    expect(second.variables.ids).toHaveLength(25);
+    expect(paints.resolve("100")).toEqual({ type: "solid", value: "#ffc852ff" });
+    paints.dispose();
+  });
+
+  it("keeps a full cosmetic event paint when a parallel query returns an incomplete definition", async () => {
+    vi.useFakeTimers();
+    const callbacks = new Map<string, (event: SevenTvEvent) => void>();
+    const eventApi = {
+      subscribe: vi.fn((type: string, condition: Record<string, string>, listener: (event: SevenTvEvent) => void) => {
+        callbacks.set(type, listener);
+        void condition;
+        return vi.fn();
+      }),
+      onReconnect: vi.fn(() => vi.fn()),
+      dispose: vi.fn(),
+    };
+    let finishQuery!: (response: Response) => void;
+    const fetcher = vi.fn(() => new Promise<Response>((resolve) => { finishQuery = resolve; }));
+    const paints = createPaintLookup({ fetcher, eventApi });
+    paints.setChannelId("1234");
+    callbacks.get("entitlement.create")?.({ type: "entitlement.create", body: changeMap("ent-1", {
+      kind: "PAINT", ref_id: "paint-1", user: { connections: [{ platform: "TWITCH", id: "42" }] },
+    }) });
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    callbacks.get("cosmetic.create")?.({ type: "cosmetic.create", body: changeMap("paint-1", {
+      id: "paint-1", kind: "PAINT", data: {
+        id: "paint-1", function: "LINEAR_GRADIENT", angle: 90, repeat: false,
+        stops: [{ at: 0, color: "#ff0000" }, { at: 1, color: "#0000ff" }],
+      },
+    }) });
+    const expected = { type: "gradient", value: "linear-gradient(90deg, #ff0000 0%, #0000ff 100%)" };
+    expect(paints.resolve("42")).toMatchObject(expected);
+
+    finishQuery(json({ data: { cosmetics: { paints: [{ id: "paint-1", kind: "PAINT", color: null, gradients: [], shadows: [] }] } } }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(paints.resolve("42")).toMatchObject(expected);
+    paints.dispose();
+  });
+
+  it("bounds GraphQL fallback work for a channel with 1,000 distinct users", async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { query: string };
+      const aliases = [...request.query.matchAll(/(u\d+):userByConnection/gu)].map((match) => match[1]!);
+      return json({ data: Object.fromEntries(aliases.map((alias) => [alias, {
+        id: "00000000000000000000000000", style: { paint_id: null },
+      }])) });
+    });
+    const eventApi = {
+      subscribe: vi.fn((type: string, condition: Record<string, string>, listener: (event: SevenTvEvent) => void) => {
+        void type;
+        void condition;
+        void listener;
+        return vi.fn();
+      }),
+      onReconnect: vi.fn((listener: () => void) => {
+        void listener;
+        return vi.fn();
+      }),
+      dispose: vi.fn(),
+    };
+    const paints = createPaintLookup({ fetcher, eventApi });
+    paints.setChannelId("1234");
+    expect(eventApi.subscribe).toHaveBeenCalledTimes(3);
+    for (let i = 0; i < 1_000; i += 1) void paints.load(String(10_000 + i));
+    await vi.advanceTimersByTimeAsync(23_500);
+    expect(fetcher).toHaveBeenCalledTimes(12);
+    expect(Math.ceil(fetcher.mock.calls.length / (23_500 / 60_000))).toBeLessThanOrEqual(31);
+    expect(eventApi.subscribe.mock.calls.map(([type]) => type)).toEqual([
+      "cosmetic.create", "entitlement.create", "entitlement.delete",
+    ]);
+    paints.dispose();
+  });
+
+  it("keeps a GQL request alive for at least 30 seconds", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const fetcher = vi.fn((_url: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      signal = init?.signal as AbortSignal | undefined;
+      signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+    }));
+    const paints = createPaintLookup({ fetcher, timeoutMs: 1_000 });
+    void paints.load("42");
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(28_499);
+    expect(signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(signal?.aborted).toBe(true);
+    paints.dispose();
+  });
+
+  it("keeps GraphQL batches serialized while a request is slow", async () => {
+    vi.useFakeTimers();
+    let active = 0;
+    let maximumActive = 0;
+    const resolvers: Array<(response: Response) => void> = [];
+    const fetcher = vi.fn(() => new Promise<Response>((resolve) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      resolvers.push((response) => {
+        active -= 1;
+        resolve(response);
+      });
+    }));
+    const paints = createPaintLookup({ fetcher });
+    void paints.load("42");
+    await vi.advanceTimersByTimeAsync(1_500);
+    void paints.load("43");
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(maximumActive).toBe(1);
+
+    resolvers[0]?.(json({ data: { u0: null } }));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(maximumActive).toBe(1);
+    paints.dispose();
+  });
+
+  it("uses RGBA integers for solid colors and supports repeating gradients and safe shadows", () => {
+    expect(buildPaintStyle({ color: -3_648_769 })).toEqual({ type: "solid", value: "#ffc852ff" });
+    expect(buildPaintStyle({
+      gradients: [{
+        function: "LINEAR_GRADIENT", angle: 90, repeat: true,
+        stops: [{ at: 0, color: -3_648_769 }, { at: 1, color: "#0000ffff" }],
+      }],
+      shadows: [{ x_offset: 1.5, y_offset: -2, radius: 3, color: -3_648_769 }],
+    })).toMatchObject({
+      type: "gradient",
+      value: "repeating-linear-gradient(90deg, #ffc852ff 0%, #0000ffff 100%)",
+      filter: "drop-shadow(1.5px -2px 3px #ffc852ff)",
+    });
+    expect(buildPaintStyle({
+      gradients: [{ function: "RADIAL_GRADIENT", shape: "CIRCLE", repeat: true,
+        stops: [{ at: 0, color: "#ffffff" }, { at: 1, color: "#000000" }] }],
+    })?.value).toContain("repeating-radial-gradient");
+  });
+
+  it("rejects hostile angle, stop position, and shadow inputs independently", () => {
+    expect(buildPaintStyle({
+      function: "LINEAR_GRADIENT", angle: "90deg; color:red",
+      stops: [{ at: 0, color: "#ffffff" }, { at: 1, color: "#000000" }],
+    })).toBeNull();
+    expect(buildPaintStyle({
+      function: "LINEAR_GRADIENT", angle: 90,
+      stops: [{ at: "0); color:red", color: "#ffffff" }, { at: 1, color: "#000000" }],
+    })).toBeNull();
+    expect(buildPaintStyle({ color: "#ffffff", shadows: [{ x_offset: "0px;url(x)", y_offset: 0, radius: 1, color: "#000000" }] })).toBeNull();
+  });
+});

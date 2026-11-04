@@ -513,7 +513,7 @@ Grundlage: globale Vorgabe "rein technische Punkte ohne echten Trade-off selbst 
 | S4 | Interne Overlay-ID für das Durable Object, getrennt vom zufälligen `link_token` (mindestens 128 Bit). Neu erzeugen ändert nur diese Spalte, offene Sockets werden mit Code 4001 geschlossen | Routen, Zeile 105 |
 | S5 | Cookie `HttpOnly; Secure; SameSite=Lax`, Origin-Prüfung und `application/json` auf allen Schreibrouten, Vorlage aus `recipeOverlay/src/worker/oauth.ts:36` und `index.ts:118` | R3-10 |
 | S6 | Studio-Vorschau im `<iframe sandbox="allow-scripts">`, gesteuert per `postMessage`. Eigenes CSS teilt nie ein Dokument mit dem Login | Fable, Architektur |
-| S7 | Emote- und Pronomen-Abrufe per `Promise.allSettled` mit 5 s Timeout, Chat startet unabhängig davon | Fehlerfall 7TV hängt |
+| S7 | Emote-Scopes haben ein 30 s Timeout und wiederholen sich mit Backoff, weil 7TV mit bis zu 18 s gemessen wurde; der Chat startet unabhängig davon | Fehlerfall 7TV hängt |
 | S8 | IRC fordert `twitch.tv/tags` und `twitch.tv/commands`, behandelt `RECONNECT` sofort, würfelt bei `NOTICE Login unsuccessful` eine neue `justinfan`-Nummer | `twitchMarbles/.../ircReader.ts:72` kennt nur `tags` |
 | S9 | Knotenlimit im Renderer (Standard 100, maximal 300), Aufbau je Frame gebündelt, Animation nur über `transform` und `opacity` | Performance |
 | S10 | Test-Stack wie in `recipeOverlay`: vitest, `@cloudflare/vitest-plugin`, Playwright auf festem Port 17174 | `recipeOverlay/vitest.worker.config.ts` |

@@ -92,12 +92,16 @@ describe("overlay config API", () => {
       `https://chatwerk.test/api/overlays/${overlay.overlayId}/config`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ baseRevision: 0, patch: { fontSize: 24 } }),
+        body: JSON.stringify({ baseRevision: 0, patch: {
+          fontSize: 24, emoteScale: 2.2, showBadges: false, showPronouns: true,
+        } }),
       }), apiEnv());
 
     expect(invalid?.status).toBe(400);
     expect(valid?.status).toBe(200);
-    expect(await valid?.json()).toMatchObject({ revision: 1, config: { fontSize: 24 } });
+    expect(await valid?.json()).toMatchObject({ revision: 1, config: {
+      fontSize: 24, emoteScale: 2.2, showBadges: false, showPronouns: true,
+    } });
   });
 
   it("rejects declared and streamed request bodies above 64 KiB before JSON parsing", async () => {

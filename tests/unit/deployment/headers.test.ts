@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { publicOriginFor, renderHeaders } from "../../../scripts/lib/headers.mjs";
+import { ALLOWED_CONNECT_ORIGINS, ALLOWED_IMAGE_HOSTS } from "../../../src/shared/hosts";
 
 const source = readFileSync(path.join(process.cwd(), "public/_headers"), "utf8");
 
@@ -84,6 +85,26 @@ describe("deployment headers", () => {
     for (const rule of ["/overlay", "/overlay/*"]) {
       expect(rules.get(rule)?.join("\n")).toContain("wss://irc-ws.chat.twitch.tv");
       expect(rules.get(rule)?.join("\n")).toContain("__PUBLIC_WSS__");
+    }
+  });
+
+  it("allows emote, badge, and optional pronoun providers only on overlay routes", () => {
+    const builtRules = parseRules(renderHeaders(source, publicOriginFor("local", undefined), {
+      connectOrigins: ALLOWED_CONNECT_ORIGINS,
+      imageHosts: ALLOWED_IMAGE_HOSTS,
+    }));
+    for (const rule of ["/overlay", "/overlay/*"]) {
+      const policy = builtRules.get(rule)?.find((line) => line.startsWith("Content-Security-Policy:")) ?? "";
+      const connect = policy.split("connect-src ")[1]?.split(";")[0] ?? "";
+      const images = policy.split("img-src ")[1]?.split(";")[0] ?? "";
+      for (const origin of ALLOWED_CONNECT_ORIGINS) expect(connect).toContain(origin);
+      for (const host of ALLOWED_IMAGE_HOSTS) expect(images).toContain(`https://${host}`);
+    }
+    for (const path of ["/", "/login", "/studio", "/studio/export"]) {
+      const rule = path.startsWith("/studio") ? "/studio*" : path.startsWith("/login") ? "/login*" : "/";
+      const policy = builtRules.get(rule)?.filter((line) => line.startsWith("Content-Security-Policy:")).join(" ") ?? "";
+      for (const origin of ALLOWED_CONNECT_ORIGINS) expect(policy).not.toContain(origin);
+      for (const host of ALLOWED_IMAGE_HOSTS) expect(policy).not.toContain(`https://${host}`);
     }
   });
 

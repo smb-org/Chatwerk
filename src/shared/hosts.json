@@ -1,0 +1,15 @@
+{
+  "connectOrigins": [
+    "https://7tv.io",
+    "wss://events.7tv.io",
+    "https://api.betterttv.net",
+    "https://api.frankerfacez.com",
+    "https://pronouns.alejo.io"
+  ],
+  "imageHosts": [
+    "static-cdn.jtvnw.net",
+    "cdn.7tv.app",
+    "cdn.betterttv.net",
+    "cdn.frankerfacez.com"
+  ]
+}
