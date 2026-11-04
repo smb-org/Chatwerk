@@ -3,5 +3,6 @@ dist/
 .wrangler/
 .dev.vars
 .gstack/
+.tmp/
 test-results/
 playwright-report/
