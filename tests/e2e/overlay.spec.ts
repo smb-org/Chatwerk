@@ -26,6 +26,31 @@ const tryUnroutedTwitchSocket = async (context: import("@playwright/test").Page)
   return violations;
 });
 
+const probeProviderConnections = async () => {
+  const violations: string[] = [];
+  const listen = (event: SecurityPolicyViolationEvent) => {
+    violations.push(`${event.effectiveDirective}: ${event.blockedURI}`);
+  };
+  document.addEventListener("securitypolicyviolation", listen);
+  const requests = [
+    "https://7tv.io/v3/emote-sets/global",
+    "https://api.betterttv.net/3/cached/emotes/global",
+    "https://api.frankerfacez.com/v1/set/global",
+    "https://pronouns.alejo.io/api/pronouns",
+  ].map((url) => fetch(url, { mode: "no-cors" }).catch(() => undefined));
+  const socket = new WebSocket("wss://events.7tv.io/v3");
+  await new Promise<void>((resolve) => {
+    socket.addEventListener("open", () => resolve(), { once: true });
+    socket.addEventListener("error", () => resolve(), { once: true });
+    setTimeout(resolve, 700);
+  });
+  socket.close();
+  await Promise.race([Promise.all(requests), new Promise((resolve) => setTimeout(resolve, 700))]);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  document.removeEventListener("securitypolicyviolation", listen);
+  return violations;
+};
+
 const messageWithHtml = "@id=e2e-1;display-name=Viewer :viewer!viewer@host PRIVMSG #test :<img src=x onerror=alert(1)>";
 
 test("overlay policies permit unrouted Twitch sockets in regular and sandboxed pages", async ({ page }) => {
@@ -64,6 +89,25 @@ test("overlay policies permit unrouted Twitch sockets in regular and sandboxed p
     body.ownerDocument.removeEventListener("securitypolicyviolation", listen);
     return violations;
   })).toEqual([]);
+});
+
+test("overlay CSP permits unrouted emote and pronoun provider fetches in both documents", async ({ page }) => {
+  await page.goto("/overlay#channel=Foo%20Bar");
+  expect(await page.evaluate(probeProviderConnections)).toEqual([]);
+
+  await page.goto("/");
+  await page.evaluate(() => {
+    const iframe = document.createElement("iframe");
+    iframe.id = "provider-csp-probe";
+    iframe.name = "provider-csp-probe";
+    iframe.setAttribute("sandbox", "allow-scripts");
+    iframe.src = "/overlay#channel=Foo%20Bar";
+    document.body.appendChild(iframe);
+  });
+  await expect(page.frameLocator("#provider-csp-probe").locator("#chat")).toBeVisible();
+  const frame = page.frame({ name: "provider-csp-probe" });
+  expect(frame).not.toBeNull();
+  expect(await frame!.evaluate(probeProviderConnections)).toEqual([]);
 });
 
 test("invalid encoded channels show the no-channel system line", async ({ page }) => {
@@ -113,6 +157,31 @@ test("renders IRC text as text in regular and opaque sandboxed origins", async (
   await expect(frame.locator("#chat img")).toHaveCount(0);
   expect(consoleErrors).toEqual([]);
   expect(pageErrors).toEqual([]);
+});
+
+test("keeps one spacing gap between the name and message when optional items are empty", async ({ page }) => {
+  await page.routeWebSocket("wss://irc-ws.chat.twitch.tv/**", (socket) => {
+    socket.onMessage((message) => {
+      if (String(message).startsWith("JOIN #spacing")) {
+        socket.send("@id=spacing;display-name=Viewer :viewer!viewer@host PRIVMSG #spacing :hello");
+      }
+    });
+  });
+  await page.goto("/overlay#channel=spacing&client=browser");
+  const line = page.locator(".chat-line");
+  await expect(line).toHaveCount(1);
+  const geometry = await line.evaluate((row) => {
+    const name = row.querySelector(".chat-name")!.getBoundingClientRect();
+    const message = row.querySelector(".chat-message")!.getBoundingClientRect();
+    return {
+      gap: message.left - name.right,
+      spacing: Number.parseFloat(getComputedStyle(row).gap),
+      hiddenOptionalCount: [...row.querySelectorAll(".chat-badges, .chat-pronouns, .chat-source-room")]
+        .filter((element) => getComputedStyle(element).display === "none").length,
+    };
+  });
+  expect(geometry.gap).toBeCloseTo(geometry.spacing, 1);
+  expect(geometry.hiddenOptionalCount).toBe(3);
 });
 
 test("keeps chat rows inside the viewport and anchors the newest row for each line order", async ({ page }) => {

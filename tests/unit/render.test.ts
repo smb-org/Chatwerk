@@ -3,6 +3,9 @@ import { JSDOM } from "jsdom";
 import { DEFAULTS } from "../../src/shared/theme";
 import { createChatRenderer } from "../../src/renderer/render";
 import { parseIrcLine } from "../../src/renderer/irc-parse";
+import { createEmoteLookup } from "../../src/renderer/emotes";
+import { createBadgeLookup } from "../../src/renderer/badges";
+import { buildPaintStyle, createPaintLookup } from "../../src/renderer/paints";
 
 const dom = new JSDOM("<!doctype html><main id='chat'></main>");
 const root = dom.window.document.querySelector("main") as HTMLElement;
@@ -173,5 +176,187 @@ describe("text renderer", () => {
     expect(root.style.getPropertyValue("--t-row-background")).not.toBe(previous);
     expect(row?.style.getPropertyValue("background-color")).toBe("var(--t-row-background)");
     renderer.dispose();
+  });
+
+  it("renders emotes only from the shared image host allowlist", () => {
+    const emotes = createEmoteLookup({ providers: [] });
+    emotes.add([
+      { name: "Safe", url: "https://cdn.7tv.app/emote/safe/2x.webp", provider: "test" },
+      { name: "Unsafe", url: "https://evil.example/emote.png", provider: "test" },
+    ]);
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, emotes, scheduler: (callback) => callback() });
+    renderer.handle(parseIrcLine(":viewer!viewer@host PRIVMSG #room :Safe Unsafe")!);
+    expect(root.querySelectorAll("img.chat-emote")).toHaveLength(1);
+    expect(root.querySelector("img.chat-emote")?.getAttribute("alt")).toBe("Safe");
+    expect(root.textContent).toContain("Unsafe");
+    renderer.dispose();
+    emotes.dispose();
+  });
+
+  it("renders adjacent zero-width emotes as absolute overlays on their base emote", () => {
+    const emotes = createEmoteLookup({ providers: [] });
+    emotes.add([
+      { name: "Base", url: "https://cdn.7tv.app/emote/base/2x.webp", provider: "test" },
+      { name: "Overlay", url: "https://cdn.7tv.app/emote/overlay/2x.webp", provider: "test", zeroWidth: true },
+    ]);
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, emotes, scheduler: (callback) => callback() });
+    renderer.handle(parseIrcLine(":viewer!viewer@host PRIVMSG #room :BaseOverlay")!);
+    const wrapper = root.querySelector<HTMLElement>(".chat-emote-wrapper");
+    expect(wrapper?.style.getPropertyValue("position")).toBe("relative");
+    expect(wrapper?.style.getPropertyValue("display")).toBe("inline-block");
+    expect(wrapper?.querySelectorAll("img.chat-emote-overlay")).toHaveLength(1);
+    expect(wrapper?.querySelector(".chat-emote-overlay")?.getAttribute("alt")).toBe("Overlay");
+    renderer.dispose();
+    emotes.dispose();
+  });
+
+  it("rejects a hostile paint stop position and keeps the tag color", () => {
+    const paints = createPaintLookup({ fetcher: fetch });
+    paints.set("42", {
+      function: "LINEAR_GRADIENT",
+      angle: 90,
+      stops: [{ at: "0); url(javascript:alert(1))", color: "red" }, { at: 1, color: "#ffffff" }],
+    });
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, paints, scheduler: (callback) => callback() });
+    renderer.handle(parseIrcLine("@user-id=42;color=#00ff00;display-name=Viewer :viewer!viewer@host PRIVMSG #room :hello")!);
+    const name = root.querySelector<HTMLElement>(".chat-name");
+    expect(name?.style.getPropertyValue("background-image")).toBe("");
+    expect(name?.style.getPropertyValue("color")).toBe("rgb(0, 255, 0)");
+    renderer.dispose();
+  });
+
+  it("rejects a hostile paint angle and keeps the tag color", () => {
+    const paints = createPaintLookup({ fetcher: fetch });
+    paints.set("42", {
+      function: "LINEAR_GRADIENT",
+      angle: "90deg; background-image: url(javascript:alert(1))",
+      stops: [{ at: 0, color: "#ff0000" }, { at: 1, color: "#ffffff" }],
+    });
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, paints, scheduler: (callback) => callback() });
+    renderer.handle(parseIrcLine("@user-id=42;color=#00ff00;display-name=Viewer :viewer!viewer@host PRIVMSG #room :hello")!);
+    const name = root.querySelector<HTMLElement>(".chat-name");
+    expect(name?.style.getPropertyValue("background-image")).toBe("");
+    expect(name?.style.getPropertyValue("color")).toBe("rgb(0, 255, 0)");
+    renderer.dispose();
+  });
+
+  it("applies a validated paint update and accepts only allowlisted paint images", () => {
+    const paints = createPaintLookup();
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, paints, scheduler: (callback) => callback() });
+    renderer.handle(parseIrcLine("@user-id=42;color=#00ff00 :viewer!viewer@host PRIVMSG #room :painted")!);
+    paints.set("42", {
+      function: "LINEAR_GRADIENT",
+      angle: 90,
+      stops: [{ at: 0, color: "#ff0000" }, { at: 1, color: "#0000ff" }],
+    });
+    expect(root.querySelector<HTMLElement>(".chat-name")?.style.getPropertyValue("background-image"))
+      .toContain("linear-gradient(90deg");
+    expect(buildPaintStyle({ function: "URL", image_url: "https://cdn.7tv.app/paint/paint/1x.webp" }))
+      .toMatchObject({ type: "image" });
+    expect(buildPaintStyle({ function: "URL", image_url: "https://evil.example/paint.png" })).toBeNull();
+    renderer.dispose();
+  });
+
+  it("keeps existing badge image nodes when later messages do not load badge data", async () => {
+    const badges = createBadgeLookup({ source: { type: "embedded", data: {
+      global: { data: [{ set_id: "subscriber", versions: [
+        { id: "1", image_url_1x: "https://static-cdn.jtvnw.net/badges/subscriber.png" },
+      ] }] },
+      broadcasters: {},
+    } } });
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, badges, scheduler: (callback) => callback() });
+    renderer.handle(parseIrcLine("@id=badge-0;badges=subscriber/1 :viewer!viewer@host PRIVMSG #room :first")!);
+    const originalImages = [...root.querySelectorAll("img.chat-badge")];
+    for (let i = 1; i <= 20; i += 1) {
+      renderer.handle(parseIrcLine(`@id=badge-${i};badges=subscriber/1 :viewer!viewer@host PRIVMSG #room :message ${i}`)!);
+    }
+    await Promise.resolve();
+    expect(originalImages).toHaveLength(1);
+    expect(root.querySelector(".chat-line img.chat-badge")).toBe(originalImages[0]);
+    renderer.dispose();
+  });
+
+  it("reports one populated badge fetch when messages share an in-flight load", async () => {
+    let finish!: (response: Response) => void;
+    const fetcher = vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; }));
+    const badges = createBadgeLookup({ source: { type: "route" }, fetcher });
+    const first = badges.loadGlobal();
+    const second = badges.loadGlobal();
+    finish(new Response(JSON.stringify({ data: [{ set_id: "subscriber", versions: [
+      { id: "1", image_url_1x: "https://static-cdn.jtvnw.net/badges/subscriber.png" },
+    ] }] }), { status: 200 }));
+    expect(await Promise.all([first, second])).toEqual([true, false]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    badges.dispose();
+  });
+
+  it("retries badge loads after sixty seconds following a failure", async () => {
+    vi.useFakeTimers();
+    const response = new Response(JSON.stringify({ data: [{ set_id: "subscriber", versions: [
+      { id: "1", image_url_1x: "https://static-cdn.jtvnw.net/badges/subscriber.png" },
+    ] }] }), { status: 200 });
+    const fetcher = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce(response);
+    const badges = createBadgeLookup({ source: { type: "route" }, fetcher });
+    expect(await badges.loadGlobal()).toBe(false);
+    expect(await badges.loadGlobal()).toBe(false);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await badges.loadGlobal()).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    badges.dispose();
+  });
+
+  it("renders chat when route badge lookups are unavailable", async () => {
+    const badges = createBadgeLookup({ source: { type: "route" }, fetcher: vi.fn().mockRejectedValue(new Error("missing route")) });
+    await badges.loadGlobal();
+    await badges.loadBroadcaster("123");
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, badges, scheduler: (callback) => callback() });
+    renderer.handle(parseIrcLine("@badges=subscriber/12 :viewer!viewer@host PRIVMSG #room :message remains")!);
+    expect(root.textContent).toContain("message remains");
+    expect(root.querySelectorAll(".chat-badge")).toHaveLength(0);
+    renderer.dispose();
+    badges.dispose();
+  });
+
+  it("renders embedded badge images through the same host allowlist", () => {
+    const badges = createBadgeLookup({ source: { type: "embedded", data: {
+      global: { data: [{ set_id: "subscriber", versions: [
+        { id: "12", image_url_1x: "https://static-cdn.jtvnw.net/badges/12.png" },
+        { id: "13", image_url_1x: "https://evil.example/badge.png" },
+      ] }] },
+      broadcasters: {},
+    } } });
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, badges, scheduler: (callback) => callback() });
+    renderer.handle(parseIrcLine("@badges=subscriber/12,subscriber/13 :viewer!viewer@host PRIVMSG #room :has badge")!);
+    expect(root.querySelectorAll("img.chat-badge")).toHaveLength(1);
+    expect(root.querySelector("img.chat-badge")?.getAttribute("alt")).toBe("subscriber 12");
+    renderer.dispose();
+  });
+
+  it("drops duplicate Shared Chat source ids and marks a foreign source room", () => {
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, scheduler: (callback) => callback() });
+    renderer.handle(parseIrcLine("@id=first;source-id=shared-1;room-id=11;source-room-id=22 :viewer!viewer@host PRIVMSG #room :original")!);
+    renderer.handle(parseIrcLine("@id=second;source-id=shared-1;room-id=11;source-room-id=22 :viewer!viewer@host PRIVMSG #room :duplicate")!);
+    expect(root.querySelectorAll(".chat-line")).toHaveLength(1);
+    expect(root.textContent).toContain("original");
+    expect(root.textContent).not.toContain("duplicate");
+    expect(root.querySelector(".chat-source-room")?.getAttribute("data-room-id")).toBe("22");
+    renderer.dispose();
+  });
+
+  it("keeps foreign-room emote codes as text and hides pronoun lookups until enabled", () => {
+    const emotes = createEmoteLookup({ providers: [] });
+    emotes.add([{ name: "ForeignEmote", url: "https://cdn.7tv.app/emote/foreign/2x.webp", provider: "7TV" }]);
+    const lookup = { lookup: vi.fn().mockResolvedValue("They/Them"), dispose: vi.fn() };
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, emotes, pronouns: lookup, scheduler: (callback) => callback() });
+    renderer.handle(parseIrcLine("@id=shared;room-id=11;source-room-id=22;user-id=42;login=viewer :viewer!viewer@host PRIVMSG #room :ForeignEmote")!);
+    expect(root.querySelector("img.chat-emote")).toBeNull();
+    expect(root.textContent).toContain("ForeignEmote");
+    expect(lookup.lookup).not.toHaveBeenCalled();
+    renderer.setTheme({ ...DEFAULTS, showPronouns: true });
+    return vi.waitFor(() => {
+      expect(lookup.lookup).toHaveBeenCalledWith("viewer");
+      expect(root.textContent).toContain("They/Them");
+    }).finally(() => renderer.dispose());
   });
 });

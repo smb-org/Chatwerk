@@ -75,4 +75,13 @@ describe("theme schema", () => {
     expect(isAllowedImageUrl("https://evilcdn.7tv.app/emote/1x.webp")).toBe(false);
     expect(isAllowedImageUrl("http://static-cdn.jtvnw.net/badge.png")).toBe(false);
   });
+
+  it("validates emote scale and chat decoration toggles", () => {
+    expect(DEFAULTS.emoteScale).toBe(1.5);
+    expect(DEFAULTS.showBadges).toBe(true);
+    expect(DEFAULTS.showPronouns).toBe(false);
+    expect(validateTheme({ ...DEFAULTS, emoteScale: 2.2, showBadges: false, showPronouns: true }))
+      .toMatchObject({ emoteScale: 2.2, showBadges: false, showPronouns: true });
+    expect(() => validateTheme({ ...DEFAULTS, emoteScale: "3em" })).toThrow();
+  });
 });
