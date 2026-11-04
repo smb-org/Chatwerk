@@ -140,7 +140,7 @@ Eine feste Liste aus Sounds und Bild-Effekten mit sauberen Rechten. Der Streamer
 2. Laufen externe Skripte und WebSockets in Widgets beider Plattformen?
 3. Bekommt ein anonymer IRC-Client Raids, Subs und Bits zuverlässig?
 4. ~~Produktname~~ entschieden: Chatwerk.
-5. Eigene Domain oder zunächst `*.workers.dev`?
+5. ~~Domain~~ entschieden: `chatwerk.esembe.app`, `workers.dev` ist abgeschaltet.
 
 ## Success Criteria
 
