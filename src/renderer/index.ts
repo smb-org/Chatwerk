@@ -1,36 +1,69 @@
 import "./overlay.css";
-import { DEFAULTS, migrate, type ThemeConfig } from "../shared/theme";
+import { DEFAULTS } from "../shared/theme";
+import type { ChatStatus } from "../shared/protocol";
 import { IrcClient, isValidChannel } from "./irc";
 import { createChatRenderer } from "./render";
+import { parseLiveLocation, showTestLine, startLiveUpdates, type LiveHandle } from "./live";
 
 const chat = document.querySelector<HTMLElement>("#chat");
 if (chat) {
-  const params = new URLSearchParams(window.location.hash.slice(1));
-  // T6 supplies the token flow; the renderer currently reads channel and client from the hash.
-  const channel = params.get("channel") ?? "";
-  const client = params.get("client") ?? "browser";
-  void client;
+  const liveLocation = parseLiveLocation(window.location.hash, navigator.userAgent);
+  chat.dataset.placement = liveLocation.placement;
+  const renderer = createChatRenderer({ root: chat, theme: DEFAULTS });
+  let irc: IrcClient | undefined;
+  let ircChannel = "";
+  let chatStatus: ChatStatus = "idle";
+  const live: { handle?: LiveHandle } = {};
 
-  let config: ThemeConfig = DEFAULTS;
-  try {
-    const cached = window.localStorage.getItem("chatwerk-theme");
-    if (cached) config = migrate(JSON.parse(cached) as unknown);
-  } catch {
-    config = DEFAULTS;
-  }
+  const startIrc = (channel: string): void => {
+    if (!isValidChannel(channel)) return;
+    const normalized = channel.toLowerCase().replace(/^#/u, "");
+    if (ircChannel === normalized) return;
+    irc?.stop();
+    ircChannel = normalized;
+    chat.querySelector(".chat-empty")?.remove();
+    chatStatus = "reconnecting";
+    irc = new IrcClient({
+      channel: normalized,
+      onEvent: (event) => renderer.handle(event),
+      onStatus: (status) => {
+        chatStatus = status;
+        live.handle?.acknowledge();
+      },
+    });
+    irc.start();
+    live.handle?.acknowledge();
+  };
 
-  const renderer = createChatRenderer({ root: chat, theme: config });
-  if (!isValidChannel(channel)) {
+  if (liveLocation.channel) startIrc(liveLocation.channel);
+  else if (!liveLocation.token) {
     const empty = document.createElement("div");
     empty.setAttribute("class", "chat-empty");
     empty.textContent = "No channel set. Open Studio to add one.";
     chat.appendChild(empty);
-  } else {
-    const irc = new IrcClient({ channel, onEvent: (event) => renderer.handle(event) });
-    irc.start();
-    window.addEventListener("pagehide", () => {
-      irc.stop();
-      renderer.dispose();
-    }, { once: true });
   }
+
+  live.handle = startLiveUpdates({
+    hash: window.location.hash,
+    origin: new URL(window.location.href).origin,
+    userAgent: navigator.userAgent,
+    applyTheme: (theme) => renderer.setTheme(theme),
+    onChannel: (channel) => {
+      if (!liveLocation.channel) startIrc(channel);
+    },
+    onTestLine: (id, onExpire) => showTestLine(chat, id, onExpire),
+    onRevoked: () => {
+      irc?.stop();
+      irc = undefined;
+      renderer.dispose();
+    },
+    getChatStatus: () => chatStatus,
+  });
+  live.handle.acknowledge();
+
+  window.addEventListener("pagehide", () => {
+    live.handle?.stop();
+    irc?.stop();
+    renderer.dispose();
+  }, { once: true });
 }

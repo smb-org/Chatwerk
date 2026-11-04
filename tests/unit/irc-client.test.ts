@@ -34,6 +34,24 @@ describe("IRC client", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("reports chat status independently as it connects, reconnects, and stops", () => {
+    const transport = new FakeTransport();
+    const statuses: string[] = [];
+    const client = new IrcClient({
+      channel: "room",
+      transportFactory: () => transport,
+      onStatus: (status) => statuses.push(status),
+    });
+
+    client.start();
+    transport.open();
+    transport.receive(":tmi.twitch.tv ROOMSTATE #room");
+    transport.disconnect();
+    client.stop();
+
+    expect(statuses).toEqual(["reconnecting", "connected", "reconnecting", "idle"]);
+  });
+
   it("reconnects immediately on RECONNECT", () => {
     vi.useFakeTimers();
     const transports: FakeTransport[] = [];

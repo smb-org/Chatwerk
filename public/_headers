@@ -15,39 +15,47 @@
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
   X-Frame-Options: SAMEORIGIN
-  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ wss://irc-ws.chat.twitch.tv; img-src __PUBLIC_ORIGIN__ data:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__ wss://irc-ws.chat.twitch.tv; img-src __PUBLIC_ORIGIN__ data:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
 
 /login*
   Cache-Control: no-cache
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
   X-Frame-Options: SAMEORIGIN
-  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__; img-src __PUBLIC_ORIGIN__ data:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__; img-src __PUBLIC_ORIGIN__ data:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
 
 /studio*
   Cache-Control: no-cache
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
   X-Frame-Options: SAMEORIGIN
-  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__; img-src __PUBLIC_ORIGIN__ data:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__; img-src __PUBLIC_ORIGIN__ data:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
 
 /studio/export*
   Cache-Control: no-cache
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
   X-Frame-Options: SAMEORIGIN
-  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__; img-src __PUBLIC_ORIGIN__ data:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__; img-src __PUBLIC_ORIGIN__ data:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
 
 # Both routes are embeddable; deliberately no frame-ancestors or X-Frame-Options.
 /overlay
   Cache-Control: no-cache
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
-  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ wss://irc-ws.chat.twitch.tv; img-src __PUBLIC_ORIGIN__ data:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__ wss://irc-ws.chat.twitch.tv; img-src __PUBLIC_ORIGIN__ data:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'
 
 /overlay/*
   Cache-Control: no-cache
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
-  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ wss://irc-ws.chat.twitch.tv; img-src __PUBLIC_ORIGIN__ data:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__ wss://irc-ws.chat.twitch.tv; img-src __PUBLIC_ORIGIN__ data:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'
 
+
+
+# Direct OBS overlays may register this root-scoped worker; opaque widgets cannot.
+/overlay-sw.js
+  Cache-Control: no-cache
+  Service-Worker-Allowed: /
+  X-Content-Type-Options: nosniff
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__ wss://irc-ws.chat.twitch.tv; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'

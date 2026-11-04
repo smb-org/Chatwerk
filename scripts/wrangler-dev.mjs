@@ -24,9 +24,13 @@ probe.listen(port, "127.0.0.1", () => {
   probe.close(() => {
     mkdirSync(".wrangler/logs", { recursive: true });
     const registryPath = resolve(".wrangler/registry");
+    const bindings = process.env.CHATWERK_E2E === "1"
+      ? ["TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET", "SESSION_KEY"]
+        .flatMap((name) => process.env[name] ? ["--var", `${name}:${process.env[name]}`] : [])
+      : [];
     const child = spawn(
       "pnpm",
-      ["exec", "wrangler", "dev", "--ip", "127.0.0.1", "--port", String(port)],
+      ["exec", "wrangler", "dev", "--ip", "127.0.0.1", "--port", String(port), ...bindings],
       {
         stdio: "inherit",
         env: {
