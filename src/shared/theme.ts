@@ -83,7 +83,7 @@ export const THEME_FIELDS = {
     { min: 0, max: 32, step: 1, unit: "px" }),
   lineOrder: field<LineOrder>("name-first", (value): value is LineOrder => value === "name-first" || value === "message-first",
     (value) => value, { group: "Layout", order: 2, label: "Line order", control: "segmented" }),
-  lifetime: field(12_000, numberIn(1_000, 120_000, 1_000), (value) => `${value}ms`,
+  lifetime: field(120_000, numberIn(1_000, 120_000, 1_000), (value) => `${value}ms`,
     { group: "Messages", order: 1, label: "Lifetime", control: "range" },
     { min: 1_000, max: 120_000, step: 1_000, unit: "ms" }),
   outline: field(0, numberIn(0, 4, 0.5), (value) => `${value}px`,
@@ -110,7 +110,7 @@ export const DEFAULTS: ThemeConfig = {
   backgroundOpacity: 0.65,
   spacing: 8,
   lineOrder: "name-first",
-  lifetime: 12_000,
+  lifetime: 120_000,
   outline: 0,
   motion: "fade",
 };
