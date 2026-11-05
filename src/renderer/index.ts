@@ -176,7 +176,7 @@ if (chat) {
 }
 
 function isScenarioName(value: unknown): value is ScenarioName {
-  return value === "quiet" || value === "flood" || value === "raid";
+  return value === "quiet" || value === "flood" || value === "raid" || value === "sub" || value === "bits";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

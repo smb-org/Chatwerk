@@ -1,6 +1,6 @@
 import type { CommonMessage } from "./irc-parse";
 
-export type ScenarioName = "quiet" | "flood" | "raid";
+export type ScenarioName = "quiet" | "flood" | "raid" | "sub" | "bits";
 
 const quietLines = [
   ["pixelfox", "Evening everyone!", "#E9A23B"],
@@ -42,10 +42,14 @@ const raidLines = [
   ["newfriend08", "Welcome, everyone!", "#FAB387"],
 ] as const;
 
+const subLines = [["newfriend09", "Thanks for the welcome!", "#CBA6F7"]] as const;
+const bitsLines = [["cheerer", "Cheer250 That was huge!", "#E9A23B"]] as const;
+
 export function createScenarioMessages(name: ScenarioName, channel: string): CommonMessage[] {
-  const rows = name === "quiet" ? quietLines : name === "raid" ? raidLines : floodLines;
+  const rows = name === "quiet" ? quietLines : name === "raid" ? raidLines
+    : name === "sub" ? subLines : name === "bits" ? bitsLines : floodLines;
   return rows.map(([userLogin, text, color], index) => ({
-    type: name === "raid" && index === 0 ? "USERNOTICE" : "PRIVMSG",
+    type: ["raid", "sub"].includes(name) && index === 0 ? "USERNOTICE" : "PRIVMSG",
     channel: `#${channel.replace(/^#/u, "")}`,
     userLogin,
     id: `studio-${name}-${index}`,
@@ -57,7 +61,14 @@ export function createScenarioMessages(name: ScenarioName, channel: string): Com
     badges: [],
     emotes: [],
     text,
-    tags: { login: userLogin, "display-name": userLogin, color },
+    tags: {
+      login: userLogin,
+      "display-name": userLogin,
+      color,
+      ...(name === "raid" && index === 0 ? { "msg-id": "raid", "msg-param-viewerCount": "57" } : {}),
+      ...(name === "sub" && index === 0 ? { "msg-id": "sub", "msg-param-months": "1" } : {}),
+      ...(name === "bits" && index === 0 ? { bits: "250" } : {}),
+    },
   }));
 }
 

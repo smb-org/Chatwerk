@@ -9,6 +9,7 @@ body {
 }
 
 body {
+  position: relative;
   overflow: hidden;
   color: var(--t-text-color, #ffffff);
   font-family: var(--t-font-family, Arial, sans-serif);
@@ -16,6 +17,7 @@ body {
 }
 
 #chat {
+  position: relative;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -51,6 +53,83 @@ body {
 .chat-line.chat-highlighted {
   background-color: var(--t-highlight-background-color, #ffe680);
   color: var(--t-highlight-text-color, #17181b);
+}
+
+.chat-line.chat-reaction-highlight {
+  background-color: var(--t-highlight-background-color, #ffe680) !important;
+  color: var(--t-highlight-text-color, #17181b) !important;
+}
+
+.chat-line.chat-highlighted .chat-name,
+.chat-line.chat-reaction-highlight .chat-name {
+  color: var(--t-highlight-text-color, #17181b) !important;
+}
+
+.reaction-layer {
+  position: absolute;
+  z-index: 10;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.reaction-burst {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  opacity: var(--reaction-intensity, 0.35);
+  animation: chatwerk-reaction-fade 3500ms ease-out both;
+}
+
+.reaction-effect {
+  position: absolute;
+  top: 28%;
+  left: 50%;
+  width: min(84px, 20vw);
+  height: min(84px, 20vw);
+  object-fit: contain;
+  transform: translate(-50%, -50%) scale(0.4);
+  animation: chatwerk-reaction-pop 2400ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.reaction-rain {
+  position: absolute;
+  top: -48px;
+  left: var(--reaction-x, 50%);
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  font-size: 28px;
+  line-height: 32px;
+  text-align: center;
+  animation: chatwerk-reaction-fall 3500ms linear var(--reaction-delay, 0s) both;
+}
+
+@keyframes chatwerk-reaction-pop {
+  0% { transform: translate(-50%, -50%) scale(0.4); opacity: 0; }
+  22% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(0.95); opacity: 1; }
+}
+
+@keyframes chatwerk-reaction-fade {
+  0% { opacity: 0; }
+  14% { opacity: var(--reaction-intensity, 0.35); }
+  72% { opacity: var(--reaction-intensity, 0.35); }
+  100% { opacity: 0; }
+}
+
+@keyframes chatwerk-reaction-fall {
+  0% { transform: translateY(-72px) rotate(-12deg); opacity: 0; }
+  8% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { transform: translateY(calc(100vh + 100px)) rotate(210deg); opacity: 0; }
+}
+
+#chat[data-motion="none"] *,
+#chat[data-motion="none"] *::before,
+#chat[data-motion="none"] *::after {
+  animation: none !important;
+  transition: none !important;
 }
 
 #chat[data-layout="ticker"] .chat-line {

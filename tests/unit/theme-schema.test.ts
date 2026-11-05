@@ -3,6 +3,7 @@ import {
   DEFAULTS,
   LEGIBILITY_MINIMUM_RATIO,
   LEGIBILITY_OUTLINE_OPACITY_THRESHOLD,
+  SCHEMA_VERSION,
   THEME_FIELDS,
   THEME_UI_GROUPS,
   cssVariableName,
@@ -29,7 +30,7 @@ describe("theme schema", () => {
   it("ships valid defaults and gives each field ordered UI metadata", () => {
     expect(validateTheme(DEFAULTS)).toEqual(DEFAULTS);
     expect(THEME_UI_GROUPS).toEqual([
-      "Text", "Colors", "Layout", "Messages", "Channels", "Filters", "Advanced",
+      "Text", "Colors", "Layout", "Messages", "Reactions", "Channels", "Filters", "Advanced",
     ]);
     for (const field of Object.values(THEME_FIELDS)) {
       expect(field.ui.label).toBeTruthy();
@@ -97,6 +98,28 @@ describe("theme schema", () => {
     expect(validateTheme({ ...DEFAULTS, emoteScale: 2.2, showBadges: false, showPronouns: true }))
       .toMatchObject({ emoteScale: 2.2, showBadges: false, showPronouns: true });
     expect(() => validateTheme({ ...DEFAULTS, emoteScale: "3em" })).toThrow();
+  });
+
+  it("validates shareable reaction toggles, intensity, sound, and volume at schema version 1", () => {
+    expect(SCHEMA_VERSION).toBe(1);
+    expect(DEFAULTS).toMatchObject({
+      reactionRaid: true,
+      reactionSub: true,
+      reactionResub: true,
+      reactionSubgift: true,
+      reactionBits: true,
+      reactionIntensity: 0.35,
+      reactionSoundEnabled: false,
+      reactionVolume: 0.4,
+    });
+    expect(THEME_FIELDS.reactionIntensity.ui).toMatchObject({ group: "Reactions", control: "range" });
+    expect(THEME_FIELDS.reactionSoundEnabled.ui).toMatchObject({ group: "Reactions", control: "toggle" });
+    expect(THEME_FIELDS.reactionVolume.range).toMatchObject({ min: 0, max: 1, step: 0.05 });
+    expect(validateTheme({ schemaVersion: 1, reactionBits: false, reactionVolume: 0.75 }))
+      .toMatchObject({ schemaVersion: 1, reactionBits: false, reactionIntensity: 0.35, reactionVolume: 0.75 });
+    expect(() => validateTheme({ reactionIntensity: 1.01 })).toThrow();
+    expect(() => validateTheme({ reactionVolume: -0.1 })).toThrow();
+    expect(getShareableThemeKeys()).toContain("reactionSubgift");
   });
 
   it("keeps additive values compatible with schema version 1 and loads old-shape themes", () => {

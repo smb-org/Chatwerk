@@ -249,6 +249,47 @@ describe("text renderer", () => {
     renderer.dispose();
   });
 
+  it("keeps a queued ticker raid highlighted when its line finally appears", () => {
+    vi.useFakeTimers();
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, layout: "ticker", tickerSpeed: 400 },
+    });
+    renderer.handle(parseIrcLine("@id=backlog-one;room-id=10 :viewer!viewer@host PRIVMSG #room :backlog one")!);
+    renderer.handle(parseIrcLine("@id=backlog-two;room-id=10 :viewer!viewer@host PRIVMSG #room :backlog two")!);
+    renderer.handle(parseIrcLine("@id=backlog-raid;room-id=10;msg-id=raid;msg-param-viewerCount=12 :tmi.twitch.tv USERNOTICE #room :Raiding")!);
+    vi.advanceTimersByTime(16);
+    vi.advanceTimersByTime(4_000);
+
+    const advanceTicker = (): void => {
+      root.querySelector(".ticker-line")?.dispatchEvent(new dom.window.Event("animationend"));
+      vi.advanceTimersByTime(16);
+    };
+    advanceTicker();
+    advanceTicker();
+
+    expect(root.querySelector(".chat-line")?.textContent).toContain("Raiding");
+    expect(root.querySelector(".chat-line")?.classList.contains("chat-reaction-highlight")).toBe(true);
+    renderer.dispose();
+  });
+
+  it("detaches reaction highlights when changing layout removes the old line", () => {
+    const renderer = createChatRenderer({
+      root,
+      theme: DEFAULTS,
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=layout-raid;room-id=10;msg-id=raid;msg-param-viewerCount=12 :tmi.twitch.tv USERNOTICE #room :Raiding")!);
+    const oldLine = root.querySelector<HTMLElement>(".chat-line")!;
+    expect(oldLine.classList.contains("chat-reaction-highlight")).toBe(true);
+
+    renderer.setTheme({ ...DEFAULTS, layout: "ticker" });
+
+    expect(oldLine.isConnected).toBe(false);
+    expect(oldLine.classList.contains("chat-reaction-highlight")).toBe(false);
+    renderer.dispose();
+  });
+
   it("uses a timer for the default batch and drops stale messages after a delayed flush", () => {
     vi.useFakeTimers();
     const renderer = createChatRenderer({ root, theme: { ...DEFAULTS, lifetime: 1_000 } });

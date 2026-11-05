@@ -10,7 +10,9 @@ import {
 import { shouldFilterMessage } from "./filters";
 import { BoundedTickerQueue } from "./ticker-queue";
 import type { CommonMessage, IrcEvent } from "./irc-parse";
+import { parseReactionEvent } from "./irc-parse";
 import { splitMessage, type EmoteLookup } from "./emotes";
+import { createReactionEffects } from "./reactions";
 import { isAllowedImageUrl } from "../shared/hosts";
 import type { BadgeLookup } from "./badges";
 import type { PaintLookup, PaintStyle } from "./paints";
@@ -74,6 +76,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   const cancel = options.cancelScheduled ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   let theme = options.theme ?? DEFAULTS;
   let pending: PendingMessage[] = [];
+  let localMessageId = 0;
   const tickerQueue = new BoundedTickerQueue<PendingMessage>(limit);
   let tickerActive: RenderedLine | undefined;
   let activeChannels = normalizeChannels(theme.channels);
@@ -82,17 +85,20 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   const lines = new Set<RenderedLine>();
   const linesByAlias = new Map<string, RenderedLine>();
   const linesBySourceId = new Map<string, RenderedLine>();
+  const reactionEffects = createReactionEffects({ root, theme, emotes: options.emotes });
   const unsubscribePaints = options.paints?.subscribe((userId) => refreshPaints(userId));
 
   const applyTheme = (): void => {
     root.dataset.lineOrder = theme.lineOrder;
     root.dataset.layout = theme.layout;
+    root.dataset.motion = theme.motion;
     for (const [name, value] of Object.entries(themeCssVariables(theme))) root.style.setProperty(name, value);
     root.style.setProperty("--t-row-background", themeRowBackground(theme));
     const outline = effectiveOutline(theme);
     root.style.setProperty("--t-outline", `${outline.width}px`);
     root.style.setProperty("--t-outline-color", outline.color);
     root.style.setProperty("--t-ticker-speed", `${theme.tickerSpeed}px`);
+    reactionEffects.setTheme(theme);
     for (const line of lines) {
       for (const image of line.node.querySelectorAll<HTMLImageElement>("img[data-chatwerk-emote]")) {
         setEmoteImageHeight(image, theme, isGigantified(line.event));
@@ -123,6 +129,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     if (line.removalTimer !== undefined) clearTimeout(line.removalTimer);
     lines.delete(line);
     for (const key of line.aliases.keys()) {
+      reactionEffects.detachLine(key);
       if (linesByAlias.get(key) === line) linesByAlias.delete(key);
     }
     if (line.sourceId && linesBySourceId.get(line.sourceId) === line) linesBySourceId.delete(line.sourceId);
@@ -150,6 +157,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       const line = buildLine(event, root.ownerDocument, theme);
       lines.add(line.record);
       addLineAliases(line.record, item.aliases);
+      for (const key of item.aliases.keys()) reactionEffects.attachLine(key, line.node);
       if (line.record.sourceId) linesBySourceId.set(line.record.sourceId, line.record);
       line.record.node = line.node;
       fragment.appendChild(line.node);
@@ -174,6 +182,8 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   }
 
   function removeAlias(line: RenderedLine, key: string): void {
+    reactionEffects.detachLine(key);
+    reactionEffects.cancelAlias(key);
     line.aliases.delete(key);
     if (linesByAlias.get(key) === line) linesByAlias.delete(key);
     if (line.aliases.size === 0) removeLine(line);
@@ -222,6 +232,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     line.record.node = line.node;
     lines.add(line.record);
     addLineAliases(line.record, item.aliases);
+    for (const key of item.aliases.keys()) reactionEffects.attachLine(key, line.node);
     if (line.record.sourceId) linesBySourceId.set(line.record.sourceId, line.record);
     tickerActive = line.record;
     root.replaceChildren(line.node);
@@ -247,6 +258,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     line.record.node = line.node;
     lines.add(line.record);
     addLineAliases(line.record, latest.aliases);
+    for (const key of latest.aliases.keys()) reactionEffects.attachLine(key, line.node);
     if (line.record.sourceId) linesBySourceId.set(line.record.sourceId, line.record);
     tickerActive = line.record;
     root.replaceChildren(line.node);
@@ -268,6 +280,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     for (const line of [...lines]) {
       if (line.lifetimeTimer !== undefined) clearTimeout(line.lifetimeTimer);
       if (line.removalTimer !== undefined) clearTimeout(line.removalTimer);
+      for (const key of line.aliases.keys()) reactionEffects.detachLine(key);
       line.node.remove();
     }
     lines.clear();
@@ -294,16 +307,20 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   const handle = (event: IrcEvent): void => {
     if (event.type === "PRIVMSG" || event.type === "USERNOTICE") {
       if (shouldFilterMessage(event, theme)) return;
-      const alias = messageAlias(event);
+      const alias = messageAlias(event, `local:${++localMessageId}`);
+      const reaction = parseReactionEvent(event);
       if (event.sourceId) {
         const rendered = linesBySourceId.get(event.sourceId);
         if (rendered) {
           addAlias(rendered, alias);
+          if (reaction) reactionEffects.enqueue(event, reaction, alias);
+          reactionEffects.attachLine(alias.key, rendered.node);
           return;
         }
         const queued = findQueued((item) => item.event.sourceId === event.sourceId);
         if (queued) {
           queued.aliases.set(alias.key, alias);
+          if (reaction) reactionEffects.enqueue(event, reaction, alias);
           return;
         }
       }
@@ -311,7 +328,9 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
         const previous = linesByAlias.get(alias.key);
         if (previous) removeAlias(previous, alias.key);
         removeQueuedAlias(alias.key);
+        reactionEffects.cancelAlias(alias.key);
       }
+      if (reaction) reactionEffects.enqueue(event, reaction, alias);
       const item: PendingMessage = { event, receivedAt: Date.now(), aliases: new Map([[alias.key, alias]]) };
       if (theme.layout === "ticker") {
         tickerQueue.enqueue(item);
@@ -337,6 +356,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       if (event.messageId) {
         const room = moderationRoom(event.tags, event.channel);
         const key = aliasKey(room, event.messageId);
+        reactionEffects.cancelAlias(key);
         const line = linesByAlias.get(key);
         if (line) removeAlias(line, key);
         removeQueuedAlias(key);
@@ -347,11 +367,13 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     if (event.type === "CLEARCHAT") {
       const room = moderationRoom(event.tags, event.channel);
       if (!event.target && !event.targetUserId) {
+        reactionEffects.clearRoom(room);
         for (const line of [...lines]) removeRoomAliases(line, room);
         removeQueuedAliases((alias) => alias.room === room);
       } else {
-        const target = event.target?.toLowerCase();
+        const target = event.target?.toLowerCase() ?? null;
         const targetUserId = event.targetUserId;
+        reactionEffects.clearUser(room, targetUserId, target);
         for (const line of [...lines]) {
           if (targetUserId ? line.userId === targetUserId : line.userLogin.toLowerCase() === target) {
             removeRoomAliases(line, room);
@@ -385,6 +407,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     pending = [];
     tickerQueue.clear();
     tickerActive = undefined;
+    reactionEffects.clear();
     for (const line of [...lines]) removeLine(line);
     root.replaceChildren();
     linesByAlias.clear();
@@ -416,6 +439,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     clear,
     dispose() {
       clear();
+      reactionEffects.dispose();
       unsubscribePaints?.();
       options.emotes?.dispose();
       options.badges?.dispose();
@@ -679,9 +703,9 @@ function isGigantified(event: CommonMessage): boolean {
     event.tags["msg-param-power-up-name"] === "Gigantify an Emote";
 }
 
-function messageAlias(event: CommonMessage): MessageAlias {
+function messageAlias(event: CommonMessage, localId: string): MessageAlias {
   const room = event.roomId || normalizeChannels([event.channel])[0] || event.channel.toLowerCase();
-  const id = event.id ?? (event.sourceId ? `source:${event.sourceId}` : null);
+  const id = event.id ?? (event.sourceId ? `source:${event.sourceId}` : localId);
   return { key: aliasKey(room, id), room, id };
 }
 

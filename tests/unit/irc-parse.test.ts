@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseIrcLine } from "../../src/renderer/irc-parse";
+import { parseIrcLine, parseReactionEvent } from "../../src/renderer/irc-parse";
 
 describe("Twitch IRC parser", () => {
   it("unescapes tags and parses message identifiers, source tags, colors and ranges", () => {
@@ -49,5 +49,45 @@ describe("Twitch IRC parser", () => {
     expect(parseIrcLine("@msg-id=login_authentication_failed :tmi.twitch.tv NOTICE * :Login unsuccessful"))
       .toMatchObject({ type: "NOTICE", messageId: "login_authentication_failed", text: "Login unsuccessful" });
     expect(parseIrcLine("not an IRC line")).toBeNull();
+  });
+
+  it("classifies Twitch raid, sub, resub, gift-sub, and bits tag shapes", () => {
+    const fixtures = [
+      ["@badge-info=;badges=;color=;display-name=Raider;emotes=;id=raid-1;login=raider;mod=0;msg-id=raid;msg-param-displayName=Big\\sStreamer;msg-param-login=bigstreamer;msg-param-viewerCount=57;room-id=10;subscriber=0;system-msg=Big\\sStreamer\\sis\\sraiding\\swith\\s57\\sviewers;user-id=1;user-type= :tmi.twitch.tv USERNOTICE #home", "raid"],
+      ["@badge-info=;badges=subscriber/0;color=;display-name=NewSub;emotes=;id=sub-1;login=newsub;mod=0;msg-id=sub;msg-param-sub-plan=1000;msg-param-sub-plan-name=Channel\\sSubscription\\s(1\\sMonth);room-id=10;subscriber=1;system-msg=NewSub\\ssubscribed\\sat\\sTier\\s1;user-id=2;user-type= :tmi.twitch.tv USERNOTICE #home", "sub"],
+      ["@badge-info=;badges=subscriber/1;color=;display-name=ReturningSub;emotes=;id=resub-1;login=returningsub;mod=0;msg-id=resub;msg-param-cumulative-months=12;msg-param-streak-months=3;msg-param-sub-plan=1000;msg-param-sub-plan-name=Channel\\sSubscription\\s(1\\sMonth);room-id=10;subscriber=1;system-msg=ReturningSub\\sresubscribed\\sfor\\s12\\smonths;user-id=3;user-type= :tmi.twitch.tv USERNOTICE #home", "resub"],
+      ["@badge-info=;badges=subscriber/0;color=;display-name=Gifter;emotes=;id=gift-1;login=gifter;mod=0;msg-id=subgift;msg-param-gift-months=1;msg-param-months=1;msg-param-recipient-display-name=Gifted;msg-param-recipient-id=4;msg-param-sub-plan=1000;msg-param-sub-plan-name=Channel\\sSubscription\\s(1\\sMonth);room-id=10;subscriber=0;system-msg=Gifter\\sgifted\\sa\\sTier\\s1\\ssub\\sto\\sGifted;user-id=5;user-type= :tmi.twitch.tv USERNOTICE #home", "subgift"],
+      ["@badge-info=;badges=bits/100;color=;display-name=Cheerer;emotes=;id=bits-1;login=cheerer;mod=0;room-id=10;user-id=6;bits=100 :cheerer!cheerer@host PRIVMSG #home :Cheer100", "bits"],
+    ] as const;
+
+    for (const [line, type] of fixtures) {
+      const event = parseIrcLine(line);
+      expect(event && parseReactionEvent(event)).toMatchObject({ type });
+      expect(event).toMatchObject({ roomId: "10" });
+    }
+    const bits = parseReactionEvent(parseIrcLine(fixtures[4][0])!);
+    expect(bits).toEqual({ type: "bits", amount: 100 });
+  });
+
+  it("ignores absent or hostile reaction tags and bounds numeric values", () => {
+    const plain = parseIrcLine(":viewer!viewer@host PRIVMSG #home :hello");
+    const hostileType = parseIrcLine("@msg-id=<script> :tmi.twitch.tv USERNOTICE #home");
+    const hostileBits = parseIrcLine("@bits=999999999999999999999;room-id=10 :viewer!viewer@host PRIVMSG #home :cheer");
+    const maximumBits = parseIrcLine("@bits=1000000;room-id=10 :viewer!viewer@host PRIVMSG #home :cheer");
+
+    expect(parseReactionEvent(plain!)).toBeNull();
+    expect(parseReactionEvent(hostileType!)).toBeNull();
+    expect(parseReactionEvent(hostileBits!)).toBeNull();
+    expect(parseReactionEvent(maximumBits!)).toEqual({ type: "bits", amount: 1_000_000 });
+  });
+
+  it("keeps shared-chat dedupe and room identifiers from the event tags", () => {
+    const event = parseIrcLine("@id=relay-1;msg-id=raid;msg-param-viewerCount=4;room-id=10;source-id=source-1;source-room-id=20 :tmi.twitch.tv USERNOTICE #home");
+    expect(event).toMatchObject({ type: "USERNOTICE", channel: "#home", roomId: "10", sourceRoomId: "20", sourceId: "source-1" });
+  });
+
+  it("classifies Shared Chat notices using source-msg-id", () => {
+    const event = parseIrcLine("@id=relay-1;msg-id=sharedchatnotice;source-msg-id=raid;msg-param-viewerCount=4;room-id=10;source-id=source-1;source-room-id=20 :tmi.twitch.tv USERNOTICE #home");
+    expect(event && parseReactionEvent(event)).toEqual({ type: "raid", amount: 4 });
   });
 });

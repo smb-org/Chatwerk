@@ -109,7 +109,7 @@ Abgelehnt wegen ungeklärter Lizenz, Einzelentwickler und Auslegung auf eine lok
 
 Theme ist versioniertes JSON aus festen Werten, die der Renderer als CSS-Variablen setzt. Eigenes CSS liegt getrennt am Overlay. Der Galerie-Export kopiert nur die Theme-Werte, nie das eigene CSS oder die Twitch-ID.
 
-Probebühne: Die Studio-Vorschau spielt lokal generierte Szenarien ab ("Quiet chat", "Message flood", "Raid") und den eigenen Live-Chat. Es wird nichts vom Chat serverseitig gespeichert.
+Probebühne: Die Studio-Vorschau spielt lokal generierte Szenarien ab ("Quiet chat", "Message flood", "Raid", "Sub", "Bits") und den eigenen Live-Chat. Es wird nichts vom Chat serverseitig gespeichert.
 
 ### Pflichtumfang des Renderers
 
@@ -777,10 +777,10 @@ Synthesized from this review's findings. Reihenfolge nach R4: erst die Kernkette
   - Surfaced by: R3-8, R3-11
   - Files: `src/worker/badges.ts`
   - Verify: Test 10
-- [ ] **T11 (P2, human: ~4h / CC: ~1h)** — Probebühne
+- [x] **T11 (P2, human: ~4h / CC: ~1h)** — Probebühne
   - Surfaced by: What Makes This Cool, Theme-Modell
   - Files: `src/renderer/scenarios.ts`, `src/studio/*`
-  - Verify: Szenarien laufen im Studio
+  - Verify: Quiet chat, Message flood, Raid, Sub und Bits laufen im Studio; geprüft mit Playwright
 - [ ] **T12 (P2, human: ~11h / CC: ~2h)** — Issues — Laufband, feste Filterregeln, mehrere Kanäle, Power-ups
   - Surfaced by: D3, R2, S16
   - Files: `src/renderer/*`, `src/shared/theme.ts`

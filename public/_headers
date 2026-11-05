@@ -9,6 +9,11 @@
   X-Content-Type-Options: nosniff
   Access-Control-Allow-Origin: *
 
+/effects/*
+  Cache-Control: public, max-age=3600, stale-while-revalidate=86400
+  X-Content-Type-Options: nosniff
+  Access-Control-Allow-Origin: *
+
 # Login and application pages retain framing protection. Origins are filled in after build.
 /
   Cache-Control: no-cache
@@ -71,19 +76,19 @@
   Cache-Control: no-cache
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
-  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__ wss://irc-ws.chat.twitch.tv __OVERLAY_CONNECT_ORIGINS__; img-src __PUBLIC_ORIGIN__ data: __OVERLAY_IMAGE_ORIGINS__; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__ wss://irc-ws.chat.twitch.tv __OVERLAY_CONNECT_ORIGINS__; img-src __PUBLIC_ORIGIN__ data: __OVERLAY_IMAGE_ORIGINS__; media-src __PUBLIC_ORIGIN__ blob:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'
 
 /overlay.html
   Cache-Control: no-cache
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
-  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__ wss://irc-ws.chat.twitch.tv __OVERLAY_CONNECT_ORIGINS__; img-src __PUBLIC_ORIGIN__ data: __OVERLAY_IMAGE_ORIGINS__; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__ wss://irc-ws.chat.twitch.tv __OVERLAY_CONNECT_ORIGINS__; img-src __PUBLIC_ORIGIN__ data: __OVERLAY_IMAGE_ORIGINS__; media-src __PUBLIC_ORIGIN__ blob:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'
 
 /overlay/*
   Cache-Control: no-cache
   Referrer-Policy: no-referrer
   X-Content-Type-Options: nosniff
-  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__ wss://irc-ws.chat.twitch.tv __OVERLAY_CONNECT_ORIGINS__; img-src __PUBLIC_ORIGIN__ data: __OVERLAY_IMAGE_ORIGINS__; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__ wss://irc-ws.chat.twitch.tv __OVERLAY_CONNECT_ORIGINS__; img-src __PUBLIC_ORIGIN__ data: __OVERLAY_IMAGE_ORIGINS__; media-src __PUBLIC_ORIGIN__ blob:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'
 
 
 
