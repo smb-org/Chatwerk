@@ -153,7 +153,17 @@ input, textarea { caret-color: var(--ui-accent); }
 .range-line { display: grid; grid-template-columns: minmax(0, 1fr) 62px; align-items: center; gap: 10px; }
 input[type="range"] { width: 100%; margin: 0; }
 .range-line output { color: var(--ui-fg); font-family: var(--ui-font-data); font-size: 12px; text-align: right; }
-.select-control, .hex-control { min-width: 0; height: 32px; padding: 0 8px; color: var(--ui-fg); background: var(--ui-bg); border: 1px solid var(--ui-line); border-radius: 4px; }
+.select-control, .hex-control, .list-control, .channel-input, .channel-add-row input { min-width: 0; height: 32px; padding: 0 8px; color: var(--ui-fg); background: var(--ui-bg); border: 1px solid var(--ui-line); border-radius: 4px; }
+.list-control { height: auto; min-height: 56px; padding: 6px 8px; resize: vertical; font: 12px/18px var(--ui-font-data); }
+.channel-list { display: grid; max-height: 170px; gap: 4px; margin: 0; padding: 0; overflow: auto; list-style: none; }
+.channel-list li { display: grid; grid-template-columns: minmax(0, 1fr) 28px 28px 28px; gap: 4px; }
+.channel-input { width: 100%; font: 12px/18px var(--ui-font-data); }
+.channel-add-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.channel-add-row input { width: 100%; font: 12px/18px var(--ui-font-data); }
+.channel-order-button, .channel-remove-button, .channel-add-button { min-width: 28px; min-height: 32px; padding: 0 6px; color: var(--ui-fg); background: var(--ui-bg); border: 1px solid var(--ui-line); border-radius: 4px; }
+.channel-add-button { white-space: nowrap; }
+.channel-order-button:disabled, .channel-remove-button:disabled, .channel-add-button:disabled { opacity: .45; }
+.channel-input[aria-invalid="true"], .channel-add-row input[aria-invalid="true"], .list-control[aria-invalid="true"] { border-color: var(--ui-danger); }
 .color-line { display: grid; grid-template-columns: 36px minmax(0, 1fr); align-items: center; gap: 8px; }
 input[type="color"] { width: 36px; height: 30px; padding: 2px; background: var(--ui-bg); border: 1px solid var(--ui-line); border-radius: 4px; }
 .hex-control { width: 100%; font-family: var(--ui-font-data); font-size: 12px; text-transform: uppercase; }

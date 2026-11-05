@@ -14,6 +14,20 @@ describe("additive config protocol", () => {
     expect("futureField" in result.config).toBe(false);
   });
 
+  it("applies additive theme fields on schema version 1 without requiring an update", () => {
+    const result = decideConfigUpdate(DEFAULTS, {
+      schemaVersion: 1,
+      layout: "ticker",
+      channels: ["room"],
+      filterWords: ["blocked"],
+    });
+    expect(result).toMatchObject({
+      status: "applied",
+      config: { schemaVersion: 1, layout: "ticker", channels: ["room"], filterWords: ["blocked"] },
+      shouldReload: false,
+    });
+  });
+
   it("keeps the last config for a higher schema without throwing or reloading", () => {
     const result = decideConfigUpdate(DEFAULTS, {
       schemaVersion: DEFAULTS.schemaVersion + 1,

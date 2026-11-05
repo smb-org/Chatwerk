@@ -7,6 +7,8 @@ import {
   themeRowBackground,
   type ThemeConfig,
 } from "../shared/theme";
+import { shouldFilterMessage } from "./filters";
+import { BoundedTickerQueue } from "./ticker-queue";
 import type { CommonMessage, IrcEvent } from "./irc-parse";
 import { splitMessage, type EmoteLookup } from "./emotes";
 import { isAllowedImageUrl } from "../shared/hosts";
@@ -29,14 +31,24 @@ export interface ChatRendererOptions {
 interface PendingMessage {
   event: CommonMessage;
   receivedAt: number;
+  aliases: Map<string, MessageAlias>;
+}
+
+interface MessageAlias {
+  key: string;
+  room: string;
+  id: string | null;
 }
 
 interface RenderedLine {
   node: HTMLElement;
-  id: string | null;
   sourceId: string | null;
   channel: string;
+  aliases: Map<string, MessageAlias>;
+  channelMarker: HTMLElement;
   event: CommonMessage;
+  receivedAt: number;
+  tickerWidth: number;
   userLogin: string;
   userId: string | null;
   lifetimeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -46,6 +58,7 @@ interface RenderedLine {
 export interface ChatRenderer {
   handle(event: IrcEvent): void;
   setTheme(theme: ThemeConfig): void;
+  setChannels(channels: string[]): void;
   clear(): void;
   dispose(): void;
 }
@@ -61,21 +74,32 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   const cancel = options.cancelScheduled ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>));
   let theme = options.theme ?? DEFAULTS;
   let pending: PendingMessage[] = [];
+  const tickerQueue = new BoundedTickerQueue<PendingMessage>(limit);
+  let tickerActive: RenderedLine | undefined;
+  let activeChannels = normalizeChannels(theme.channels);
   let scheduled = false;
   let scheduleHandle: unknown;
   const lines = new Set<RenderedLine>();
-  const linesById = new Map<string, RenderedLine>();
+  const linesByAlias = new Map<string, RenderedLine>();
   const linesBySourceId = new Map<string, RenderedLine>();
   const unsubscribePaints = options.paints?.subscribe((userId) => refreshPaints(userId));
 
   const applyTheme = (): void => {
     root.dataset.lineOrder = theme.lineOrder;
+    root.dataset.layout = theme.layout;
     for (const [name, value] of Object.entries(themeCssVariables(theme))) root.style.setProperty(name, value);
     root.style.setProperty("--t-row-background", themeRowBackground(theme));
     const outline = effectiveOutline(theme);
     root.style.setProperty("--t-outline", `${outline.width}px`);
     root.style.setProperty("--t-outline-color", outline.color);
-    for (const image of root.querySelectorAll<HTMLImageElement>("img[data-chatwerk-emote]")) setEmoteImageHeight(image, theme);
+    root.style.setProperty("--t-ticker-speed", `${theme.tickerSpeed}px`);
+    for (const line of lines) {
+      for (const image of line.node.querySelectorAll<HTMLImageElement>("img[data-chatwerk-emote]")) {
+        setEmoteImageHeight(image, theme, isGigantified(line.event));
+      }
+      if (line.node.classList.contains("ticker-line")) updateTickerDuration(line);
+      updateChannelMarker(line);
+    }
     for (const line of lines) {
       const badgeContainer = line.node.querySelector<HTMLElement>(".chat-badges");
       if (badgeContainer) {
@@ -98,14 +122,22 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     if (line.lifetimeTimer !== undefined) clearTimeout(line.lifetimeTimer);
     if (line.removalTimer !== undefined) clearTimeout(line.removalTimer);
     lines.delete(line);
-    if (line.id && linesById.get(line.id) === line) linesById.delete(line.id);
+    for (const key of line.aliases.keys()) {
+      if (linesByAlias.get(key) === line) linesByAlias.delete(key);
+    }
     if (line.sourceId && linesBySourceId.get(line.sourceId) === line) linesBySourceId.delete(line.sourceId);
+    if (tickerActive === line) tickerActive = undefined;
     line.node.remove();
   };
 
   const flush = (): void => {
     scheduled = false;
     scheduleHandle = undefined;
+    if (theme.layout === "ticker") {
+      if (theme.motion === "none") flushStaticTicker();
+      else advanceTicker();
+      return;
+    }
     if (pending.length === 0) return;
     const batch = pending;
     pending = [];
@@ -117,7 +149,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       const event = item.event;
       const line = buildLine(event, root.ownerDocument, theme);
       lines.add(line.record);
-      if (line.record.id) linesById.set(line.record.id, line.record);
+      addLineAliases(line.record, item.aliases);
       if (line.record.sourceId) linesBySourceId.set(line.record.sourceId, line.record);
       line.record.node = line.node;
       fragment.appendChild(line.node);
@@ -132,9 +164,124 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     scheduleHandle = schedule(flush);
   };
 
-  const dropQueued = (predicate: (event: CommonMessage) => boolean): void => {
-    pending = pending.filter(({ event }) => !predicate(event));
-  };
+  function addLineAliases(line: RenderedLine, aliases: Map<string, MessageAlias>): void {
+    for (const alias of aliases.values()) addAlias(line, alias);
+  }
+
+  function addAlias(line: RenderedLine, alias: MessageAlias): void {
+    line.aliases.set(alias.key, alias);
+    linesByAlias.set(alias.key, line);
+  }
+
+  function removeAlias(line: RenderedLine, key: string): void {
+    line.aliases.delete(key);
+    if (linesByAlias.get(key) === line) linesByAlias.delete(key);
+    if (line.aliases.size === 0) removeLine(line);
+  }
+
+  function removeRoomAliases(line: RenderedLine, room: string): void {
+    for (const alias of [...line.aliases.values()]) {
+      if (alias.room === room) removeAlias(line, alias.key);
+    }
+  }
+
+  function removeQueuedAlias(key: string): void {
+    const strip = (item: PendingMessage): boolean => {
+      item.aliases.delete(key);
+      return item.aliases.size === 0;
+    };
+    pending = pending.filter((item) => !strip(item));
+    tickerQueue.remove(strip);
+  }
+
+  function removeQueuedAliases(predicate: (alias: MessageAlias, item: PendingMessage) => boolean): void {
+    const strip = (item: PendingMessage): boolean => {
+      for (const alias of [...item.aliases.values()]) {
+        if (predicate(alias, item)) item.aliases.delete(alias.key);
+      }
+      return item.aliases.size === 0;
+    };
+    pending = pending.filter((item) => !strip(item));
+    tickerQueue.remove(strip);
+  }
+
+  function findQueued(predicate: (item: PendingMessage) => boolean): PendingMessage | undefined {
+    return pending.find(predicate) ?? tickerQueue.toArray().find(predicate);
+  }
+
+  function advanceTicker(): void {
+    if (tickerActive) return;
+    let item = tickerQueue.dequeue();
+    const now = Date.now();
+    while (item && (item.aliases.size === 0 || theme.lifetime - (now - item.receivedAt) <= 0)) {
+      item = tickerQueue.dequeue();
+    }
+    if (!item) return;
+    const line = buildLine(item.event, root.ownerDocument, theme, item.receivedAt);
+    line.node.classList.add("ticker-line");
+    line.record.node = line.node;
+    lines.add(line.record);
+    addLineAliases(line.record, item.aliases);
+    if (line.record.sourceId) linesBySourceId.set(line.record.sourceId, line.record);
+    tickerActive = line.record;
+    root.replaceChildren(line.node);
+    updateTickerDuration(line.record);
+    line.node.addEventListener("animationend", () => {
+      if (tickerActive !== line.record) return;
+      removeLine(line.record);
+      scheduleFlush();
+    }, { once: true });
+  }
+
+  function flushStaticTicker(): void {
+    let latest: PendingMessage | undefined;
+    let item = tickerQueue.dequeue();
+    while (item) {
+      if (item.aliases.size > 0) latest = item;
+      item = tickerQueue.dequeue();
+    }
+    if (!latest) return;
+    if (tickerActive) removeLine(tickerActive);
+    const line = buildLine(latest.event, root.ownerDocument, theme, latest.receivedAt);
+    line.node.classList.add("ticker-line", "ticker-static");
+    line.record.node = line.node;
+    lines.add(line.record);
+    addLineAliases(line.record, latest.aliases);
+    if (line.record.sourceId) linesBySourceId.set(line.record.sourceId, line.record);
+    tickerActive = line.record;
+    root.replaceChildren(line.node);
+  }
+
+  function updateTickerDuration(line: RenderedLine): void {
+    const speed = Math.max(1, theme.tickerSpeed);
+    const viewportWidth = root.ownerDocument.defaultView?.innerWidth ?? 1920;
+    const seconds = Math.max(0.05, (viewportWidth + line.tickerWidth) / speed);
+    line.node.style.setProperty("--ticker-duration", `${seconds}s`);
+  }
+
+  function changeLayout(nextLayout: ThemeConfig["layout"]): void {
+    const messages = [...lines].map((line): PendingMessage => ({
+      event: line.event,
+      receivedAt: line.receivedAt,
+      aliases: new Map(line.aliases),
+    })).concat(pending, tickerQueue.toArray());
+    for (const line of [...lines]) {
+      if (line.lifetimeTimer !== undefined) clearTimeout(line.lifetimeTimer);
+      if (line.removalTimer !== undefined) clearTimeout(line.removalTimer);
+      line.node.remove();
+    }
+    lines.clear();
+    linesByAlias.clear();
+    linesBySourceId.clear();
+    tickerActive = undefined;
+    pending = [];
+    tickerQueue.clear();
+    if (nextLayout === "ticker") {
+      for (const item of messages) tickerQueue.enqueue(item);
+    } else {
+      pending = messages;
+    }
+  }
 
   const enforceCapacity = (): void => {
     while (lines.size + pending.length >= limit) {
@@ -146,14 +293,32 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
 
   const handle = (event: IrcEvent): void => {
     if (event.type === "PRIVMSG" || event.type === "USERNOTICE") {
-      if (event.sourceId && (linesBySourceId.has(event.sourceId) || pending.some(({ event: queued }) => queued.sourceId === event.sourceId))) return;
-      if (event.id) {
-        const previous = linesById.get(event.id);
-        if (previous?.channel === event.channel.toLowerCase()) removeLine(previous);
-        dropQueued((queued) => queued.id === event.id && queued.channel.toLowerCase() === event.channel.toLowerCase());
+      if (shouldFilterMessage(event, theme)) return;
+      const alias = messageAlias(event);
+      if (event.sourceId) {
+        const rendered = linesBySourceId.get(event.sourceId);
+        if (rendered) {
+          addAlias(rendered, alias);
+          return;
+        }
+        const queued = findQueued((item) => item.event.sourceId === event.sourceId);
+        if (queued) {
+          queued.aliases.set(alias.key, alias);
+          return;
+        }
       }
-      enforceCapacity();
-      pending.push({ event, receivedAt: Date.now() });
+      if (event.id) {
+        const previous = linesByAlias.get(alias.key);
+        if (previous) removeAlias(previous, alias.key);
+        removeQueuedAlias(alias.key);
+      }
+      const item: PendingMessage = { event, receivedAt: Date.now(), aliases: new Map([[alias.key, alias]]) };
+      if (theme.layout === "ticker") {
+        tickerQueue.enqueue(item);
+      } else {
+        enforceCapacity();
+        pending.push(item);
+      }
       scheduleFlush();
       const broadcasterId = event.sourceRoomId && event.sourceRoomId !== event.roomId ? event.sourceRoomId : event.roomId;
       if (theme.showBadges && options.badges && event.badges.length > 0) {
@@ -170,27 +335,33 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     }
     if (event.type === "CLEARMSG") {
       if (event.messageId) {
-        const line = linesById.get(event.messageId);
-        if (line?.channel === event.channel.toLowerCase()) removeLine(line);
-        dropQueued((queued) => queued.id === event.messageId && queued.channel.toLowerCase() === event.channel.toLowerCase());
+        const room = moderationRoom(event.tags, event.channel);
+        const key = aliasKey(room, event.messageId);
+        const line = linesByAlias.get(key);
+        if (line) removeAlias(line, key);
+        removeQueuedAlias(key);
+        scheduleFlush();
       }
       return;
     }
     if (event.type === "CLEARCHAT") {
+      const room = moderationRoom(event.tags, event.channel);
       if (!event.target && !event.targetUserId) {
-        for (const line of [...lines]) removeLine(line);
-        pending = [];
+        for (const line of [...lines]) removeRoomAliases(line, room);
+        removeQueuedAliases((alias) => alias.room === room);
       } else {
         const target = event.target?.toLowerCase();
         const targetUserId = event.targetUserId;
         for (const line of [...lines]) {
-          if (line.channel === event.channel.toLowerCase() &&
-            (targetUserId ? line.userId === targetUserId : line.userLogin.toLowerCase() === target)) removeLine(line);
+          if (targetUserId ? line.userId === targetUserId : line.userLogin.toLowerCase() === target) {
+            removeRoomAliases(line, room);
+          }
         }
-        dropQueued((queued) => targetUserId
-          ? queued.channel.toLowerCase() === event.channel.toLowerCase() && queued.tags["user-id"] === targetUserId
-          : queued.channel.toLowerCase() === event.channel.toLowerCase() && queued.userLogin?.toLowerCase() === target);
+        removeQueuedAliases((alias, item) => alias.room === room && (targetUserId
+          ? item.event.tags["user-id"] === targetUserId
+          : item.event.userLogin?.toLowerCase() === target));
       }
+      scheduleFlush();
       return;
     }
   };
@@ -212,9 +383,11 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     scheduled = false;
     scheduleHandle = undefined;
     pending = [];
+    tickerQueue.clear();
+    tickerActive = undefined;
     for (const line of [...lines]) removeLine(line);
     root.replaceChildren();
-    linesById.clear();
+    linesByAlias.clear();
     linesBySourceId.clear();
   };
 
@@ -222,8 +395,23 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   return {
     handle,
     setTheme(nextTheme) {
+      const previousLayout = theme.layout;
+      const previousMotion = theme.motion;
+      if (previousLayout !== nextTheme.layout) changeLayout(nextTheme.layout);
+      else if (previousLayout === "ticker" && previousMotion !== nextTheme.motion) {
+        changeLayout("stack");
+        changeLayout("ticker");
+      }
       theme = nextTheme;
+      if (theme.channels.length > 0) activeChannels = normalizeChannels(theme.channels);
       applyTheme();
+      if (theme.layout === "ticker" && tickerActive && theme.motion === "none") scheduleFlush();
+      if (theme.layout === "ticker" && !tickerActive && tickerQueue.size > 0) scheduleFlush();
+      if (theme.layout === "stack" && pending.length > 0) scheduleFlush();
+    },
+    setChannels(channels) {
+      activeChannels = normalizeChannels(channels);
+      for (const line of lines) updateChannelMarker(line);
     },
     clear,
     dispose() {
@@ -236,9 +424,18 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     },
   };
 
-  function buildLine(event: CommonMessage, document: Document, config: ThemeConfig): { node: HTMLElement; record: RenderedLine } {
+  function buildLine(
+    event: CommonMessage,
+    document: Document,
+    config: ThemeConfig,
+    receivedAt = Date.now(),
+  ): { node: HTMLElement; record: RenderedLine } {
     const row = document.createElement("div");
     row.setAttribute("class", "chat-line");
+    const highlighted = event.tags["msg-id"] === "highlighted-message";
+    const gigantified = isGigantified(event);
+    if (highlighted) row.classList.add("chat-highlighted");
+    if (gigantified) row.classList.add("chat-gigantified");
     row.style.setProperty("font-family", "var(--t-font-family)");
     row.style.setProperty("font-size", "var(--t-font-size)");
     row.style.setProperty("font-weight", "var(--t-font-weight)");
@@ -248,6 +445,10 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     row.style.setProperty("-webkit-text-stroke-color", "var(--t-outline-color)");
     row.style.setProperty("opacity", "1");
     row.style.setProperty("transform", "translateY(0)");
+    if (highlighted) {
+      row.style.setProperty("background-color", "var(--t-highlight-background-color)");
+      row.style.setProperty("color", "var(--t-highlight-text-color)");
+    }
     const name = document.createElement("span");
     name.setAttribute("class", "chat-name");
     const displayName = event.displayName?.trim() || event.userLogin || "system";
@@ -267,17 +468,20 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     message.setAttribute("class", "chat-message");
     const text = event.text || event.tags["system-msg"] || "";
     const foreignRoom = Boolean(event.sourceRoomId && event.roomId && event.sourceRoomId !== event.roomId);
-    for (const part of splitMessage(text, event.emotes, options.emotes, !foreignRoom)) {
+    const emoteRoomId = foreignRoom ? event.sourceRoomId ?? undefined : event.roomId ?? undefined;
+    const parts = splitMessage(text, event.emotes, options.emotes, !foreignRoom, emoteRoomId);
+    for (const part of parts) {
       if (part.type === "text") {
         message.appendChild(document.createTextNode(part.value));
       } else if (isAllowedImageUrl(part.url)) {
         const image = document.createElement("img");
         image.setAttribute("class", "chat-emote");
         image.setAttribute("data-chatwerk-emote", "true");
+        if (gigantified) image.setAttribute("data-gigantified", "true");
         image.setAttribute("src", part.url);
         image.setAttribute("alt", part.name);
         image.setAttribute("decoding", "async");
-        setEmoteImageHeight(image, config);
+        setEmoteImageHeight(image, config, gigantified);
         if (part.overlays?.length) {
           const wrapper = document.createElement("span");
           wrapper.setAttribute("class", "chat-emote-wrapper");
@@ -290,10 +494,11 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
             const overlayImage = document.createElement("img");
             overlayImage.setAttribute("class", "chat-emote chat-emote-overlay");
             overlayImage.setAttribute("data-chatwerk-emote", "true");
+            if (gigantified) overlayImage.setAttribute("data-gigantified", "true");
             overlayImage.setAttribute("src", overlay.url);
             overlayImage.setAttribute("alt", overlay.name);
             overlayImage.setAttribute("decoding", "async");
-            setEmoteImageHeight(overlayImage, config);
+            setEmoteImageHeight(overlayImage, config, gigantified);
             overlayImage.style.setProperty("position", "absolute");
             overlayImage.style.setProperty("inset", "0");
             overlayImage.style.setProperty("z-index", "1");
@@ -315,25 +520,34 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       sourceRoom.setAttribute("aria-label", `Shared chat source room ${event.sourceRoomId}`);
       sourceRoom.textContent = `via ${event.sourceRoomId}`;
     }
+    const channelMarker = document.createElement("span");
+    channelMarker.setAttribute("class", "chat-source-channel");
+    channelMarker.textContent = `#${normalizeChannels([event.channel])[0] ?? ""}`;
+    if (activeChannels.length <= 1) channelMarker.hidden = true;
     if (config.lineOrder === "message-first") {
       row.appendChild(message);
       row.appendChild(badges);
       row.appendChild(name);
       row.appendChild(pronouns);
       row.appendChild(sourceRoom);
+      row.appendChild(channelMarker);
     } else {
       row.appendChild(badges);
       row.appendChild(name);
       row.appendChild(pronouns);
       row.appendChild(sourceRoom);
+      row.appendChild(channelMarker);
       row.appendChild(message);
     }
     const record: RenderedLine = {
       node: row,
-      id: event.id,
       sourceId: event.sourceId,
       channel: event.channel.toLowerCase(),
+      aliases: new Map(),
+      channelMarker,
       event,
+      receivedAt,
+      tickerWidth: measureTickerWidth(event, config, parts, displayName, badges, sourceRoom, channelMarker, document),
       userLogin: event.userLogin ?? "",
       userId: event.tags["user-id"] ?? null,
       lifetimeTimer: undefined,
@@ -348,6 +562,46 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       const target = line.node.querySelector<HTMLElement>(".chat-badges");
       if (target) appendBadgeImages(target, line.event, theme, options.badges, true);
     }
+  }
+
+  function updateChannelMarker(line: RenderedLine): void {
+    line.channelMarker.textContent = `#${normalizeChannels([line.event.channel])[0] ?? ""}`;
+    line.channelMarker.hidden = activeChannels.length <= 1;
+  }
+
+  function measureTickerWidth(
+    event: CommonMessage,
+    config: ThemeConfig,
+    parts: ReturnType<typeof splitMessage>,
+    displayName: string,
+    badges: HTMLElement,
+    sourceRoom: HTMLElement,
+    channelMarker: HTMLElement,
+    document: Document,
+  ): number {
+    const canvas = document.createElement("canvas");
+    const Context = document.defaultView?.CanvasRenderingContext2D;
+    const context = Context ? canvas.getContext("2d") : null;
+    if (context) context.font = `${config.fontWeight} ${config.fontSize}px "${config.fontFamily}"`;
+    const measure = (value: string): number => context
+      ? context.measureText(value).width
+      : [...value].length * config.fontSize * 0.56;
+
+    const gigantified = isGigantified(event);
+    const emoteHeight = config.fontSize * (gigantified ? config.gigantifiedScale : config.emoteScale);
+    let messageWidth = 0;
+    for (const part of parts) {
+      if (part.type === "text") messageWidth += measure(part.value);
+      else messageWidth += emoteHeight + config.emoteSpacing;
+    }
+    const badgeCount = badges.querySelectorAll(".chat-badge").length;
+    const badgeWidth = badgeCount * config.fontSize + Math.max(0, badgeCount - 1) * config.fontSize * 0.15;
+    const visibleWidths = [messageWidth, measure(displayName)];
+    if (badgeCount > 0) visibleWidths.push(badgeWidth);
+    if (sourceRoom.textContent) visibleWidths.push(measure(sourceRoom.textContent));
+    if (!channelMarker.hidden) visibleWidths.push(measure(channelMarker.textContent ?? ""));
+    if (config.showPronouns && event.userLogin) visibleWidths.push(measure(` (${event.userLogin})`));
+    return Math.ceil(visibleWidths.reduce((sum, width) => sum + width, 0) + Math.max(0, visibleWidths.length - 1) * config.spacing);
   }
 
   function refreshPaints(userId?: string): void {
@@ -411,10 +665,34 @@ function nameColorFor(event: CommonMessage, theme: ThemeConfig): string {
     : theme.textColor;
 }
 
-function setEmoteImageHeight(image: HTMLImageElement, theme: ThemeConfig): void {
-  const height = Math.max(1, Math.round(theme.fontSize * theme.emoteScale));
+function setEmoteImageHeight(image: HTMLImageElement, theme: ThemeConfig, gigantified = false): void {
+  const scale = gigantified ? theme.gigantifiedScale : theme.emoteScale;
+  const height = Math.max(1, Math.round(theme.fontSize * scale));
   image.setAttribute("height", String(height));
   image.style.setProperty("height", `${height}px`);
   image.style.setProperty("width", "auto");
   image.style.setProperty("vertical-align", "middle");
+}
+
+function isGigantified(event: CommonMessage): boolean {
+  return event.tags["msg-param-power-up-type"] === "gigantify_an_emote" ||
+    event.tags["msg-param-power-up-name"] === "Gigantify an Emote";
+}
+
+function messageAlias(event: CommonMessage): MessageAlias {
+  const room = event.roomId || normalizeChannels([event.channel])[0] || event.channel.toLowerCase();
+  const id = event.id ?? (event.sourceId ? `source:${event.sourceId}` : null);
+  return { key: aliasKey(room, id), room, id };
+}
+
+function moderationRoom(tags: Record<string, string>, channel: string): string {
+  return tags["room-id"] || normalizeChannels([channel])[0] || channel.toLowerCase();
+}
+
+function aliasKey(room: string, id: string | null): string {
+  return `${room}\u0000${id ?? ""}`;
+}
+
+function normalizeChannels(channels: string[]): string[] {
+  return [...new Set(channels.map((channel) => channel.toLowerCase().replace(/^#/u, "")))].filter(Boolean).slice(0, 5);
 }

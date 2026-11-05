@@ -12,13 +12,15 @@ export interface EmoteProvider {
   name: string;
   loadGlobal(onUpdate: (assets: EmoteAsset[]) => void, signal?: AbortSignal): Promise<EmoteAsset[]>;
   loadChannel?(channelId: string, onUpdate: (assets: EmoteAsset[]) => void, signal?: AbortSignal): Promise<EmoteAsset[]>;
+  removeChannel?(channelId: string): void;
   dispose?(): void;
 }
 
 export interface EmoteLookup {
-  resolve(name: string): EmoteAsset | undefined;
+  resolve(name: string, channelId?: string): EmoteAsset | undefined;
   add(assets: EmoteAsset[]): void;
   setChannelId(channelId: string): void;
+  setChannelIds(channelIds: string[]): void;
   dispose(): void;
 }
 
@@ -62,7 +64,7 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
   const scopes = new Map<string, Map<string, EmoteAsset>>();
   const tasks = new Map<string, ScopeTask>();
   const providerNames = providers.map((provider) => provider.name.trim().toUpperCase());
-  let channelId = "";
+  let channelIds: string[] = [];
   let disposed = false;
 
   const replace = (scope: string, assets: EmoteAsset[]): void => {
@@ -156,36 +158,49 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
   };
 
   const setChannelId = (id: string): void => {
-    if (!/^\d+$/u.test(id) || channelId === id || disposed) return;
-    for (const scope of tasks.keys()) {
-      if (scope.endsWith(":channel")) cancelTask(scope);
+    setChannelIds([id]);
+  };
+
+  const setChannelIds = (ids: string[]): void => {
+    if (disposed) return;
+    const next = [...new Set(ids.filter((id) => /^\d+$/u.test(id)))].slice(0, 10);
+    if (next.length === channelIds.length && next.every((id, index) => id === channelIds[index])) return;
+    const nextSet = new Set(next);
+    for (const id of channelIds) {
+      if (nextSet.has(id)) continue;
+      for (const provider of providers) {
+        const scope = `${scopeProviderName(provider)}:channel:${id}`;
+        cancelTask(scope);
+        scopes.delete(scope);
+        provider.removeChannel?.(id);
+      }
     }
-    for (const provider of providers) scopes.delete(`${scopeProviderName(provider)}:channel`);
-    channelId = id;
+    const previousSet = new Set(channelIds);
+    channelIds = next;
     const taskPromises = providers.flatMap((provider) => provider.loadChannel
-      ? [run(provider, `${scopeProviderName(provider)}:channel`, (update, signal) => provider.loadChannel!(id, update, signal), () => channelId === id)]
+      ? next.filter((id) => !previousSet.has(id)).map((id) => {
+        const scope = `${scopeProviderName(provider)}:channel:${id}`;
+        return run(provider, scope, (update, signal) => provider.loadChannel!(id, update, signal), () => channelIds.includes(id));
+      })
       : []);
     void Promise.allSettled(taskPromises);
   };
 
   startGlobal();
   return {
-    resolve(name) {
+    resolve(name, selectedChannelId) {
       const manual = scopes.get("manual")?.get(name);
       if (manual) return manual;
-      for (const scopeKind of ["channel", "global"]) {
-        for (const provider of ["7TV", "BTTV", "FFZ"]) {
-          if (!providerNames.includes(provider)) continue;
-          const scope = `${provider}:${scopeKind}`;
-          const match = scopes.get(scope)?.get(name);
+      const channelId = selectedChannelId && /^\d+$/u.test(selectedChannelId) ? selectedChannelId : channelIds[0];
+      if (channelId) {
+        for (const provider of orderedProviderNames()) {
+          const match = scopes.get(`${provider}:channel:${channelId}`)?.get(name);
           if (match) return match;
         }
-        for (const provider of providerNames) {
-          if (["7TV", "BTTV", "FFZ"].includes(provider)) continue;
-          const scope = `${provider}:${scopeKind}`;
-          const match = scopes.get(scope)?.get(name);
-          if (match) return match;
-        }
+      }
+      for (const provider of orderedProviderNames()) {
+        const match = scopes.get(`${provider}:global`)?.get(name);
+        if (match) return match;
       }
       return undefined;
     },
@@ -194,6 +209,7 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
       replace("manual", [...(scopes.get("manual")?.values() ?? []), ...assets]);
     },
     setChannelId,
+    setChannelIds,
     dispose() {
       disposed = true;
       for (const scope of [...tasks.keys()]) cancelTask(scope);
@@ -202,6 +218,11 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
       if (ownsEvents) events.dispose();
     },
   };
+
+  function orderedProviderNames(): string[] {
+    const known = ["7TV", "BTTV", "FFZ"].filter((name) => providerNames.includes(name));
+    return [...known, ...providerNames.filter((name) => !["7TV", "BTTV", "FFZ"].includes(name))];
+  }
 }
 
 function scopeProviderName(provider: EmoteProvider): string {
@@ -241,6 +262,7 @@ export function splitMessage(
   twitchEmotes: IrcEmote[],
   lookup?: Pick<EmoteLookup, "resolve">,
   includeProviderEmotes = true,
+  channelId?: string,
 ): MessagePart[] {
   const indexed: IndexedPart[] = [];
   const codePointToUtf16: number[] = [];
@@ -280,20 +302,20 @@ export function splitMessage(
     for (const match of text.matchAll(/\S+/gu)) {
       const token = match[0];
       const tokenStart = match.index;
-      const exact = lookup.resolve(token);
+      const exact = lookup.resolve(token, channelId);
       let startOffset = 0;
       let endOffset = token.length;
       let asset = exact;
       if (!asset) {
         while (startOffset < endOffset && !isWordCharacter(token[startOffset]!)) startOffset += 1;
         while (endOffset > startOffset && !isWordCharacter(token[endOffset - 1]!)) endOffset -= 1;
-        if (endOffset > startOffset) asset = lookup.resolve(token.slice(startOffset, endOffset));
+        if (endOffset > startOffset) asset = lookup.resolve(token.slice(startOffset, endOffset), channelId);
       }
       if (!asset) {
         let splitEmotes = false;
         for (let split = 1; split < token.length; split += 1) {
-          const base = lookup.resolve(token.slice(0, split));
-          const overlay = lookup.resolve(token.slice(split));
+          const base = lookup.resolve(token.slice(0, split), channelId);
+          const overlay = lookup.resolve(token.slice(split), channelId);
           if (!base || !overlay?.zeroWidth) continue;
           selected.push({
             start: tokenStart,
@@ -407,10 +429,24 @@ function createSevenTvProvider(fetcher: typeof fetch, events: SevenTvEventApi): 
   const channelData = new Map<string, { setId: string; userId: string }>();
   const channelSetCleanups = new Map<string, () => void>();
   const channelUpdates = new Map<string, (assets: EmoteAsset[]) => void>();
+  const channelGenerations = new Map<string, number>();
   let disposed = false;
+  const releaseChannel = (channelId: string): void => {
+    channelData.delete(channelId);
+    channelUpdates.delete(channelId);
+    const cleanup = channelSetCleanups.get(channelId);
+    if (cleanup) {
+      cleanup();
+      channelSetCleanups.delete(channelId);
+      cleanups.delete(cleanup);
+    }
+  };
   const refreshChannel = async (channelId: string, update: (assets: EmoteAsset[]) => void, signal?: AbortSignal): Promise<EmoteAsset[]> => {
+    const generation = channelGenerations.get(channelId) ?? 0;
+    const isCurrent = (): boolean => !disposed && !signal?.aborted && (channelGenerations.get(channelId) ?? 0) === generation;
+    signal?.addEventListener("abort", () => releaseChannel(channelId), { once: true });
     const connection = await fetchJson(fetcher, `https://7tv.io/v3/users/twitch/${encodeURIComponent(channelId)}`, signal);
-    if (disposed) return [];
+    if (!isCurrent()) return [];
     channelUpdates.set(channelId, update);
     const set = isRecord(connection) ? connection.emote_set : null;
     const user = isRecord(connection) ? connection.user : null;
@@ -471,6 +507,10 @@ function createSevenTvProvider(fetcher: typeof fetch, events: SevenTvEventApi): 
       const assets = await refreshChannel(channelId, update, signal);
       return assets;
     },
+    removeChannel(channelId) {
+      channelGenerations.set(channelId, (channelGenerations.get(channelId) ?? 0) + 1);
+      releaseChannel(channelId);
+    },
     dispose() {
       disposed = true;
       for (const cleanup of cleanups) cleanup();
@@ -480,6 +520,7 @@ function createSevenTvProvider(fetcher: typeof fetch, events: SevenTvEventApi): 
       channelData.clear();
       channelSetCleanups.clear();
       channelUpdates.clear();
+      channelGenerations.clear();
     },
   };
 }

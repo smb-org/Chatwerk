@@ -32,7 +32,7 @@ test("loads an existing Main overlay through / with defaults at revision zero", 
   await expect(page).toHaveURL(`${e2eOrigin}/studio`);
   await expect(page.locator("#status-visible")).toHaveText("Saved, rev 0");
   await expect(page.locator("#overlay-url")).toHaveValue(`${e2eOrigin}/overlay#token=${token}`);
-  await expect(page.locator('[data-group="Channels"]')).toContainText(login);
+  await expect(page.locator('[data-theme-field="channels"] [data-channel-value]')).toHaveValue(login);
 
   const response = await page.request.get(`${e2eOrigin}/api/overlay/config`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -57,8 +57,9 @@ test("renders current theme controls, hides empty groups, and marks Themes as co
   await expect(messages.locator('[data-theme-field="emoteScale"]')).toBeVisible();
   await expect(messages.getByRole("checkbox", { name: "Show badges" })).toBeChecked();
   await expect(messages.getByRole("checkbox", { name: "Show pronouns" })).not.toBeChecked();
-  await expect(page.locator('[data-group="Channels"]')).toContainText(login);
-  await expect(page.locator('[data-group="Filters"]')).toHaveCount(0);
+  await expect(page.locator('[data-theme-field="channels"] [data-channel-value]')).toHaveValue(login);
+  await expect(page.locator('[data-group="Filters"]')).toBeVisible();
+  await expect(page.locator('[data-theme-field="hideNumbers"]')).toBeVisible();
   await expect(page.locator('[data-group="Advanced"]')).toHaveCount(0);
 
   const themes = page.getByText("Themes", { exact: true });
