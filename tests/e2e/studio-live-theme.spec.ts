@@ -16,7 +16,7 @@ test("updates an existing highlighted row when the live theme color changes", as
     });
   });
 
-  await page.locator("#live-chat").check();
+  await page.locator("#preview-mode-live").click();
   const preview = page.frameLocator("#studio-preview");
   const highlighted = preview.locator(".chat-highlighted");
   await expect(highlighted).toHaveCount(1);

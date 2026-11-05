@@ -173,9 +173,25 @@ function selectOverlay(items: OwnedOverlay[]): OwnedOverlay | undefined {
 
 function updateActiveOverlayName(): void {
   const name = document.querySelector<HTMLElement>("#active-overlay-name");
-  if (name) {
-    name.textContent = activeOverlay ? translate(language, "activeOverlayName", { name: activeOverlay.name }) : "";
+  const text = document.querySelector<HTMLElement>("#active-overlay-text");
+  const select = document.querySelector("#active-overlay-select") as HTMLSelectElement | null;
+  if (name && text && select) {
     name.hidden = !activeOverlay;
+    select.replaceChildren();
+    if (activeOverlay && overlays.length > 1) {
+      text.textContent = `${translate(language, "activeOverlayPrefix")} `;
+      for (const item of overlays) {
+        const option = document.createElement("option");
+        option.value = item.id;
+        option.textContent = item.name;
+        option.selected = item.id === activeOverlay.id;
+        select.appendChild(option);
+      }
+      select.hidden = false;
+    } else {
+      text.textContent = activeOverlay ? translate(language, "activeOverlayName", { name: activeOverlay.name }) : "";
+      select.hidden = true;
+    }
   }
   updateCopyButtonLabel();
 }
@@ -381,6 +397,15 @@ function wireScenarios(): void {
 
 function wireActions(): void {
   useButtons.forEach((button) => button.addEventListener("click", () => void copyLook()));
+  document.querySelector("#active-overlay-select")?.addEventListener("change", (event) => {
+    const target = event.currentTarget as HTMLSelectElement;
+    activeOverlay = overlays.find((item) => item.id === target.value);
+    if (activeOverlay) {
+      try { localStorage.setItem("chatwerk-overlay-id", activeOverlay.id); } catch { /* Keep selection for this page. */ }
+    }
+    updateActiveOverlayName();
+    useButtons.forEach((button) => { button.disabled = !activeOverlay; });
+  });
   (document.querySelector("#look-sort") as HTMLSelectElement | null)?.addEventListener("change", () => {
     if (!selected) return;
     const index = sortedLooks().findIndex((look) => look.id === selected?.id);

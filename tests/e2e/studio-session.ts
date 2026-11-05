@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import path from "node:path";
+import { expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import type { ThemeConfig } from "../../src/shared/theme";
 import { mintSessionCookie } from "../worker/worker-test-helpers";
@@ -16,12 +17,21 @@ export interface StudioIdentity {
   login: string;
 }
 
-export async function seedStudioSession(page: Page): Promise<StudioIdentity> {
+export async function expectActiveOverlay(page: Page, name: string): Promise<void> {
+  await expect.poll(() => page.locator("#active-overlay-name").evaluate((root) => {
+    const text = root.querySelector("#active-overlay-text")?.textContent ?? "";
+    const select = root.querySelector("#active-overlay-select") as HTMLSelectElement | null;
+    return select && !select.hidden ? `${text}${select.selectedOptions[0]?.textContent ?? ""}` : text;
+  })).toBe(`Active overlay: ${name}`);
+}
+
+export async function seedStudioSession(page: Page, options: { channel?: string } = {}): Promise<StudioIdentity> {
   const ownerId = `owner-${randomBytes(8).toString("hex")}`;
   const login = `e2e_${randomBytes(4).toString("hex")}`;
   const overlayId = randomUUID();
   const token = randomBytes(32).toString("base64url");
-  const sql = `INSERT INTO users (id, login) VALUES ('${ownerId}', '${login}'); INSERT INTO overlays (id, owner_id, link_token, name, channel, link_generation) VALUES ('${overlayId}', '${ownerId}', '${token}', 'Main', '${login}', 1);`;
+  const channel = options.channel ?? login;
+  const sql = `INSERT INTO users (id, login) VALUES ('${ownerId}', '${login}'); INSERT INTO overlays (id, owner_id, link_token, name, channel, link_generation) VALUES ('${overlayId}', '${ownerId}', '${token}', 'Main', '${channel}', 1);`;
   const registry = path.resolve(".wrangler/registry");
   const localEnv = {
     ...process.env,

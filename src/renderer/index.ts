@@ -114,6 +114,7 @@ if (chat) {
         stopScenario?.();
         stopScenario = undefined;
         if (event.data.enabled) {
+          if (!previewLiveEnabled) renderer.clear();
           previewLiveEnabled = true;
           const rawChannels = Array.isArray(event.data.channels)
             ? event.data.channels.filter((value): value is string => typeof value === "string")

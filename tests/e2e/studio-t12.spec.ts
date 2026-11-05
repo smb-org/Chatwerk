@@ -4,6 +4,7 @@ import { seedStudioSession, setRange } from "./studio-session";
 test("generated ticker slider and channel editor update a second live overlay", async ({ page }) => {
   const { token, login } = await seedStudioSession(page);
   await page.goto("/studio");
+  await page.locator("#channel-field-button").click();
 
   const overlay = await page.context().newPage();
   const routedCommands: string[] = [];

@@ -5,6 +5,7 @@ test("keeps the channel add input value and focus when another control saves", a
   await seedStudioSession(page);
   await page.goto("/studio");
   await expect(page.locator("#status-visible")).toHaveText("Saved, rev 0");
+  await page.locator("#channel-field-button").click();
 
   const addInput = page.locator("[data-channel-new]");
   await addInput.focus();
@@ -20,6 +21,7 @@ test("renews only the channel editor when a channel input changes on tab", async
   await seedStudioSession(page);
   await page.goto("/studio");
   await expect(page.locator("#status-visible")).toHaveText("Saved, rev 0");
+  await page.locator("#channel-field-button").click();
 
   const channelInput = page.locator("[data-channel-value]").first();
   await channelInput.fill("renamed");
@@ -34,6 +36,7 @@ test("removing a channel refreshes the list before a later reorder", async ({ pa
   const { token, login } = await seedStudioSession(page);
   await page.goto("/studio");
   await expect(page.locator("#status-visible")).toHaveText("Saved, rev 0");
+  await page.locator("#channel-field-button").click();
 
   const savedChannels = async (): Promise<string[]> => {
     const response = await page.request.get("/api/overlay/config", {

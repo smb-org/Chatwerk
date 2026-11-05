@@ -196,7 +196,7 @@ async function ensureDefaultOverlay(db: D1Database, userId: string, login: strin
       SELECT ?, ?, ?, 'Main', ?
       WHERE NOT EXISTS (SELECT 1 FROM overlays WHERE owner_id = ?)
     `).bind(overlayId, userId, token, login, userId),
-    db.prepare("UPDATE overlays SET channel = ? WHERE owner_id = ? AND name = 'Main' AND channel = ''")
+    db.prepare("UPDATE overlays SET channel = ? WHERE owner_id = ? AND channel = ''")
       .bind(login, userId),
   ]);
 }

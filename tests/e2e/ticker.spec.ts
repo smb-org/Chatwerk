@@ -24,6 +24,7 @@ test("ticker flood enters and moves through a 400 by 600 browser source", async 
   });
   const frame = page.frameLocator("#ticker-preview");
   await expect(frame.locator("#chat")).toBeVisible();
+  await expect(frame.locator(".chat-empty")).toHaveText("No channel set. Open Studio to add one.");
   await page.evaluate(() => {
     const preview = document.querySelector<HTMLIFrameElement>("#ticker-preview")!.contentWindow!;
     preview.postMessage({

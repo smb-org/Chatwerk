@@ -32,7 +32,8 @@ test("loads an existing Main overlay through / with defaults at revision zero", 
   await expect(page).toHaveURL(`${e2eOrigin}/studio`);
   await expect(page.locator("#status-visible")).toHaveText("Saved, rev 0");
   await expect(page.locator("#overlay-url")).toHaveValue(`${e2eOrigin}/overlay#token=${token}`);
-  await expect(page.locator('[data-theme-field="channels"] [data-channel-value]')).toHaveValue(login);
+  await page.locator("#channel-field-button").click();
+  await expect(page.locator("#channel-popover [data-channel-value]")).toHaveValue(login);
 
   const response = await page.request.get(`${e2eOrigin}/api/overlay/config`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -57,7 +58,9 @@ test("renders current theme controls, hides empty groups, and links Themes", asy
   await expect(messages.locator('[data-theme-field="emoteScale"]')).toBeVisible();
   await expect(messages.getByRole("checkbox", { name: "Show badges" })).toBeChecked();
   await expect(messages.getByRole("checkbox", { name: "Show pronouns" })).not.toBeChecked();
-  await expect(page.locator('[data-theme-field="channels"] [data-channel-value]')).toHaveValue(login);
+  await expect(page.locator('[data-group="Channels"]')).toHaveCount(0);
+  await page.locator("#channel-field-button").click();
+  await expect(page.locator("#channel-popover [data-channel-value]")).toHaveValue(login);
   await expect(page.locator('[data-group="Filters"]')).toBeVisible();
   await expect(page.locator('[data-theme-field="hideNumbers"]')).toBeVisible();
   await expect(page.locator('[data-group="Advanced"]')).toHaveCount(0);
@@ -230,7 +233,7 @@ test("captures required visual review screens", async ({ page }) => {
   await page.screenshot({ path: ".tmp/shots/login.png", fullPage: true });
   const { token } = await seedStudioSession(page);
   await page.goto("/studio");
-  await expect(page.getByText("Sample chat")).toBeVisible();
+  await expect(page.locator("#preview-mode-sample")).toHaveText("Sample");
   await page.screenshot({ path: ".tmp/shots/studio-first-run.png", fullPage: true });
   await setRange(page, "fontSize", 26);
   await expect(page.locator("#status-visible")).toContainText(/Saved, rev/u, { timeout: 5_000 });

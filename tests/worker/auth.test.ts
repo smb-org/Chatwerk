@@ -202,6 +202,21 @@ describe("Twitch login and session cookie", () => {
     expect(after.results).toEqual(before.results);
   });
 
+  it("fills an empty channel on a renamed Main overlay at login", async () => {
+    const userId = `auth-renamed-empty-${crypto.randomUUID()}`;
+    const login = `viewer_${crypto.randomUUID().slice(0, 8)}`;
+    await completeLogin(userId, login);
+    await env.DB.prepare("UPDATE overlays SET name = 'Renamed', channel = '' WHERE owner_id = ? AND name = 'Main'")
+      .bind(userId).run();
+
+    const { response } = await completeLogin(userId, login);
+    const channel = await env.DB.prepare("SELECT channel FROM overlays WHERE owner_id = ?")
+      .bind(userId).first<string>("channel");
+
+    expect(response?.status).toBe(302);
+    expect(channel).toBe(login);
+  });
+
   it("accepts a session minted with the shared worker test helper", async () => {
     const cookie = await mintSessionCookie(sessionKey, "test-owner", 2_000_000_000);
     expect(await verifySessionCookie(cookie.slice("session=".length), sessionKey, 1_900_000_000)).toEqual({

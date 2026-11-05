@@ -55,6 +55,7 @@ test("alternating Shared Chat source rooms do not churn channel emote provider s
   });
   const frame = page.frameLocator("#shared-chat-preview");
   await expect(frame.locator("#chat")).toBeVisible();
+  await expect(frame.locator(".chat-empty")).toHaveText("No channel set. Open Studio to add one.");
   await page.evaluate(() => {
     const preview = document.querySelector<HTMLIFrameElement>("#shared-chat-preview")!.contentWindow!;
     preview.postMessage({ type: "chatwerk:studio-theme", theme: { channels: ["main", "second"] } }, "*");
