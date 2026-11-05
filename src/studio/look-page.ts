@@ -2,6 +2,7 @@ import "./studio.css";
 import { THEME_FIELDS, getShareableThemeKeys, validateShareableTheme, validateTheme, isValidColor, type ThemeConfig, type ThemeFieldName } from "../shared/theme";
 import { currentLanguage, translate, type Language, type TranslationKey } from "../shared/i18n";
 import { applyTranslations } from "./i18n-dom";
+import { PUBLIC_PREVIEW_SOURCE_SIZE, calculatePreviewScale } from "./preview-sizing";
 
 interface ParentLook {
   removed: boolean;
@@ -331,18 +332,20 @@ function wirePreview(): void {
 }
 
 function updatePreviewScale(): void {
-  const availableWidth = Math.max(0, stage.clientWidth - 32);
-  const availableHeight = Math.max(0, stage.clientHeight - 32);
-  const scale = Math.max(0, Math.min(availableWidth / 1920, availableHeight / 1080));
-  (previewWrap as HTMLElement).style.width = `${1920 * scale}px`;
-  (previewWrap as HTMLElement).style.height = `${1080 * scale}px`;
+  const scale = calculatePreviewScale(PUBLIC_PREVIEW_SOURCE_SIZE, stage.clientWidth, stage.clientHeight, 16);
+  preview.width = String(PUBLIC_PREVIEW_SOURCE_SIZE.width);
+  preview.height = String(PUBLIC_PREVIEW_SOURCE_SIZE.height);
+  preview.style.width = `${PUBLIC_PREVIEW_SOURCE_SIZE.width}px`;
+  preview.style.height = `${PUBLIC_PREVIEW_SOURCE_SIZE.height}px`;
+  (previewWrap as HTMLElement).style.width = `${PUBLIC_PREVIEW_SOURCE_SIZE.width * scale}px`;
+  (previewWrap as HTMLElement).style.height = `${PUBLIC_PREVIEW_SOURCE_SIZE.height * scale}px`;
   preview.style.transform = `scale(${scale})`;
   previewStatus.textContent = translate(language, "previewScale", { percent: Math.round(scale * 100) });
 }
 
 function updatePreviewStatus(): void {
   previewStatus.textContent = previewFailed ? translate(language, "previewUnavailable")
-    : translate(language, "previewScale", { percent: Math.round((preview.clientWidth / 1920) * 100) });
+    : translate(language, "previewScale", { percent: Math.round((preview.clientWidth / PUBLIC_PREVIEW_SOURCE_SIZE.width) * 100) });
 }
 
 function postPreviewTheme(theme: unknown): void {
