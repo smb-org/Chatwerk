@@ -43,6 +43,21 @@ describe("overlay config API", () => {
     expect(body.overlays.some(({ id }) => id === other.overlayId)).toBe(false);
   });
 
+  it("creates a new overlay with the owner's current Twitch login as its channel", async () => {
+    const owner = await seedOverlay(env.DB);
+    const login = await env.DB.prepare("SELECT login FROM users WHERE id = ?")
+      .bind(owner.ownerId).first<string>("login");
+    const response = await handleApiRequest(await ownerRequest(owner.ownerId, "https://chatwerk.test/api/overlays", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Second" }),
+    }), apiEnv());
+    const created = await response?.json() as { channel?: string };
+
+    expect(response?.status).toBe(201);
+    expect(created.channel).toBe(login);
+  });
+
   it("rejects malformed bearer tokens before resolving an overlay", async () => {
     const response = await handleApiRequest(new Request("https://chatwerk.test/api/overlay/config", {
       headers: { Authorization: "Bearer short", Origin: "null" },

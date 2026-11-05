@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { DEFAULTS } from "../../src/shared/theme";
-import { addStudioLook, addStudioOverlay, e2eOrigin, seedStudioSession, setRange, type StudioIdentity } from "./studio-session";
+import { addStudioLook, addStudioOverlay, e2eOrigin, expectActiveOverlay, seedStudioSession, setRange, type StudioIdentity } from "./studio-session";
 
 const validLook = { id: "11111111-1111-4111-8111-111111111111", slug: "sample", name: "Sample", author: "Alice", values: DEFAULTS, parent: null };
 
@@ -110,7 +110,7 @@ test("public look shows the active overlay after login", async ({ page }) => {
   await page.route("**/api/looks/sample", (route) => route.fulfill({ json: validLook }));
   await page.goto("/t/sample");
   await expect(page.locator("#active-overlay-name")).toBeVisible();
-  await expect(page.locator("#active-overlay-name")).toHaveText("Active overlay: Main");
+  await expectActiveOverlay(page, "Main");
 });
 
 test("publish succeeds when the clipboard is blocked", async ({ page }) => {
@@ -181,12 +181,12 @@ test("active overlay cannot be deleted while its save is in flight", async ({ pa
     await expect(dialog.locator(".manage-status")).toHaveText("Wait for the current changes to save before switching overlays.");
     const response = await page.request.get("/api/overlays");
     expect((await response.json() as { overlays: unknown[] }).overlays).toHaveLength(2);
-    await expect(page.locator("#active-overlay-name")).toHaveText("Active overlay: Main");
+    await expectActiveOverlay(page, "Main");
     releaseSave();
     await expect(page.locator("#status-visible")).toHaveText("Saved, rev 1");
     await dialog.getByRole("button", { name: "Delete Main" }).click();
     await expect(dialog).toBeHidden();
-    await expect(page.locator("#active-overlay-name")).toHaveText("Active overlay: Survivor");
+    await expectActiveOverlay(page, "Survivor");
   } finally {
     releaseSave();
   }
@@ -230,7 +230,7 @@ test("active overlay editing stays locked if its delete dialog is dismissed", as
     expect(await slider.inputValue()).toBe(initialValue);
     expect(saves).toBe(0);
     releaseDelete();
-    await expect(page.locator("#active-overlay-name")).toHaveText("Active overlay: Survivor");
+    await expectActiveOverlay(page, "Survivor");
     await expect(page.locator("#theme-controls")).not.toHaveAttribute("inert", "");
   } finally {
     releaseDelete();
@@ -302,11 +302,11 @@ test("active overlay cannot be deleted while undo is in flight", async ({ page }
     await dialog.getByRole("button", { name: "Delete Main" }).click();
     await expect(dialog.locator(".manage-status")).toHaveText("Wait for Undo to finish before deleting this overlay.");
     expect(deleteRequests).toBe(0);
-    await expect(page.locator("#active-overlay-name")).toHaveText("Active overlay: Main");
+    await expectActiveOverlay(page, "Main");
     releaseUndo();
     await expect(page.locator("#theme-fontSize")).toHaveValue(String(DEFAULTS.fontSize));
     await expect(page.locator("#status-visible")).toHaveText("Previous look restored.");
-    await expect(page.locator("#active-overlay-name")).toHaveText("Active overlay: Main");
+    await expectActiveOverlay(page, "Main");
   } finally {
     releaseUndo();
   }
@@ -333,7 +333,7 @@ for (const outcome of ["success", "error"] as const) test(`late undo ${outcome} 
     await page.locator("#account-menu summary").click();
     await page.getByRole("button", { name: "Overlays" }).click();
     await page.locator(".manage-row").filter({ hasText: "Survivor" }).getByRole("button", { name: "Select" }).click();
-    await expect(page.locator("#active-overlay-name")).toHaveText("Active overlay: Survivor");
+    await expectActiveOverlay(page, "Survivor");
     await expect(page.locator("#theme-fontSize")).toHaveValue(String(DEFAULTS.fontSize));
     const received = page.waitForResponse((response) => response.url().endsWith(`/api/overlays/${identity.overlayId}/undo`));
     releaseUndo();

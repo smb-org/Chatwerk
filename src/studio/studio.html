@@ -14,7 +14,16 @@
           <a href="/studio" aria-current="page" data-i18n="studioTitle">Studio</a>
           <a href="/themes" data-i18n="themes"></a>
         </nav>
-        <span class="active-overlay-label" id="active-overlay-name"></span>
+        <span class="active-overlay-label" id="active-overlay-name">
+          <span id="active-overlay-text"></span>
+          <select id="active-overlay-select" data-i18n-aria-label="activeOverlayLabel" hidden></select>
+        </span>
+        <div class="channel-header-field" id="channel-header-field">
+          <button class="channel-field-button" id="channel-field-button" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="channel-popover" data-i18n-aria-label="channelFieldLabel">
+            <span id="channel-field-text"></span><span id="channel-field-count" hidden></span>
+          </button>
+          <div class="channel-popover" id="channel-popover" role="dialog" data-i18n-aria-label="channelFieldLabel" hidden></div>
+        </div>
         <div class="header-spacer"></div>
         <div class="link-copy">
           <label class="visually-hidden" for="overlay-url" data-i18n="overlayLink"></label>
@@ -75,7 +84,11 @@
             </div>
           </div>
           <div class="preview-window" id="preview-window" data-background="checker">
-            <span class="sample-label" data-i18n="sampleChat"></span>
+            <div class="sample-label preview-mode-chip" role="group" data-i18n-aria-label="previewChatMode">
+              <button id="preview-mode-sample" type="button" aria-pressed="true" data-i18n="sampleMode"></button>
+              <button id="preview-mode-live" type="button" aria-pressed="false" data-i18n="liveMode"></button>
+            </div>
+            <p class="live-no-channel-message" id="live-no-channel-message" data-i18n="noChannel" hidden></p>
             <div class="preview-frame-wrap" id="preview-frame-wrap">
               <iframe id="studio-preview" width="400" height="600" data-i18n-title="sampleChat" sandbox="allow-scripts" src="/overlay#client=studio" tabindex="-1"></iframe>
             </div>
@@ -120,7 +133,6 @@
             <button class="scenario-button" id="rehearse-flood" type="button" aria-pressed="false" data-i18n="messageFlood"></button>
             <button class="scenario-button" id="rehearse-raid" type="button" aria-pressed="false" data-i18n="raid"></button>
           </div>
-          <label class="live-toggle"><input id="live-chat" type="checkbox" /><span data-i18n="liveChat"></span></label>
           <span class="footer-spacer"></span>
           <span class="value-readout" id="test-output-hint"></span>
           <div class="footer-actions">

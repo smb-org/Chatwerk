@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { DEFAULTS } from "../../src/shared/theme";
-import { addStudioLook, clearStudioLooks, e2eOrigin, seedStudioLooks, seedStudioSession, setRange } from "./studio-session";
+import { addStudioLook, clearStudioLooks, e2eOrigin, expectActiveOverlay, seedStudioLooks, seedStudioSession, setRange } from "./studio-session";
 
 test.beforeEach(() => clearStudioLooks());
 
@@ -78,7 +78,7 @@ test("creates, renames, selects, and deletes overlays in the account dialog", as
   await dialog.locator("#new-overlay-name").fill("Vertical");
   await dialog.getByRole("button", { name: "Create overlay" }).click();
   await expect(dialog).toBeHidden();
-  await expect(page.locator("#active-overlay-name")).toHaveText("Active overlay: Vertical");
+  await expectActiveOverlay(page, "Vertical");
 
   if (!await page.getByRole("button", { name: "Overlays" }).isVisible()) {
     await page.locator("#account-menu summary").click();
@@ -109,7 +109,7 @@ test("creates, renames, selects, and deletes overlays in the account dialog", as
     .getByRole("button", { name: "Delete Portrait" }).click();
   void deleted;
   await expect(dialog).toBeHidden();
-  await expect(page.locator("#active-overlay-name")).toHaveText("Active overlay: Main");
+  await expectActiveOverlay(page, "Main");
   const cleared = await page.request.get(`${e2eOrigin}/api/overlay/config`, {
     headers: { Authorization: `Bearer ${portrait.linkToken}` },
   });
@@ -303,6 +303,7 @@ test("undo restores the saved theme, custom CSS enabled state, and previous line
     customCssEnabled: true,
   });
   expect(restored.themeFrom).toBeNull();
+  await page.locator("#channel-field-button").click();
   expect(await page.locator("[data-channel-value]").evaluateAll((inputs) =>
     inputs.map((input) => (input as HTMLInputElement).value))).toEqual(privateConfig.channels);
   await expect(page.locator('textarea[data-list-field="filterWords"]')).toHaveValue("undo-spoiler");

@@ -99,10 +99,21 @@ const publishOpen = $("#publish-open") as HTMLAnchorElement;
 const publishLimit = $("#publish-limit") as HTMLElement;
 const undoButton = $("#undo-look") as HTMLButtonElement;
 const activeOverlayName = $("#active-overlay-name") as HTMLElement;
+const activeOverlayText = $("#active-overlay-text") as HTMLElement;
+const activeOverlaySelect = $("#active-overlay-select") as HTMLSelectElement;
+const channelHeaderField = $("#channel-header-field") as HTMLElement;
+const channelFieldButton = $("#channel-field-button") as HTMLButtonElement;
+const channelFieldText = $("#channel-field-text") as HTMLElement;
+const channelFieldCount = $("#channel-field-count") as HTMLElement;
+const channelPopover = $("#channel-popover") as HTMLElement;
+const liveNoChannelMessage = $("#live-no-channel-message") as HTMLElement;
+const previewModeSample = $("#preview-mode-sample") as HTMLButtonElement;
+const previewModeLive = $("#preview-mode-live") as HTMLButtonElement;
 
 let language: Language = currentLanguage();
 let overlay: OwnedOverlay | undefined;
 let ownedOverlays: OwnedOverlay[] = [];
+let livePreviewEnabled = false;
 let theme: ThemeConfig = DEFAULTS;
 let previewSourceSize: PreviewSourceSize = DEFAULT_PREVIEW_SOURCE_SIZE;
 let revision = 0;
@@ -140,6 +151,7 @@ let undoTimer: ReturnType<typeof setTimeout> | undefined;
 let publishLimitReached = false;
 let currentPlatform = "obs";
 let lastAnnouncedCount: number | undefined;
+let overlaySelectionVersion = 0;
 
 applyPageLanguage();
 renderThemeControls();
@@ -168,11 +180,16 @@ async function initialize(): Promise<void> {
     loadPreviewSourceSize(overlay.id);
     try { localStorage.setItem("chatwerk-overlay-id", overlay.id); } catch { /* The server's first overlay remains selected for this page. */ }
     channel = overlay.channel;
+    loadPreviewMode(overlay.id);
     updateActiveOverlayLabel();
+    updateChannelHeader();
     const link = `${window.location.origin}/overlay#token=${overlay.linkToken}`;
     $("#overlay-url").setAttribute("value", link);
     $("#overlay-url").setAttribute("aria-label", translate(language, "overlayLink"));
-    await loadConfig();
+    const selectedOverlayId = overlay.id;
+    const selectionVersion = overlaySelectionVersion;
+    await loadConfig(selectedOverlayId, selectionVersion);
+    if (overlay?.id !== selectedOverlayId || overlaySelectionVersion !== selectionVersion) return;
     if (signedOut) {
       window.location.assign("/login?next=%2Fstudio");
       return;
@@ -201,13 +218,17 @@ async function initialize(): Promise<void> {
   }
 }
 
-async function loadConfig(): Promise<void> {
+async function loadConfig(expectedOverlayId?: string, expectedSelectionVersion = overlaySelectionVersion): Promise<void> {
   if (!overlay) return;
+  const requestedOverlay = overlay;
+  if (expectedOverlayId && requestedOverlay.id !== expectedOverlayId) return;
+  const isCurrentRequest = (): boolean => overlay?.id === requestedOverlay.id && overlaySelectionVersion === expectedSelectionVersion;
   const response = await fetch("/api/overlay/config", {
-    headers: { Authorization: `Bearer ${overlay.linkToken}` },
+    headers: { Authorization: `Bearer ${requestedOverlay.linkToken}` },
     credentials: "same-origin",
     cache: "no-store",
   });
+  if (!isCurrentRequest()) return;
   if (response.status === 401) {
     signedOut = true;
     updateWarning();
@@ -215,10 +236,12 @@ async function loadConfig(): Promise<void> {
   }
   if (!response.ok) throw new Error("config-read");
   const snapshot = await response.json() as ConfigResponse;
+  if (!isCurrentRequest()) return;
   theme = hydrateConfig(snapshot.config, snapshot.channel ?? channel);
   revision = snapshot.revision;
   renderThemeControls();
   applyPreviewTheme();
+  updateChannelHeader();
   updateWarning();
 }
 
@@ -299,9 +322,10 @@ function updateTestButton(): void {
 function renderThemeControls(): void {
   controlsRoot.replaceChildren();
   for (const group of THEME_UI_GROUPS) {
+    if (group === "Channels") continue;
     const fields = Object.entries(THEME_FIELDS).filter(([, definition]) => definition.ui.group === group)
       .sort((left, right) => left[1].ui.order - right[1].ui.order);
-    if (fields.length === 0 && group !== "Channels") continue;
+    if (fields.length === 0) continue;
 
     const groupRoot = document.createElement("fieldset");
     groupRoot.className = "settings-group";
@@ -314,17 +338,8 @@ function renderThemeControls(): void {
       const definition = rawDefinition as ThemeFieldDefinition;
       groupRoot.appendChild(makeThemeControl(name, definition));
     }
-    if (fields.length === 0 && group === "Channels") groupRoot.appendChild(makeChannelReadout());
     controlsRoot.appendChild(groupRoot);
   }
-}
-
-function makeChannelReadout(): HTMLElement {
-  const readout = document.createElement("p");
-  readout.className = "group-readout";
-  const value = channel ? `#${channel.replace(/^#/u, "")}` : "—";
-  readout.textContent = translate(language, "channelValue", { channel: value });
-  return readout;
 }
 
 function makeThemeControl(name: ThemeFieldName, definition: ThemeFieldDefinition): HTMLElement {
@@ -675,7 +690,24 @@ function saveChannels(channels: string[]): boolean {
   const valid = setThemeField("channels", channels);
   if (!valid) return false;
   errorArea.textContent = "";
+  updateChannelHeader();
   return true;
+}
+
+function updateChannelHeader(): void {
+  const channels = currentChannels();
+  const first = channels[0];
+  channelFieldButton.dataset.empty = String(!first);
+  channelFieldText.textContent = first
+    ? translate(language, "headerChannel", { channel: first })
+    : translate(language, "noChannelSet");
+  const remaining = Math.max(0, channels.length - 1);
+  channelFieldCount.hidden = remaining === 0;
+  channelFieldCount.textContent = remaining > 0 ? translate(language, "moreChannels", { count: remaining }) : "";
+  const accessibleValue = first ? translate(language, "headerChannel", { channel: first }) : translate(language, "noChannelSet");
+  const accessibleCount = remaining > 0 ? `, ${translate(language, "moreChannels", { count: remaining })}` : "";
+  channelFieldButton.setAttribute("aria-label", `${accessibleValue}${accessibleCount}. ${translate(language, "channelFieldLabel")}`);
+  liveNoChannelMessage.hidden = !livePreviewEnabled || channels.length > 0;
 }
 
 function fieldOptions(name: ThemeFieldName): string[] {
@@ -848,6 +880,7 @@ function syncControls(previousChannels: string[]): void {
     if (list && Array.isArray(value)) list.value = value.join("\n");
   }
   if (!sameChannels(previousChannels, theme.channels)) refreshChannelsEditor();
+  updateChannelHeader();
 }
 
 function refreshChannelsEditor(): void {
@@ -882,9 +915,10 @@ function sameChannels(left: string[], right: string[]): boolean {
 
 function applyPreviewTheme(): void {
   preview.contentWindow?.postMessage({ type: "chatwerk:studio-theme", theme }, "*");
-  if (document.querySelector<HTMLInputElement>("#live-chat")?.checked) {
+  if (livePreviewEnabled) {
     postPreviewMessage({ type: "chatwerk:studio-live", enabled: true, channels: currentChannels() });
   }
+  updateChannelHeader();
 }
 
 function postPreviewMessage(message: Record<string, unknown>): void {
@@ -937,6 +971,9 @@ function applyPageLanguage(): void {
   if (chipCount !== undefined) connectionChip.textContent = translate(language, "connectionCount", { count: chipCount });
   else connectionChip.textContent = translate(language, "connectionUnknown");
   updateHeaderResponsive();
+  updateActiveOverlayLabel();
+  updateChannelHeader();
+  updatePreviewModeUi();
   if (initializationRetrying) {
     setStatus("couldNotLoadRetrying");
     errorArea.textContent = translate(language, "couldNotLoadRetrying");
@@ -947,6 +984,7 @@ function applyPageLanguage(): void {
   updateTestButton();
   updateSourceSizeHint();
   renderThemeControls();
+  if (channelPopover.querySelector('[data-theme-field="channels"]')) refreshChannelsEditor();
   updatePreviewScale();
 }
 
@@ -961,15 +999,100 @@ function updateHeaderResponsive(): void {
   if (button) button.textContent = translate(language, "copy");
 }
 
+function openChannelPopover(): void {
+  if (!channelPopover.querySelector('[data-theme-field="channels"]')) {
+    channelPopover.replaceChildren(makeChannelsEditor("channels", translate(language, "fieldChannels")));
+  }
+  channelPopover.hidden = false;
+  channelFieldButton.setAttribute("aria-expanded", "true");
+  positionChannelPopover();
+  channelPopover.querySelector<HTMLInputElement>("[data-channel-new]")?.focus();
+}
+
+function positionChannelPopover(): void {
+  if (window.innerWidth > 1023) {
+    channelPopover.style.removeProperty("position");
+    channelPopover.style.removeProperty("top");
+    channelPopover.style.removeProperty("left");
+    channelPopover.style.removeProperty("right");
+    channelPopover.style.removeProperty("width");
+    return;
+  }
+  const field = channelFieldButton.getBoundingClientRect();
+  const width = Math.min(320, window.innerWidth - 24);
+  const left = Math.max(12, Math.min(field.left, window.innerWidth - width - 12));
+  channelPopover.style.position = "fixed";
+  channelPopover.style.top = `${field.bottom + 8}px`;
+  channelPopover.style.left = `${left}px`;
+  channelPopover.style.right = "auto";
+  channelPopover.style.width = `${width}px`;
+}
+
+function closeChannelPopover(returnFocus: boolean): void {
+  channelPopover.hidden = true;
+  channelFieldButton.setAttribute("aria-expanded", "false");
+  if (returnFocus) channelFieldButton.focus();
+}
+
+function loadPreviewMode(overlayId: string): void {
+  livePreviewEnabled = localStorageValue(`chatwerk-live-mode:${overlayId}`) === "1";
+  updatePreviewModeUi();
+}
+
+function setPreviewMode(enabled: boolean): void {
+  if (livePreviewEnabled === enabled) return;
+  livePreviewEnabled = enabled;
+  updatePreviewModeUi();
+  if (overlay) {
+    try { localStorage.setItem(`chatwerk-live-mode:${overlay.id}`, enabled ? "1" : "0"); }
+    catch { /* Live mode remains selected for this page. */ }
+  }
+  postPreviewMessage({ type: "chatwerk:studio-live", enabled, channels: currentChannels(), channel });
+  if (!enabled) $("#rehearse-quiet").setAttribute("aria-pressed", "true");
+}
+
+function updatePreviewModeUi(): void {
+  previewModeSample.setAttribute("aria-pressed", String(!livePreviewEnabled));
+  previewModeLive.setAttribute("aria-pressed", String(livePreviewEnabled));
+  document.querySelectorAll<HTMLButtonElement>(".scenario-button").forEach((button) => {
+    button.disabled = livePreviewEnabled;
+  });
+  liveNoChannelMessage.hidden = !livePreviewEnabled || currentChannels().length > 0;
+}
+
 function wireStaticControls(): void {
   preview.addEventListener("load", () => {
     applyPreviewTheme();
-    postPreviewMessage({ type: "chatwerk:studio-scenario", scenario: "quiet" });
+    if (!livePreviewEnabled) postPreviewMessage({ type: "chatwerk:studio-scenario", scenario: "quiet" });
     updatePreviewScale();
   });
   const resizeObserver = new ResizeObserver(updatePreviewScale);
   resizeObserver.observe(previewWindow);
-  window.addEventListener("resize", updateHeaderResponsive);
+  window.addEventListener("resize", () => {
+    updateHeaderResponsive();
+    if (!channelPopover.hidden) positionChannelPopover();
+  });
+
+  channelFieldButton.addEventListener("click", () => {
+    if (channelPopover.hidden) openChannelPopover();
+    else closeChannelPopover(true);
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (channelPopover.hidden || !(event.target instanceof Node) || channelHeaderField.contains(event.target)) return;
+    closeChannelPopover(false);
+    window.setTimeout(() => {
+      if (channelPopover.hidden) channelFieldButton.focus();
+    }, 0);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || channelPopover.hidden) return;
+    event.preventDefault();
+    closeChannelPopover(true);
+  });
+  activeOverlaySelect.addEventListener("change", () => {
+    const next = ownedOverlays.find((item) => item.id === activeOverlaySelect.value);
+    if (next) void selectOverlay(next).finally(updateActiveOverlayLabel);
+  });
 
   previewSizePreset.addEventListener("change", () => {
     previewSizeError.hidden = true;
@@ -1013,7 +1136,7 @@ function wireStaticControls(): void {
   });
   document.querySelectorAll<HTMLButtonElement>(".scenario-button").forEach((button) => {
     button.addEventListener("click", () => {
-      if ((document.querySelector<HTMLInputElement>("#live-chat"))?.checked) return;
+      if (livePreviewEnabled) return;
       const scenario = button.id === "rehearse-flood" ? "flood" : button.id === "rehearse-raid" ? "raid" : "quiet";
       document.querySelectorAll<HTMLButtonElement>(".scenario-button").forEach((item) => {
         item.setAttribute("aria-pressed", String(item === button));
@@ -1022,13 +1145,8 @@ function wireStaticControls(): void {
       catch { showToast("scenarioFailed", true); }
     });
   });
-  $("#live-chat").addEventListener("change", (event) => {
-    const enabled = (event.currentTarget as HTMLInputElement).checked;
-    postPreviewMessage({ type: "chatwerk:studio-live", enabled, channels: currentChannels(), channel });
-    document.querySelectorAll<HTMLButtonElement>(".scenario-button").forEach((button) => { button.disabled = enabled; });
-    $(".sample-label").textContent = translate(language, enabled ? "liveChat" : "sampleChat");
-    if (!enabled) $("#rehearse-quiet").setAttribute("aria-pressed", "true");
-  });
+  previewModeSample.addEventListener("click", () => setPreviewMode(false));
+  previewModeLive.addEventListener("click", () => setPreviewMode(true));
   $("#test-in-obs").addEventListener("click", () => void runTestLine());
   $("#toast-close").addEventListener("click", closeToast);
   $("#preview-background-group").addEventListener("change", (event) => {
@@ -1121,7 +1239,28 @@ function finishFirstRun(): void {
 }
 
 function updateActiveOverlayLabel(): void {
-  activeOverlayName.textContent = overlay ? translate(language, "activeOverlayName", { name: overlay.name }) : "";
+  activeOverlaySelect.replaceChildren();
+  activeOverlayName.hidden = !overlay;
+  if (!overlay) {
+    activeOverlayText.textContent = "";
+    activeOverlaySelect.hidden = true;
+    return;
+  }
+  if (ownedOverlays.length > 1) {
+    activeOverlayText.textContent = `${translate(language, "activeOverlayPrefix")} `;
+    for (const item of ownedOverlays) {
+      const option = document.createElement("option");
+      option.value = item.id;
+      option.textContent = item.name;
+      option.selected = item.id === overlay.id;
+      activeOverlaySelect.appendChild(option);
+    }
+    activeOverlaySelect.hidden = false;
+  } else {
+    activeOverlayText.textContent = translate(language, "activeOverlayName", { name: overlay.name });
+    activeOverlaySelect.hidden = true;
+  }
+  updateChannelHeader();
 }
 
 function processStudioQuery(): void {
@@ -1488,8 +1627,8 @@ async function renameManagedOverlay(item: OwnedOverlay, rawName: string): Promis
   ownedOverlays = ownedOverlays.map((entry) => entry.id === updated.id ? updated : entry);
   if (overlay?.id === updated.id) {
     overlay = updated;
-    updateActiveOverlayLabel();
   }
+  updateActiveOverlayLabel();
   renderOverlayManager("overlayRenamed");
 }
 
@@ -1530,6 +1669,7 @@ async function deleteManagedOverlay(item: OwnedOverlay): Promise<void> {
       return;
     }
     ownedOverlays = ownedOverlays.filter((entry) => entry.id !== item.id);
+    updateActiveOverlayLabel();
     if (overlay?.id === item.id) {
       await selectOverlay(ownedOverlays[0]!);
       return;
@@ -1645,8 +1785,14 @@ async function selectOverlay(next: OwnedOverlay): Promise<void> {
   }
   if (hasPendingSave()) {
     showToast("finishSavingBeforeSwitch", true);
+    updateActiveOverlayLabel();
     return;
   }
+
+  const selectionVersion = ++overlaySelectionVersion;
+
+  if (!channelPopover.hidden) closeChannelPopover(false);
+  channelPopover.replaceChildren();
 
   if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
   reconnectTimer = undefined;
@@ -1657,13 +1803,18 @@ async function selectOverlay(next: OwnedOverlay): Promise<void> {
   connectedOutputs = 0;
   lastAnnouncedCount = undefined;
   updateClientCount();
+  const wasLive = livePreviewEnabled;
   overlay = next;
   loadPreviewSourceSize(next.id);
   channel = next.channel;
   clearUndoOffer();
-  updateActiveOverlayLabel();
   revision = 0;
   theme = DEFAULTS;
+  loadPreviewMode(next.id);
+  if (wasLive) {
+    postPreviewMessage({ type: "chatwerk:studio-live", enabled: false, channels: [], channel: "" });
+  }
+  updateActiveOverlayLabel();
   if (testTimeout !== undefined) clearTimeout(testTimeout);
   testTimeout = undefined;
   pendingTestId = undefined;
@@ -1676,7 +1827,8 @@ async function selectOverlay(next: OwnedOverlay): Promise<void> {
   errorArea.textContent = "";
   updateTestButton();
   try {
-    await loadConfig();
+    await loadConfig(next.id, selectionVersion);
+    if (selectionVersion !== overlaySelectionVersion || overlay?.id !== next.id) return;
     if (signedOut) {
       window.location.assign("/login?next=%2Fstudio");
       return;
@@ -1686,6 +1838,7 @@ async function selectOverlay(next: OwnedOverlay): Promise<void> {
     updateTestButton();
     closeDialog();
   } catch {
+    if (selectionVersion !== overlaySelectionVersion || overlay?.id !== next.id) return;
     setStatus("saveFailed");
     errorArea.textContent = translate(language, "overlayLoadFailed");
   }

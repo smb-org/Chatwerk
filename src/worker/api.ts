@@ -269,11 +269,13 @@ async function createOverlay(request: Request, env: ApiEnvironment): Promise<Res
   const token = randomToken(32);
   const overlay = await env.DB.prepare(`
     INSERT INTO overlays (id, owner_id, link_token, name, channel)
-    SELECT ?, ?, ?, ?, ''
-    WHERE (SELECT COUNT(*) FROM overlays WHERE owner_id = ?) < ?
+    SELECT ?, ?, ?, ?, users.login
+    FROM users
+    WHERE users.id = ?
+      AND (SELECT COUNT(*) FROM overlays WHERE owner_id = ?) < ?
       AND NOT EXISTS (SELECT 1 FROM overlays WHERE owner_id = ? AND lower(name) = lower(?))
     RETURNING id, owner_id, link_token, name, channel, link_generation
-  `).bind(id, session.userId, token, name, session.userId, MAX_OVERLAYS, session.userId, name).first<OverlayRecord>();
+  `).bind(id, session.userId, token, name, session.userId, session.userId, MAX_OVERLAYS, session.userId, name).first<OverlayRecord>();
   if (overlay) return Response.json(publicOverlayForOwner(overlay), { status: 201, headers: { "Cache-Control": "no-store" } });
   if (await overlayNameExists(env.DB, session.userId, name)) return Response.json({ error: "overlay-name" }, { status: 409 });
   return Response.json({ error: "overlay-limit", limit: MAX_OVERLAYS }, { status: 409 });
