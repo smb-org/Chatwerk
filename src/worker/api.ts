@@ -3,14 +3,16 @@ import {
   countActiveLooks,
   getLookByName,
   getLookBySlug,
-  getOverlayById,
+  getOverlayAccess,
   getOverlayByToken,
   getOwnedLookById,
-  getOwnedOverlay,
   listActiveLooks,
+  listAccessibleOverlays,
+  listOverlayEditors,
   listOwnedLooks,
-  listOwnedOverlays,
+  getOverlayInviteExpiry,
   rotateOwnedOverlayLink,
+  type OverlayRole,
   type LookRecord,
   type OverlayRecord,
 } from "./db";
@@ -21,6 +23,8 @@ const SOCKET_PROTOCOL = "chatwerk-live";
 const MAX_JSON_BODY_BYTES = 64 * 1024;
 const MAX_LOOKS = 10;
 const MAX_OVERLAYS = 3;
+const MAX_EDITORS = 5;
+const INVITE_SECONDS = 48 * 60 * 60;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 export interface ApiEnvironment {
@@ -68,6 +72,9 @@ export async function handleApiRequest(request: Request, env: ApiEnvironment): P
   }
   if (url.pathname === "/api/overlays" && request.method === "POST") return createOverlay(request, env);
 
+  const acceptInviteRoute = /^\/api\/invites\/([A-Za-z0-9_-]{43})\/accept$/u.exec(url.pathname);
+  if (acceptInviteRoute && request.method === "POST") return acceptInvite(request, env, acceptInviteRoute[1]!);
+
   if (url.pathname === "/api/looks" && request.method === "GET") return listLooks(request, env);
   if (url.pathname === "/api/looks/mine" && request.method === "GET") return listMyLooks(request, env);
   if (url.pathname === "/api/looks" && request.method === "POST") return publishLook(request, env);
@@ -79,6 +86,16 @@ export async function handleApiRequest(request: Request, env: ApiEnvironment): P
     if (action === "copy" && request.method === "POST") return copyLook(request, env, slug!);
     if (action === "withdraw" && request.method === "POST") return withdrawLook(request, env, slug!);
     return Response.json({ error: "Method not allowed" }, { status: 405 });
+  }
+
+  const editorRoute = /^\/api\/overlays\/([0-9a-f-]{36})\/editors\/([A-Za-z0-9_-]{1,128})$/u.exec(url.pathname);
+  if (editorRoute && request.method === "DELETE") return removeEditor(request, env, editorRoute[1]!, editorRoute[2]!);
+
+  const inviteRoute = /^\/api\/overlays\/([0-9a-f-]{36})\/invite$/u.exec(url.pathname);
+  if (inviteRoute) {
+    if (request.method === "POST") return createInvite(request, env, inviteRoute[1]!);
+    if (request.method === "DELETE") return revokeInvite(request, env, inviteRoute[1]!);
+    return Response.json({ error: "Method not allowed" }, { status: 405, headers: { Allow: "POST, DELETE" } });
   }
 
   const overlayManagementRoute = /^\/api\/overlays\/([0-9a-f-]{36})(?:\/(undo))?$/u.exec(url.pathname);
@@ -102,8 +119,15 @@ export async function handleApiRequest(request: Request, env: ApiEnvironment): P
 async function listOverlays(request: Request, env: ApiEnvironment): Promise<Response> {
   const session = await authenticatedSession(request, env);
   if (session instanceof Response) return session;
-  const overlays = await listOwnedOverlays(env.DB, session.userId);
-  return Response.json({ overlays: overlays.map(publicOverlayForOwner) }, { headers: { "Cache-Control": "no-store" } });
+  const records = await listAccessibleOverlays(env.DB, session.userId);
+  const overlays = await Promise.all(records.map(async (record) => {
+    if (record.role === "owner") {
+      record.editors = await listOverlayEditors(env.DB, record.id);
+      record.invite_expires_at = await getOverlayInviteExpiry(env.DB, record.id);
+    }
+    return publicOverlay(record, record.role);
+  }));
+  return Response.json({ overlays }, { headers: { "Cache-Control": "no-store" } });
 }
 
 async function listLooks(request: Request, env: ApiEnvironment): Promise<Response> {
@@ -131,18 +155,19 @@ async function readLook(env: ApiEnvironment, slug: string): Promise<Response> {
 }
 
 async function publishLook(request: Request, env: ApiEnvironment): Promise<Response> {
-  const session = await authorizeWrite(request, env);
-  if (session instanceof Response) return session;
   const body = await readJson(request);
   if (body instanceof Response) return body;
+  const session = await authorizeWrite(request, env);
+  if (session instanceof Response) return session;
   if (Object.keys(body).some((key) => key !== "overlayId" && key !== "name") ||
     typeof body.overlayId !== "string" || !UUID_PATTERN.test(body.overlayId)) {
     return Response.json({ error: "invalid-publish-request" }, { status: 400 });
   }
   const name = validName(body.name);
   if (!name) return Response.json({ error: "invalid-name" }, { status: 400 });
-  const overlay = await getOwnedOverlay(env.DB, body.overlayId, session.userId);
-  if (!overlay) return Response.json({ error: "overlay-not-found" }, { status: 404 });
+  const access = await requireOverlay(request, env, body.overlayId, "editor", session);
+  if (access instanceof Response) return access;
+  const overlay = access.overlay;
   const nameKey = name.toLowerCase();
   if (await getLookByName(env.DB, session.userId, nameKey)) {
     return Response.json({ error: "duplicate-name" }, { status: 409 });
@@ -195,10 +220,10 @@ async function publishLook(request: Request, env: ApiEnvironment): Promise<Respo
 }
 
 async function copyLook(request: Request, env: ApiEnvironment, slug: string): Promise<Response> {
-  const session = await authorizeWrite(request, env);
-  if (session instanceof Response) return session;
   const body = await readJson(request);
   if (body instanceof Response) return body;
+  const session = await authorizeWrite(request, env);
+  if (session instanceof Response) return session;
   if (Object.keys(body).some((key) => key !== "overlayId") || typeof body.overlayId !== "string" || !UUID_PATTERN.test(body.overlayId)) {
     return Response.json({ error: "invalid-copy-request" }, { status: 400 });
   }
@@ -206,11 +231,11 @@ async function copyLook(request: Request, env: ApiEnvironment, slug: string): Pr
   if (idempotencyKey !== null && !UUID_PATTERN.test(idempotencyKey)) {
     return Response.json({ error: "invalid-copy-request" }, { status: 400 });
   }
+  const access = await requireOverlay(request, env, body.overlayId, "editor", session);
+  if (access instanceof Response) return access;
   const look = await getLookBySlug(env.DB, slug);
   if (!look) return Response.json({ error: "look-not-found" }, { status: 404 });
-  const target = await getOverlayById(env.DB, body.overlayId);
-  if (!target) return Response.json({ error: "overlay-not-found" }, { status: 404 });
-  if (target.owner_id !== session.userId) return Response.json({ error: "forbidden" }, { status: 403 });
+  const target = access.overlay;
   try {
     const values = validateShareableTheme(JSON.parse(look.values_json) as unknown);
     const result = await overlayStub(env, target.id).applyLook(values, look.id, target.link_generation, idempotencyKey ?? crypto.randomUUID());
@@ -221,12 +246,11 @@ async function copyLook(request: Request, env: ApiEnvironment, slug: string): Pr
 }
 
 async function undoLook(request: Request, env: ApiEnvironment, overlayId: string): Promise<Response> {
-  const session = await authorizeWrite(request, env);
-  if (session instanceof Response) return session;
-  const overlay = await getOwnedOverlay(env.DB, overlayId, session.userId);
-  if (!overlay) return Response.json({ error: "overlay-not-found" }, { status: 404 });
   const body = await readJson(request);
   if (body instanceof Response) return body;
+  const access = await requireOverlay(request, env, overlayId, "editor");
+  if (access instanceof Response) return access;
+  const overlay = access.overlay;
   if (Object.keys(body).some((key) => !["snapshotId", "expectedRevision"].includes(key)) ||
     typeof body.snapshotId !== "string" || !UUID_PATTERN.test(body.snapshotId) ||
     !Number.isSafeInteger(body.expectedRevision) || (body.expectedRevision as number) < 1) {
@@ -243,10 +267,10 @@ async function undoLook(request: Request, env: ApiEnvironment, overlayId: string
 }
 
 async function withdrawLook(request: Request, env: ApiEnvironment, slug: string): Promise<Response> {
-  const session = await authorizeWrite(request, env);
-  if (session instanceof Response) return session;
   const body = await readJson(request);
   if (body instanceof Response) return body;
+  const session = await authorizeWrite(request, env);
+  if (session instanceof Response) return session;
   if (Object.keys(body).length !== 0) return Response.json({ error: "invalid-withdraw-request" }, { status: 400 });
   const result = await env.DB.prepare(`
     UPDATE themes SET withdrawn_at = CURRENT_TIMESTAMP
@@ -257,10 +281,10 @@ async function withdrawLook(request: Request, env: ApiEnvironment, slug: string)
 }
 
 async function createOverlay(request: Request, env: ApiEnvironment): Promise<Response> {
-  const session = await authorizeWrite(request, env);
-  if (session instanceof Response) return session;
   const body = await readJson(request);
   if (body instanceof Response) return body;
+  const session = await authorizeWrite(request, env);
+  if (session instanceof Response) return session;
   if (Object.keys(body).length !== 1) return Response.json({ error: "invalid-overlay-request" }, { status: 400 });
   const name = validName(body.name);
   if (!name) return Response.json({ error: "invalid-name" }, { status: 400 });
@@ -276,16 +300,16 @@ async function createOverlay(request: Request, env: ApiEnvironment): Promise<Res
       AND NOT EXISTS (SELECT 1 FROM overlays WHERE owner_id = ? AND lower(name) = lower(?))
     RETURNING id, owner_id, link_token, name, channel, link_generation
   `).bind(id, session.userId, token, name, session.userId, session.userId, MAX_OVERLAYS, session.userId, name).first<OverlayRecord>();
-  if (overlay) return Response.json(publicOverlayForOwner(overlay), { status: 201, headers: { "Cache-Control": "no-store" } });
+  if (overlay) return Response.json(publicOverlay(overlay, "owner"), { status: 201, headers: { "Cache-Control": "no-store" } });
   if (await overlayNameExists(env.DB, session.userId, name)) return Response.json({ error: "overlay-name" }, { status: 409 });
   return Response.json({ error: "overlay-limit", limit: MAX_OVERLAYS }, { status: 409 });
 }
 
 async function renameOverlay(request: Request, env: ApiEnvironment, overlayId: string): Promise<Response> {
-  const session = await authorizeWrite(request, env);
-  if (session instanceof Response) return session;
   const body = await readJson(request);
   if (body instanceof Response) return body;
+  const access = await requireOverlay(request, env, overlayId, "owner");
+  if (access instanceof Response) return access;
   if (Object.keys(body).length !== 1) return Response.json({ error: "invalid-overlay-request" }, { status: 400 });
   const name = validName(body.name);
   if (!name) return Response.json({ error: "invalid-name" }, { status: 400 });
@@ -295,18 +319,18 @@ async function renameOverlay(request: Request, env: ApiEnvironment, overlayId: s
         SELECT 1 FROM overlays WHERE owner_id = ? AND id != ? AND lower(name) = lower(?)
       )
     RETURNING id, owner_id, link_token, name, channel, link_generation
-  `).bind(name, overlayId, session.userId, session.userId, overlayId, name).first<OverlayRecord>();
-  if (updated) return Response.json(publicOverlayForOwner(updated), { headers: { "Cache-Control": "no-store" } });
-  return await getOwnedOverlay(env.DB, overlayId, session.userId)
+  `).bind(name, overlayId, access.userId, access.userId, overlayId, name).first<OverlayRecord>();
+  if (updated) return Response.json(publicOverlay(updated, "owner"), { headers: { "Cache-Control": "no-store" } });
+  return await getOverlayAccess(env.DB, overlayId, access.userId)
     ? Response.json({ error: "overlay-name" }, { status: 409 })
     : Response.json({ error: "overlay-not-found" }, { status: 404 });
 }
 
 async function deleteOverlay(request: Request, env: ApiEnvironment, overlayId: string): Promise<Response> {
-  const session = await authorizeWrite(request, env);
-  if (session instanceof Response) return session;
   const body = await readJson(request);
   if (body instanceof Response) return body;
+  const access = await requireOverlay(request, env, overlayId, "owner");
+  if (access instanceof Response) return access;
   if (Object.keys(body).length !== 0) return Response.json({ error: "invalid-delete-request" }, { status: 400 });
   let deleted: { id: string } | null;
   try {
@@ -314,7 +338,7 @@ async function deleteOverlay(request: Request, env: ApiEnvironment, overlayId: s
       DELETE FROM overlays WHERE id = ? AND owner_id = ?
         AND (SELECT COUNT(*) FROM overlays WHERE owner_id = ?) > 1
       RETURNING id
-    `).bind(overlayId, session.userId, session.userId).first<{ id: string }>();
+    `).bind(overlayId, access.userId, access.userId).first<{ id: string }>();
   } catch {
     return Response.json({ error: "delete-failed" }, { status: 500 });
   }
@@ -328,6 +352,140 @@ async function deleteOverlay(request: Request, env: ApiEnvironment, overlayId: s
   return new Response(null, { status: 204 });
 }
 
+async function createInvite(request: Request, env: ApiEnvironment, overlayId: string): Promise<Response> {
+  const body = await readJson(request);
+  if (body instanceof Response) return body;
+  const access = await requireOverlay(request, env, overlayId, "owner");
+  if (access instanceof Response) return access;
+  if (Object.keys(body).length !== 0) return Response.json({ error: "invalid-invite-request" }, { status: 400 });
+
+  const token = randomToken(32);
+  const expiresAt = Math.floor(Date.now() / 1000) + INVITE_SECONDS;
+  const invite = await env.DB.prepare(`
+    INSERT INTO overlay_invites (overlay_id, token, expires_at)
+    SELECT id, ?, ? FROM overlays WHERE id = ? AND owner_id = ?
+    ON CONFLICT(overlay_id) DO UPDATE SET token = excluded.token, expires_at = excluded.expires_at
+    RETURNING expires_at
+  `).bind(token, expiresAt, overlayId, access.userId).first<{ expires_at: number }>();
+  if (!invite) return Response.json({ error: "overlay-not-found" }, { status: 404 });
+  // authorizeWrite has checked that Origin is same-origin; using it preserves the host the browser opened.
+  const inviteUrl = new URL("/studio", request.headers.get("Origin")!);
+  inviteUrl.searchParams.set("invite", token);
+  return Response.json({ inviteUrl: inviteUrl.toString(), expiresAt: new Date(invite.expires_at * 1000).toISOString() }, {
+    headers: { "Cache-Control": "no-store" },
+  });
+}
+
+async function revokeInvite(request: Request, env: ApiEnvironment, overlayId: string): Promise<Response> {
+  const body = await readJson(request);
+  if (body instanceof Response) return body;
+  const access = await requireOverlay(request, env, overlayId, "owner");
+  if (access instanceof Response) return access;
+  if (Object.keys(body).length !== 0) return Response.json({ error: "invalid-invite-request" }, { status: 400 });
+  await env.DB.prepare(`
+    DELETE FROM overlay_invites WHERE overlay_id = ?
+      AND EXISTS (SELECT 1 FROM overlays WHERE id = ? AND owner_id = ?)
+  `).bind(overlayId, overlayId, access.userId).run();
+  return new Response(null, { status: 204 });
+}
+
+async function removeEditor(request: Request, env: ApiEnvironment, overlayId: string, editorId: string): Promise<Response> {
+  const body = await readJson(request);
+  if (body instanceof Response) return body;
+  const session = await authorizeWrite(request, env);
+  if (session instanceof Response) return session;
+  const targetUserId = editorId === "me" ? session.userId : editorId;
+  const role: OverlayRole = targetUserId === session.userId ? "editor" : "owner";
+  const access = await requireOverlay(request, env, overlayId, role, session);
+  if (access instanceof Response) return access;
+  if (Object.keys(body).length !== 0) return Response.json({ error: "invalid-editor-request" }, { status: 400 });
+
+  const deleted = await env.DB.prepare(`
+    DELETE FROM overlay_editors
+    WHERE overlay_id = ? AND user_id = ?
+      AND (user_id = ? OR EXISTS (SELECT 1 FROM overlays WHERE id = ? AND owner_id = ?))
+    RETURNING user_id
+  `).bind(overlayId, targetUserId, session.userId, overlayId, session.userId).first<{ user_id: string }>();
+  return deleted ? new Response(null, { status: 204 }) : Response.json({ error: "editor-not-found" }, { status: 404 });
+}
+
+async function acceptInvite(request: Request, env: ApiEnvironment, token: string): Promise<Response> {
+  const body = await readJson(request);
+  if (body instanceof Response) return body;
+  const session = await authorizeWrite(request, env);
+  if (session instanceof Response) return session;
+  if (Object.keys(body).length !== 0) return Response.json({ error: "invalid-invite-request" }, { status: 400 });
+
+  const now = Math.floor(Date.now() / 1000);
+  const results = await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE overlay_invites SET token = token
+      WHERE token = ? AND expires_at > ?
+        AND EXISTS (
+          SELECT 1 FROM overlays
+          WHERE overlays.id = overlay_invites.overlay_id AND overlays.owner_id != ?
+        )
+        AND NOT EXISTS (SELECT 1 FROM overlay_editors WHERE overlay_id = overlay_invites.overlay_id AND user_id = ?)
+        AND (SELECT COUNT(*) FROM overlay_editors WHERE overlay_id = overlay_invites.overlay_id) < ?
+      RETURNING overlay_id
+    `).bind(token, now, session.userId, session.userId, MAX_EDITORS),
+    env.DB.prepare(`
+      INSERT INTO overlay_editors (overlay_id, user_id)
+      SELECT invite.overlay_id, ?
+      FROM overlay_invites AS invite
+      JOIN overlays ON overlays.id = invite.overlay_id
+      WHERE invite.token = ? AND invite.expires_at > ? AND overlays.owner_id != ?
+        AND NOT EXISTS (SELECT 1 FROM overlay_editors WHERE overlay_id = invite.overlay_id AND user_id = ?)
+        AND (SELECT COUNT(*) FROM overlay_editors WHERE overlay_id = invite.overlay_id) < ?
+      ON CONFLICT(overlay_id, user_id) DO NOTHING
+    `).bind(session.userId, token, now, session.userId, session.userId, MAX_EDITORS),
+    env.DB.prepare(`
+      DELETE FROM overlay_invites
+      WHERE token = ? AND expires_at > ?
+        AND EXISTS (
+          SELECT 1 FROM overlays
+          WHERE overlays.id = overlay_invites.overlay_id AND overlays.owner_id != ?
+        )
+        AND EXISTS (
+          SELECT 1 FROM overlay_editors
+          WHERE overlay_editors.overlay_id = overlay_invites.overlay_id AND overlay_editors.user_id = ?
+        )
+        AND changes() > 0
+      RETURNING overlay_id
+    `).bind(token, now, session.userId, session.userId),
+  ]);
+  const claimed = results[0]?.results?.[0] as { overlay_id?: string } | undefined;
+  if (claimed?.overlay_id) {
+    const access = await getOverlayAccess(env.DB, claimed.overlay_id, session.userId);
+    if (!access) return Response.json({ error: "invite-invalid" }, { status: 410 });
+    const editor = await env.DB.prepare("SELECT login FROM users WHERE id = ?").bind(access.overlay.owner_id).first<string>("login");
+    access.overlay.owner_login = editor ?? "";
+    return Response.json({ overlay: publicOverlay(access.overlay, "editor") }, { headers: { "Cache-Control": "no-store" } });
+  }
+
+  const state = await env.DB.prepare(`
+    SELECT overlays.id AS overlay_id,
+      overlays.owner_id,
+      (SELECT COUNT(*) FROM overlay_editors WHERE overlay_id = overlay_invites.overlay_id) AS editor_count
+    FROM overlay_invites
+    JOIN overlays ON overlays.id = overlay_invites.overlay_id
+    WHERE overlay_invites.token = ? AND overlay_invites.expires_at > ?
+  `).bind(token, now).first<{ overlay_id: string; owner_id: string; editor_count: number }>();
+  if (!state) return Response.json({ error: "invite-invalid" }, { status: 410 });
+  if (state.owner_id === session.userId) return Response.json({ error: "own-overlay" }, { status: 400 });
+  const alreadyEditor = await env.DB.prepare("SELECT 1 FROM overlay_editors WHERE overlay_id = (SELECT overlay_id FROM overlay_invites WHERE token = ?) AND user_id = ?")
+    .bind(token, session.userId).first();
+  if (alreadyEditor) {
+    const access = await getOverlayAccess(env.DB, state.overlay_id, session.userId);
+    if (!access) return Response.json({ error: "invite-invalid" }, { status: 410 });
+    const ownerLogin = await env.DB.prepare("SELECT login FROM users WHERE id = ?").bind(access.overlay.owner_id).first<string>("login");
+    access.overlay.owner_login = ownerLogin ?? "";
+    return Response.json({ overlay: publicOverlay(access.overlay, "editor") }, { headers: { "Cache-Control": "no-store" } });
+  }
+  if (state.editor_count >= MAX_EDITORS) return Response.json({ error: "helper-limit" }, { status: 409 });
+  return Response.json({ error: "invite-invalid" }, { status: 410 });
+}
+
 async function readLinkedConfig(request: Request, env: ApiEnvironment): Promise<Response> {
   const header = request.headers.get("authorization") ?? "";
   const match = /^Bearer ([^\s]+)$/iu.exec(header);
@@ -339,14 +497,16 @@ async function readLinkedConfig(request: Request, env: ApiEnvironment): Promise<
 }
 
 async function writeConfig(request: Request, env: ApiEnvironment, overlayId: string): Promise<Response> {
-  const session = await authorizeWrite(request, env);
-  if (session instanceof Response) return session;
-  const overlay = await getOwnedOverlay(env.DB, overlayId, session.userId);
-  if (!overlay) return Response.json({ error: "Overlay not found" }, { status: 404 });
   const body = await readJson(request);
   if (body instanceof Response) return body;
+  const access = await requireOverlay(request, env, overlayId, "editor");
+  if (access instanceof Response) return access;
+  const overlay = access.overlay;
   if (!Number.isSafeInteger(body.baseRevision) || (body.baseRevision as number) < 0 || !isRecord(body.patch)) {
     return Response.json({ error: "Invalid config update" }, { status: 400 });
+  }
+  if (access.role === "editor" && (Object.hasOwn(body.patch, "customCss") || Object.hasOwn(body.patch, "customCssEnabled"))) {
+    return Response.json({ error: "owner-only-field" }, { status: 403 });
   }
 
   try {
@@ -364,16 +524,15 @@ async function writeConfig(request: Request, env: ApiEnvironment, overlayId: str
 }
 
 async function rotateLink(request: Request, env: ApiEnvironment, overlayId: string): Promise<Response> {
-  const session = await authorizeWrite(request, env);
-  if (session instanceof Response) return session;
-  const overlay = await getOwnedOverlay(env.DB, overlayId, session.userId);
-  if (!overlay) return Response.json({ error: "Overlay not found" }, { status: 404 });
   const body = await readJson(request);
   if (body instanceof Response) return body;
+  const access = await requireOverlay(request, env, overlayId, "owner");
+  if (access instanceof Response) return access;
+  const overlay = access.overlay;
   if (Object.keys(body).length !== 0) return Response.json({ error: "Invalid rotate request" }, { status: 400 });
 
   const linkToken = randomToken(32);
-  const updated = await rotateOwnedOverlayLink(env.DB, overlay.id, session.userId, linkToken);
+  const updated = await rotateOwnedOverlayLink(env.DB, overlay.id, access.userId, linkToken);
   if (!updated) return Response.json({ error: "Overlay not found" }, { status: 404 });
   try {
     await overlayStub(env, updated.id).revoke(updated.link_generation);
@@ -387,12 +546,11 @@ async function rotateLink(request: Request, env: ApiEnvironment, overlayId: stri
 
 
 async function sendTestLine(request: Request, env: ApiEnvironment, overlayId: string): Promise<Response> {
-  const session = await authorizeWrite(request, env);
-  if (session instanceof Response) return session;
-  const overlay = await getOwnedOverlay(env.DB, overlayId, session.userId);
-  if (!overlay) return Response.json({ error: "Overlay not found" }, { status: 404 });
   const body = await readJson(request);
   if (body instanceof Response) return body;
+  const access = await requireOverlay(request, env, overlayId, "editor");
+  if (access instanceof Response) return access;
+  const overlay = access.overlay;
   if (Object.keys(body).length !== 0) return Response.json({ error: "Invalid test request" }, { status: 400 });
   const id = await overlayStub(env, overlay.id).testLine(overlay.link_generation);
   return Response.json({ id }, { headers: { "Cache-Control": "no-store" } });
@@ -428,6 +586,22 @@ async function authenticatedSession(request: Request, env: ApiEnvironment): Prom
   if (!env.SESSION_KEY) return Response.json({ error: "Authentication is not configured" }, { status: 503 });
   const session = await verifySessionCookie(readCookie(request.headers.get("cookie"), "session"), env.SESSION_KEY);
   return session ? { userId: session.userId } : Response.json({ error: "Authentication required" }, { status: 401 });
+}
+
+async function requireOverlay(
+  request: Request,
+  env: ApiEnvironment,
+  overlayId: string,
+  role: OverlayRole,
+  sessionOverride?: { userId: string },
+): Promise<{ userId: string; overlay: OverlayRecord; role: OverlayRole } | Response> {
+  const session = sessionOverride ?? await authorizeWrite(request, env);
+  if (session instanceof Response) return session;
+  const access = await getOverlayAccess(env.DB, overlayId, session.userId);
+  // ponytail: This post-body D1 membership check is the authorization ceiling; removal can still race the later Durable Object call.
+  if (!access) return Response.json({ error: "overlay-not-found" }, { status: 404 });
+  if (role === "owner" && access.role !== "owner") return Response.json({ error: "owner-only" }, { status: 403 });
+  return { ...session, ...access };
 }
 
 async function readJson(request: Request): Promise<Record<string, unknown> | Response> {
@@ -484,14 +658,24 @@ function overlayStub(env: ApiEnvironment, id: string): OverlayStub {
   return env.OVERLAY.get(env.OVERLAY.idFromName(id)) as OverlayStub;
 }
 
-function publicOverlayForOwner(overlay: OverlayRecord): Record<string, unknown> {
-  return {
+function publicOverlay(overlay: OverlayRecord, role: OverlayRole): Record<string, unknown> {
+  const result: Record<string, unknown> = {
     id: overlay.id,
     name: overlay.name,
     channel: overlay.channel,
+    role,
     linkToken: overlay.link_token,
     generation: overlay.link_generation,
   };
+  if (role === "owner") {
+    const expiresAt = overlay.invite_expires_at;
+    return {
+      ...result,
+      editors: overlay.editors ?? [],
+      invite: typeof expiresAt === "number" ? { expiresAt: new Date(expiresAt * 1000).toISOString() } : null,
+    };
+  }
+  return { ...result, ownerLogin: overlay.owner_login ?? "" };
 }
 
 function publicLook(look: LookRecord): Record<string, unknown> {

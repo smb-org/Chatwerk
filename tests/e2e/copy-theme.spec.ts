@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { DEFAULTS } from "../../src/shared/theme";
-import { addStudioLook, clearStudioLooks, e2eOrigin, expectActiveOverlay, seedStudioLooks, seedStudioSession, setRange } from "./studio-session";
+import { addStudioLook, addStudioSharedOverlay, clearStudioLooks, e2eOrigin, expectActiveOverlay, seedStudioLooks, seedStudioSession, setRange } from "./studio-session";
 
 test.beforeEach(() => clearStudioLooks());
 
@@ -41,6 +41,25 @@ test("shows a logged-out public look and links to the matching Twitch login dest
   await expect(page.locator("#public-login")).toBeVisible();
   await expect(page.locator("#public-login")).toHaveAttribute("href", `/auth/login?next=${encodeURIComponent(`/t/${look.slug}`)}`);
   await screenshot(page, "public-look-logged-out");
+});
+
+test("labels a shared overlay with its owner before copying a public look", async ({ page }) => {
+  const identity = await seedStudioSession(page);
+  const shared = addStudioSharedOverlay(identity.ownerId, "Main");
+  const look = addStudioLook(identity.ownerId, "Shared Destination", DEFAULTS);
+  await page.goto(`/t/${look.slug}`);
+
+  const selector = page.locator("#active-overlay-select");
+  await expect(selector.locator("option")).toHaveText(["Main", `Main by ${shared.ownerLogin}`]);
+  await selector.selectOption(shared.overlayId);
+  await expect(selector.locator("option:checked")).toHaveText(`Main by ${shared.ownerLogin}`);
+  const copyRequestPromise = page.waitForRequest((request) => request.method() === "POST" && request.url().includes(`/api/looks/${look.slug}/copy`));
+  await page.getByRole("button", { name: "Use on Main overlay" }).click();
+  const copyRequest = await copyRequestPromise;
+  expect(JSON.parse(copyRequest.postData() ?? "{}")).toMatchObject({ overlayId: shared.overlayId });
+
+  await expect(page).toHaveURL(`${e2eOrigin}/studio`);
+  await expect(page.locator("#active-overlay-select option:checked")).toHaveText(`Main by ${shared.ownerLogin}`);
 });
 
 test("publishes from the Studio dialog, copies its public link, and reports a duplicate name", async ({ page }) => {

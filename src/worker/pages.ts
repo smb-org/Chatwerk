@@ -43,7 +43,8 @@ export async function handlePageRequest(request: Request, env: PageEnvironment):
   if (url.pathname === "/studio" || url.pathname === "/studio/" || url.pathname === "/studio.html" || exportPage) {
     const session = await sessionForRequest(request, env.SESSION_KEY);
     if (!session) {
-      const destination = exportPage ? "/studio/export" : "/studio";
+      const studioPath = url.pathname === "/studio/" || url.pathname === "/studio.html" ? "/studio" : url.pathname;
+      const destination = exportPage ? "/studio/export" : `${studioPath}${url.search}`;
       const login = new URL("/login", url.origin);
       login.searchParams.set("next", destination);
       return new Response(null, { status: 302, headers: { Location: login.toString(), "Cache-Control": "no-store" } });

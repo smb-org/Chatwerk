@@ -253,7 +253,7 @@ describe("look gallery API", () => {
     }), apiEnv());
 
     expect(crossOrigin?.status).toBe(403);
-    expect(response?.status).toBe(403);
+    expect(response?.status).toBe(404);
   });
 
   it("copies only shareable values and undo restores every private target value", async () => {

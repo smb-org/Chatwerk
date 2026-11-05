@@ -20,6 +20,9 @@ const getCookie = (response: Response, name: string): string => {
   return value;
 };
 
+const decodeCookieValue = (value: string): string =>
+  new TextDecoder().decode(Uint8Array.from(atob(value.replace(/-/gu, "+").replace(/_/gu, "/") + "=".repeat((4 - value.length % 4) % 4)), (character) => character.charCodeAt(0)));
+
 const completeLogin = async (userId: string, login: string, loginUrl = "https://chatwerk.test/auth/login?next=%2Fstudio%3Ftab%3Dlook") => {
   const loginResponse = await handleAuthRequest(
     new Request(loginUrl),
@@ -28,6 +31,8 @@ const completeLogin = async (userId: string, login: string, loginUrl = "https://
   const authorizeUrl = new URL(loginResponse!.headers.get("location")!);
   const state = authorizeUrl.searchParams.get("state")!;
   const nonce = getCookie(loginResponse!, "oauth_nonce");
+  const next = getCookie(loginResponse!, "oauth_next");
+  const origin = new URL(loginUrl).origin;
   const fetcher: typeof fetch = async (input) => {
     const url = String(input);
     if (url === "https://id.twitch.tv/oauth2/token") {
@@ -38,10 +43,10 @@ const completeLogin = async (userId: string, login: string, loginUrl = "https://
     }
     throw new Error(`Unexpected OAuth request: ${url}`);
   };
-  const callback = new Request(`https://chatwerk.test/auth/callback?code=auth-code&state=${encodeURIComponent(state)}`, {
-    headers: { cookie: `oauth_nonce=${nonce}` },
+  const callback = new Request(`${origin}/auth/callback?code=auth-code&state=${encodeURIComponent(state)}`, {
+    headers: { cookie: `oauth_nonce=${nonce}; oauth_next=${next}` },
   });
-  return { response: await handleAuthRequest(callback, authEnv(), fetcher), state };
+  return { response: await handleAuthRequest(callback, authEnv(), fetcher), state, authorizeUrl };
 };
 
 describe("Twitch login and session cookie", () => {
@@ -70,37 +75,96 @@ describe("Twitch login and session cookie", () => {
     expect(authorizeUrl.searchParams.get("client_id")).toBe(clientId);
     expect(signature).toMatch(/^[A-Za-z0-9_-]+$/u);
     expect(JSON.parse(atob(payload!.replace(/-/gu, "+").replace(/_/gu, "/")))).toMatchObject({
-      next: "/studio?tab=look",
+      nonce: expect.any(String),
+      expiresAt: expect.any(Number),
     });
+    expect(authorizeUrl.searchParams.has("next")).toBe(false);
+    expect(authorizeUrl.href).not.toContain("tab=look");
     expect(getCookie(response!, "oauth_nonce")).toMatch(/^[A-Za-z0-9_-]{40,}$/u);
+    expect(decodeCookieValue(getCookie(response!, "oauth_next"))).toBe("/studio?tab=look");
     expect(response?.headers.get("set-cookie")).toContain("HttpOnly");
     expect(response?.headers.get("set-cookie")).toContain("SameSite=Lax");
+    expect(response?.headers.get("set-cookie")).toContain("Secure");
   });
 
-  it("sends hostile next values back to the local studio", async () => {
-    const response = await handleAuthRequest(
-      new Request("http://localhost:17173/auth/login?next=%2F%2Fevil.example%2Fsteal"),
-      authEnv(),
+  it("keeps an invite query through the OAuth login redirect", async () => {
+    const { response, authorizeUrl } = await completeLogin(
+      `auth-invite-${crypto.randomUUID()}`,
+      `viewer_${crypto.randomUUID().slice(0, 8)}`,
+      "https://chatwerk.test/auth/login?next=%2Fstudio%3Finvite%3DAbCdEf0123456789AbCdEf0123456789AbCdEf01234",
     );
 
-    const authorizeUrl = new URL(response!.headers.get("location")!);
-    const [payload] = authorizeUrl.searchParams.get("state")!.split(".");
-    const stateData = JSON.parse(atob(payload!.replace(/-/gu, "+").replace(/_/gu, "/"))) as { next: string };
-    expect(stateData.next).toBe("/studio");
+    expect(authorizeUrl.href).not.toContain("AbCdEf0123456789AbCdEf0123456789AbCdEf01234");
+    expect(authorizeUrl.searchParams.has("next")).toBe(false);
+    expect(response?.status).toBe(302);
+    expect(response?.headers.get("location")).toBe("https://chatwerk.test/studio?invite=AbCdEf0123456789AbCdEf0123456789AbCdEf01234");
+  });
+
+  it("returns to a public look after login without putting its destination in OAuth state", async () => {
+    const { response, authorizeUrl } = await completeLogin(
+      `auth-look-${crypto.randomUUID()}`,
+      `viewer_${crypto.randomUUID().slice(0, 8)}`,
+      "https://chatwerk.test/auth/login?next=%2Ft%2Fnight-ledger",
+    );
+
+    expect(authorizeUrl.searchParams.has("next")).toBe(false);
+    expect(response?.headers.get("location")).toBe("https://chatwerk.test/t/night-ledger");
+  });
+
+  it("validates hostile next values at the callback and sends them to the local studio", async () => {
+    const { response, authorizeUrl } = await completeLogin(
+      `auth-hostile-${crypto.randomUUID()}`,
+      `viewer_${crypto.randomUUID().slice(0, 8)}`,
+      "http://localhost:17173/auth/login?next=%2F%2Fevil.example%2Fsteal",
+    );
+
+    expect(authorizeUrl.href).not.toContain("evil.example");
+    expect(response?.headers.get("location")).toBe("http://localhost:17173/studio");
     expect(response?.headers.get("set-cookie")).not.toContain("Secure");
   });
 
-  it("returns to login with the fixed error state when the callback nonce is invalid", async () => {
+  it("rejects a tampered signed state even when the nonce cookie matches", async () => {
+    const loginResponse = await handleAuthRequest(new Request("https://chatwerk.test/auth/login?next=%2Fstudio"), authEnv());
+    const authorizeUrl = new URL(loginResponse!.headers.get("location")!);
+    const state = authorizeUrl.searchParams.get("state")!;
+    const tampered = state.replace(/\.(.)/u, (_match, character: string) => `.${character === "A" ? "B" : "A"}`);
     const fetcher = vi.fn<typeof fetch>();
     const response = await handleAuthRequest(
-      new Request("https://chatwerk.test/auth/callback?code=auth-code&state=invalid.invalid"),
+      new Request(`https://chatwerk.test/auth/callback?code=auth-code&state=${encodeURIComponent(tampered)}`, {
+        headers: { cookie: `oauth_nonce=${getCookie(loginResponse!, "oauth_nonce")}` },
+      }),
       authEnv(),
       fetcher,
     );
 
     expect(response?.status).toBe(302);
     expect(response?.headers.get("location")).toBe("https://chatwerk.test/login?error=1");
+    expect(response?.headers.get("set-cookie")).toContain("oauth_next=; Path=/auth/callback");
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("rejects an expired signed nonce when its cookie is replayed", async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const loginResponse = await handleAuthRequest(new Request("https://chatwerk.test/auth/login?next=%2Fstudio"), authEnv());
+      const authorizeUrl = new URL(loginResponse!.headers.get("location")!);
+      const state = authorizeUrl.searchParams.get("state")!;
+      const cookies = `oauth_nonce=${getCookie(loginResponse!, "oauth_nonce")}`;
+      now += 11 * 60 * 1000;
+      const fetcher = vi.fn<typeof fetch>();
+      const response = await handleAuthRequest(
+        new Request(`https://chatwerk.test/auth/callback?code=auth-code&state=${encodeURIComponent(state)}`, { headers: { cookie: cookies } }),
+        authEnv(),
+        fetcher,
+      );
+
+      expect(response?.headers.get("location")).toBe("https://chatwerk.test/login?error=1");
+      expect(response?.headers.get("set-cookie")).toContain("oauth_next=; Path=/auth/callback");
+      expect(fetcher).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("exchanges identity and issues a signed stateless session cookie", async () => {

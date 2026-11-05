@@ -16,9 +16,11 @@ function pageEnv(): PageEnvironment {
 describe("Studio page routing", () => {
   it("redirects logged-out Studio visitors through login with the requested destination", async () => {
     const response = await handlePageRequest(new Request("https://chatwerk.test/studio"), pageEnv());
+    const invited = await handlePageRequest(new Request("https://chatwerk.test/studio?invite=abc123"), pageEnv());
 
     expect(response?.status).toBe(302);
     expect(response?.headers.get("location")).toBe("https://chatwerk.test/login?next=%2Fstudio");
+    expect(invited?.headers.get("location")).toBe("https://chatwerk.test/login?next=%2Fstudio%3Finvite%3Dabc123");
   });
 
   it("sends the root to login when signed out and Studio when signed in", async () => {

@@ -92,8 +92,9 @@ test("lists owned overlays from the account API", async ({ page }) => {
   await page.locator("#account-menu summary").click();
   await page.getByRole("button", { name: "Overlays" }).click();
   const dialog = page.getByRole("dialog", { name: "Overlays" });
-  await expect(dialog.getByRole("group", { name: "Overlays" })).toBeVisible();
-  await expect(dialog.locator(".manage-row").filter({ hasText: "Main" }).getByRole("button", { name: "Select" }))
+  const overlayList = dialog.getByRole("group", { name: "Your overlays" });
+  await expect(overlayList).toBeVisible();
+  await expect(overlayList.locator(".manage-row").filter({ hasText: "Main" }).locator(".manage-row-select"))
     .toHaveAttribute("aria-pressed", "true");
 });
 
@@ -125,11 +126,11 @@ test("switches between overlays with the existing owner read API", async ({ page
   await page.locator("#account-menu summary").click();
   await page.getByRole("button", { name: "Overlays" }).click();
   const dialog = page.getByRole("dialog", { name: "Overlays" });
-  const overlayList = dialog.getByRole("group", { name: "Overlays" });
+  const overlayList = dialog.getByRole("group", { name: "Your overlays" });
   await expect(overlayList.locator(".manage-row")).toHaveCount(2);
-  const main = overlayList.locator(".manage-row").filter({ hasText: "Main" }).getByRole("button", { name: "Select" });
+  const main = overlayList.locator(".manage-row").filter({ hasText: "Main" }).locator(".manage-row-select");
   await expect(main).toHaveAttribute("aria-pressed", "true");
-  await overlayList.locator(".manage-row").filter({ hasText: "Second" }).getByRole("button", { name: "Select" }).click();
+  await overlayList.locator(".manage-row").filter({ hasText: "Second" }).locator(".manage-row-select").click();
   await expect(dialog).toBeHidden();
   await expect(page.locator("#overlay-url")).toHaveValue(`${e2eOrigin}/overlay#token=${alternate.token}`);
   await expect(page.locator("#overlay-url")).not.toHaveValue(`${e2eOrigin}/overlay#token=${mainToken}`);

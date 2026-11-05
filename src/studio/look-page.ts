@@ -25,6 +25,8 @@ interface LookItem {
 interface OwnedOverlay {
   id: string;
   name: string;
+  role?: "owner" | "editor";
+  ownerLogin?: string;
   channel: string;
   linkToken: string;
   generation: number;
@@ -183,7 +185,9 @@ function updateActiveOverlayName(): void {
       for (const item of overlays) {
         const option = document.createElement("option");
         option.value = item.id;
-        option.textContent = item.name;
+        option.textContent = item.role === "editor"
+          ? translate(language, "sharedOverlayOption", { name: item.name, owner: item.ownerLogin ?? "" })
+          : item.name;
         option.selected = item.id === activeOverlay.id;
         select.appendChild(option);
       }

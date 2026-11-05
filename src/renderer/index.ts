@@ -60,9 +60,15 @@ if (chat) {
         onEvent: (event) => {
           roomScopes.handle(event);
           renderer.handle(event);
+          if (liveLocation.client === "studio" && previewLiveEnabled && event.type === "PRIVMSG") {
+            postStudioChatState("message", activeChannels().join(", "));
+          }
         },
         onStatus: (status) => {
           chatStatus = status;
+          if (liveLocation.client === "studio" && previewLiveEnabled) {
+            postStudioChatState(status === "connected" ? "waiting" : "connecting", activeChannels().join(", "));
+          }
           live.handle?.acknowledge();
         },
       });
@@ -70,7 +76,17 @@ if (chat) {
       live.handle?.acknowledge();
       return;
     }
+    const previousChannels = irc.getChannels();
+    const changed = previousChannels.length !== channels.length || previousChannels.some((item, index) => item !== channels[index]);
     irc.setChannels(channels);
+    if (changed && liveLocation.client === "studio" && previewLiveEnabled) {
+      postStudioChatState("waiting", channels.join(", "));
+    }
+  };
+
+  const postStudioChatState = (state: "connecting" | "waiting" | "message", channel: string): void => {
+    if (window.parent === window) return;
+    window.parent.postMessage({ type: "chatwerk:studio-chat-state", state, channel }, window.location.origin);
   };
 
   const startIrc = (channel: string): void => {
