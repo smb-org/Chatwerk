@@ -114,6 +114,74 @@ describe("IRC client", () => {
     client.stop();
   });
 
+  it("joins several channels on one socket and parts/joins only the changed channels", () => {
+    const transport = new FakeTransport();
+    const client = new IrcClient({ channels: ["Main", "Second"], transportFactory: () => transport });
+    client.start();
+    transport.open();
+    expect(transport.sent.filter((line) => line.startsWith("JOIN "))).toEqual(["JOIN #main", "JOIN #second"]);
+
+    client.setChannels(["main", "third"]);
+    expect(transport.sent.slice(-2)).toEqual(["PART #second", "JOIN #third"]);
+    expect(client.getChannels()).toEqual(["main", "third"]);
+    client.stop();
+  });
+
+  it("rejoins every configured channel after reconnect", () => {
+    vi.useFakeTimers();
+    const transports: FakeTransport[] = [];
+    const client = new IrcClient({
+      channels: ["main", "second", "third"],
+      random: () => 0.5,
+      transportFactory: () => { const transport = new FakeTransport(); transports.push(transport); return transport; },
+    });
+    client.start();
+    transports[0]!.open();
+    expect(transports[0]!.sent.filter((line) => line.startsWith("JOIN "))).toEqual([
+      "JOIN #main", "JOIN #second", "JOIN #third",
+    ]);
+
+    transports[0]!.disconnect();
+    vi.advanceTimersByTime(1_000);
+    transports[1]!.open();
+    expect(transports[1]!.sent.filter((line) => line.startsWith("JOIN "))).toEqual([
+      "JOIN #main", "JOIN #second", "JOIN #third",
+    ]);
+    client.stop();
+  });
+
+  it("joins a channel change made while disconnected when the next socket opens", () => {
+    vi.useFakeTimers();
+    const transports: FakeTransport[] = [];
+    const client = new IrcClient({
+      channels: ["main", "second"],
+      random: () => 0.5,
+      transportFactory: () => { const transport = new FakeTransport(); transports.push(transport); return transport; },
+    });
+    client.start();
+    transports[0]!.open();
+    transports[0]!.disconnect();
+    client.setChannels(["main", "third"]);
+    expect(transports[0]!.sent).not.toContain("JOIN #third");
+
+    vi.advanceTimersByTime(1_000);
+    transports[1]!.open();
+    expect(transports[1]!.sent.filter((line) => line.startsWith("JOIN "))).toEqual(["JOIN #main", "JOIN #third"]);
+    client.stop();
+  });
+
+  it("keeps the legacy single-channel option and avoids reconnecting on an empty diff", () => {
+    const transport = new FakeTransport();
+    const client = new IrcClient({ channel: "Legacy", transportFactory: () => transport });
+    client.start();
+    transport.open();
+    const commands = [...transport.sent];
+    client.setChannels(["legacy"]);
+    expect(transport.sent).toEqual(commands);
+    expect(transport.closed).toBe(false);
+    client.stop();
+  });
+
   it("backs off with jitter, caps the delay at 30 seconds, and stops cleanly", () => {
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(1);

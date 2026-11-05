@@ -13,7 +13,7 @@ export const THEME_UI_GROUPS = [
 ] as const;
 
 export type ThemeUiGroup = (typeof THEME_UI_GROUPS)[number];
-export type ThemeControl = "select" | "range" | "color" | "segmented" | "toggle";
+export type ThemeControl = "select" | "range" | "color" | "segmented" | "toggle" | "list" | "channels";
 
 export const FONT_FAMILIES = [
   "Arial",
@@ -26,6 +26,12 @@ export type FontFamily = (typeof FONT_FAMILIES)[number];
 export type NameColorMode = "tag" | "text";
 export type LineOrder = "name-first" | "message-first";
 export type Motion = "fade" | "none";
+export type MessageLayout = "stack" | "ticker";
+export type ChannelLogin = string;
+export const DEFAULT_BOT_NAMES = [
+  "nightbot", "streamlabs", "streamelements", "moobot", "fossabot",
+  "wizebot", "sery_bot", "deepbot", "phantombot", "coebot",
+] as const;
 
 interface ThemeUi {
   group: ThemeUiGroup;
@@ -85,6 +91,14 @@ export const THEME_FIELDS = {
     { min: 0, max: 32, step: 1, unit: "px" }),
   lineOrder: field<LineOrder>("name-first", (value): value is LineOrder => value === "name-first" || value === "message-first",
     (value) => value, { group: "Layout", order: 2, label: "Line order", control: "segmented" }),
+  layout: field<MessageLayout>("stack", (value): value is MessageLayout => value === "stack" || value === "ticker",
+    (value) => value, { group: "Layout", order: 3, label: "Layout", control: "segmented" }),
+  tickerSpeed: field(80, numberIn(20, 400, 1), (value) => `${value}px`,
+    { group: "Layout", order: 4, label: "Ticker speed", control: "range" },
+    { min: 20, max: 400, step: 1, unit: "px/s" }),
+  emoteSpacing: field(0, numberIn(0, 16, 1), (value) => `${value}px`,
+    { group: "Layout", order: 5, label: "Emote spacing", control: "range" },
+    { min: 0, max: 16, step: 1, unit: "px" }),
   lifetime: field(120_000, numberIn(1_000, 120_000, 1_000), (value) => `${value}ms`,
     { group: "Messages", order: 1, label: "Lifetime", control: "range" },
     { min: 1_000, max: 120_000, step: 1_000, unit: "ms" }),
@@ -96,10 +110,29 @@ export const THEME_FIELDS = {
   emoteScale: field(1.5, numberIn(0.5, 3, 0.1), (value) => `${value}em`,
     { group: "Messages", order: 4, label: "Emote size", control: "range" },
     { min: 0.5, max: 3, step: 0.1, unit: "em" }),
+  gigantifiedScale: field(2.5, numberIn(1, 5, 0.1), (value) => `${value}em`,
+    { group: "Messages", order: 5, label: "Gigantified emote size", control: "range" },
+    { min: 1, max: 5, step: 0.1, unit: "em" }),
   showBadges: field(true, (value): value is boolean => typeof value === "boolean", (value) => String(value),
-    { group: "Messages", order: 5, label: "Show badges", control: "toggle" }),
+    { group: "Messages", order: 6, label: "Show badges", control: "toggle" }),
   showPronouns: field(false, (value): value is boolean => typeof value === "boolean", (value) => String(value),
-    { group: "Messages", order: 6, label: "Show pronouns", control: "toggle" }),
+    { group: "Messages", order: 7, label: "Show pronouns", control: "toggle" }),
+  highlightBackgroundColor: field("#ffe680", isValidColor, (value) => value,
+    { group: "Messages", order: 8, label: "Highlight background", control: "color" }),
+  highlightTextColor: field("#17181b", isValidColor, (value) => value,
+    { group: "Messages", order: 9, label: "Highlight text", control: "color" }),
+  channels: field<ChannelLogin[]>([], isValidChannelList, (value) => JSON.stringify(value),
+    { group: "Channels", order: 1, label: "Channels", control: "channels" }),
+  hideNumbers: field(false, (value): value is boolean => typeof value === "boolean", (value) => String(value),
+    { group: "Filters", order: 1, label: "Hide number-only messages", control: "toggle" }),
+  filterWords: field<string[]>([], (value): value is string[] => isValidStringList(value, 50, 32), (value) => JSON.stringify(value),
+    { group: "Filters", order: 2, label: "Exact words", control: "list" }),
+  filterPrefixes: field<string[]>([], (value): value is string[] => isValidStringList(value, 20, 16), (value) => JSON.stringify(value),
+    { group: "Filters", order: 3, label: "Message prefixes", control: "list" }),
+  hideBots: field(false, (value): value is boolean => typeof value === "boolean", (value) => String(value),
+    { group: "Filters", order: 4, label: "Hide bots", control: "toggle" }),
+  botNames: field<string[]>([...DEFAULT_BOT_NAMES], isValidBotNameList, (value) => JSON.stringify(value),
+    { group: "Filters", order: 5, label: "Bot names", control: "list" }),
 } as const;
 
 export type ThemeFieldName = keyof typeof THEME_FIELDS;
@@ -119,12 +152,24 @@ export const DEFAULTS: ThemeConfig = {
   backgroundOpacity: 0.65,
   spacing: 8,
   lineOrder: "name-first",
+  layout: "stack",
+  tickerSpeed: 80,
+  emoteSpacing: 0,
   lifetime: 120_000,
   outline: 0,
   motion: "fade",
   emoteScale: 1.5,
+  gigantifiedScale: 2.5,
   showBadges: true,
   showPronouns: false,
+  highlightBackgroundColor: "#ffe680",
+  highlightTextColor: "#17181b",
+  channels: [],
+  hideNumbers: false,
+  filterWords: [],
+  filterPrefixes: [],
+  hideBots: false,
+  botNames: [...DEFAULT_BOT_NAMES],
 };
 
 export class ThemeValidationError extends TypeError {
@@ -170,11 +215,20 @@ export function cssVariableName(fieldName: ThemeFieldName): `--t-${string}` {
 }
 
 export function themeCssVariables(theme: ThemeConfig): Record<`--t-${string}`, string> {
-  const entries = (Object.keys(THEME_FIELDS) as ThemeFieldName[]).map((key) => {
+  const entries = (Object.keys(THEME_FIELDS) as ThemeFieldName[]).filter((key) => !PRIVATE_THEME_FIELDS.has(key)).map((key) => {
     const definition = THEME_FIELDS[key] as ThemeField<ThemeValues[typeof key]>;
     return [cssVariableName(key), definition.toCssValue(theme[key])] as const;
   });
   return Object.fromEntries(entries) as Record<`--t-${string}`, string>;
+}
+
+const PRIVATE_THEME_FIELDS = new Set<ThemeFieldName>([
+  "channels", "hideNumbers", "filterWords", "filterPrefixes", "hideBots", "botNames",
+]);
+
+/** Shareable appearance keys for gallery looks; overlay-local routing and filtering never cross this boundary. */
+export function getShareableThemeKeys(): ThemeFieldName[] {
+  return (Object.keys(THEME_FIELDS) as ThemeFieldName[]).filter((key) => !PRIVATE_THEME_FIELDS.has(key));
 }
 
 export function themeRowBackground(theme: ThemeConfig): string {
@@ -287,4 +341,26 @@ function linear(channel: number): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isValidStringList(value: unknown, maximumItems: number, maximumLength: number): value is string[] {
+  return Array.isArray(value) && value.length <= maximumItems && value.every((item) =>
+    typeof item === "string" && item.length > 0 && item.length <= maximumLength && item === item.trim());
+}
+
+function isValidChannelList(value: unknown): value is ChannelLogin[] {
+  if (!Array.isArray(value) || value.length > 5) return false;
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string" || !/^[a-z0-9_]{1,25}$/iu.test(item)) return false;
+    const normalized = item.toLowerCase();
+    if (seen.has(normalized)) return false;
+    seen.add(normalized);
+  }
+  return true;
+}
+
+function isValidBotNameList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.length <= 50 && value.every((item) =>
+    typeof item === "string" && /^[a-z0-9_]{1,32}$/iu.test(item));
 }

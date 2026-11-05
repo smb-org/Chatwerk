@@ -15,7 +15,8 @@ export interface IrcTransport {
 }
 
 export interface IrcClientOptions {
-  channel: string;
+  channel?: string;
+  channels?: string[];
   transportFactory?: (url: string) => IrcTransport;
   onEvent?: (event: IrcEvent) => void;
   onStatus?: (status: ChatStatus) => void;
@@ -28,7 +29,7 @@ export function isValidChannel(channel: string): boolean {
 }
 
 export class IrcClient {
-  private readonly channel: string;
+  private channels: string[];
   private readonly transportFactory: (url: string) => IrcTransport;
   private readonly onEvent: (event: IrcEvent) => void;
   private readonly onStatus: (status: ChatStatus) => void;
@@ -44,7 +45,7 @@ export class IrcClient {
   private started = false;
 
   constructor(options: IrcClientOptions) {
-    this.channel = options.channel.toLowerCase().replace(/^#/u, "");
+    this.channels = normalizeChannels(options.channels ?? (options.channel ? [options.channel] : []));
     this.transportFactory = options.transportFactory ?? createBrowserTransport;
     this.onEvent = options.onEvent ?? (() => undefined);
     this.onStatus = options.onStatus ?? (() => undefined);
@@ -53,7 +54,7 @@ export class IrcClient {
   }
 
   start(): void {
-    if (this.started || !isValidChannel(this.channel)) return;
+    if (this.started || this.channels.length === 0) return;
     this.started = true;
     this.reconnectAttempt = 0;
     this.setStatus("reconnecting");
@@ -69,6 +70,19 @@ export class IrcClient {
     this.transport = undefined;
     transport?.close();
     this.setStatus("idle");
+  }
+
+  setChannels(channels: string[]): void {
+    const next = normalizeChannels(channels);
+    const difference = diffChannels(this.channels, next);
+    this.channels = next;
+    if (!this.started || !this.transport) return;
+    for (const channel of difference.part) this.transport.send(`PART #${channel}`);
+    for (const channel of difference.join) this.transport.send(`JOIN #${channel}`);
+  }
+
+  getChannels(): string[] {
+    return [...this.channels];
   }
 
   private connect(): void {
@@ -89,7 +103,7 @@ export class IrcClient {
       transport.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
       transport.send("PASS SCHMOOPIIE");
       transport.send(`NICK justinfan${this.nicknameNumber()}`);
-      transport.send(`JOIN #${this.channel}`);
+      for (const channel of this.channels) transport.send(`JOIN #${channel}`);
       this.resetLivenessTimer(transport);
     });
     transport.onMessage((data) => {
@@ -182,6 +196,27 @@ export class IrcClient {
     if (this.livenessTimer !== undefined) clearTimeout(this.livenessTimer);
     this.livenessTimer = undefined;
   }
+}
+
+export function diffChannels(previous: string[], next: string[]): { join: string[]; part: string[] } {
+  const before = normalizeChannels(previous);
+  const after = normalizeChannels(next);
+  const beforeSet = new Set(before);
+  const afterSet = new Set(after);
+  return {
+    join: after.filter((channel) => !beforeSet.has(channel)),
+    part: before.filter((channel) => !afterSet.has(channel)),
+  };
+}
+
+function normalizeChannels(channels: string[]): string[] {
+  const result: string[] = [];
+  for (const channel of channels) {
+    const normalized = channel.toLowerCase().replace(/^#/u, "");
+    if (!isValidChannel(normalized) || result.includes(normalized) || result.length >= 5) continue;
+    result.push(normalized);
+  }
+  return result;
 }
 
 function isLoginCollision(event: IrcEvent): boolean {

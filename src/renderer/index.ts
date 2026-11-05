@@ -8,6 +8,7 @@ import { createEmoteLookup } from "./emotes";
 import { createBadgeLookup } from "./badges";
 import { createPaintLookup } from "./paints";
 import { createPronounLookup } from "./pronouns";
+import { createRoomScopeCoordinator } from "./room-scopes";
 import { createSevenTvEventApi } from "./seventv-events";
 import { runScenario, type ScenarioName } from "./scenarios";
 
@@ -23,38 +24,66 @@ if (chat) {
   const renderer = createChatRenderer({ root: chat, theme: DEFAULTS, emotes, badges, paints, pronouns });
   let currentTheme = DEFAULTS;
   let irc: IrcClient | undefined;
-  let ircChannel = "";
+  let legacyChannel = "";
+  let previewChannels: string[] | undefined;
+  let previewLiveEnabled = false;
+  const roomScopes = createRoomScopeCoordinator({ emotes, paints });
   let chatStatus: ChatStatus = "idle";
   const live: { handle?: LiveHandle } = {};
   let stopScenario: (() => void) | undefined;
 
+  const activeChannels = (): string[] => {
+    if (liveLocation.client === "studio" && !liveLocation.token && !previewLiveEnabled) return [];
+    const selected = previewChannels ?? currentTheme.channels;
+    if (selected.length > 0) return normalizeChannels(selected);
+    const fallback = liveLocation.channel ?? legacyChannel;
+    return fallback ? normalizeChannels([fallback]) : [];
+  };
+
+  const reconcileIrc = (): void => {
+    const channels = activeChannels();
+    renderer.setChannels(channels);
+    roomScopes.setChannels(channels);
+    if (channels.length > 0) {
+      chat.querySelector(".chat-empty")?.remove();
+    } else if (liveLocation.client !== "studio" && !chat.querySelector(".chat-empty")) {
+      const empty = document.createElement("div");
+      empty.setAttribute("class", "chat-empty");
+      empty.textContent = "No channel set. Open Studio to add one.";
+      chat.appendChild(empty);
+    }
+    if (!irc) {
+      if (channels.length === 0) return;
+      chatStatus = "reconnecting";
+      irc = new IrcClient({
+        channels,
+        onEvent: (event) => {
+          roomScopes.handle(event);
+          renderer.handle(event);
+        },
+        onStatus: (status) => {
+          chatStatus = status;
+          live.handle?.acknowledge();
+        },
+      });
+      irc.start();
+      live.handle?.acknowledge();
+      return;
+    }
+    irc.setChannels(channels);
+  };
+
   const startIrc = (channel: string): void => {
     if (!isValidChannel(channel)) return;
-    const normalized = channel.toLowerCase().replace(/^#/u, "");
-    if (ircChannel === normalized) return;
+    legacyChannel = channel.toLowerCase().replace(/^#/u, "");
+    reconcileIrc();
+  };
+
+  const stopIrc = (): void => {
     irc?.stop();
-    ircChannel = normalized;
-    chat.querySelector(".chat-empty")?.remove();
-    chatStatus = "reconnecting";
-    irc = new IrcClient({
-      channel: normalized,
-      onEvent: (event) => {
-        if (event.type === "ROOMSTATE" && event.channel.toLowerCase().replace(/^#/u, "") === normalized) {
-          const roomId = event.tags["room-id"];
-          if (roomId) {
-            emotes.setChannelId(roomId);
-            paints.setChannelId(roomId);
-          }
-        }
-        renderer.handle(event);
-      },
-      onStatus: (status) => {
-        chatStatus = status;
-        live.handle?.acknowledge();
-      },
-    });
-    irc.start();
-    live.handle?.acknowledge();
+    irc = undefined;
+    roomScopes.reset();
+    chatStatus = "idle";
   };
 
   const showScenario = (scenario: ScenarioName): void => {
@@ -71,6 +100,7 @@ if (chat) {
         try {
           currentTheme = validateTheme(event.data.theme);
           renderer.setTheme(currentTheme);
+          reconcileIrc();
         } catch {
           // The parent controls a local preview; malformed data leaves the current valid theme in place.
         }
@@ -83,13 +113,20 @@ if (chat) {
       if (event.data.type === "chatwerk:studio-live" && typeof event.data.enabled === "boolean") {
         stopScenario?.();
         stopScenario = undefined;
-        if (event.data.enabled && typeof event.data.channel === "string" && isValidChannel(event.data.channel)) {
-          startIrc(event.data.channel);
+        if (event.data.enabled) {
+          previewLiveEnabled = true;
+          const rawChannels = Array.isArray(event.data.channels)
+            ? event.data.channels.filter((value): value is string => typeof value === "string")
+            : typeof event.data.channel === "string" ? [event.data.channel] : currentTheme.channels;
+          previewChannels = normalizeChannels(rawChannels.filter(isValidChannel));
+          if (previewChannels.length === 0 && typeof event.data.channel === "string" && isValidChannel(event.data.channel)) {
+            previewChannels = normalizeChannels([event.data.channel]);
+          }
+          reconcileIrc();
         } else {
-          irc?.stop();
-          irc = undefined;
-          ircChannel = "";
-          chatStatus = "idle";
+          previewLiveEnabled = false;
+          previewChannels = undefined;
+          stopIrc();
           renderer.clear();
           renderer.setTheme(currentTheme);
           showScenario("quiet");
@@ -98,7 +135,7 @@ if (chat) {
     });
   }
 
-  if (liveLocation.channel) startIrc(liveLocation.channel);
+  if (liveLocation.channel && !(liveLocation.client === "studio" && !liveLocation.token)) startIrc(liveLocation.channel);
   else if (!liveLocation.token) {
     const empty = document.createElement("div");
     empty.setAttribute("class", "chat-empty");
@@ -113,14 +150,14 @@ if (chat) {
     applyTheme: (theme) => {
       currentTheme = theme;
       renderer.setTheme(theme);
+      reconcileIrc();
     },
     onChannel: (channel) => {
       if (!liveLocation.channel) startIrc(channel);
     },
     onTestLine: (id, onExpire) => showTestLine(chat, id, onExpire),
     onRevoked: () => {
-      irc?.stop();
-      irc = undefined;
+      stopIrc();
       renderer.dispose();
       sevenTvEvents.dispose();
     },
@@ -143,4 +180,9 @@ function isScenarioName(value: unknown): value is ScenarioName {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeChannels(channels: string[]): string[] {
+  return [...new Set(channels.map((channel) => channel.toLowerCase().replace(/^#/u, "")))]
+    .filter(isValidChannel).slice(0, 5);
 }

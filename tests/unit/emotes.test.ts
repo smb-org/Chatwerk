@@ -48,6 +48,25 @@ describe("emote lookup", () => {
     lookup.dispose();
   });
 
+  it("loads channel scopes independently and keeps channel assets ahead of global assets", async () => {
+    const provider = {
+      name: "test",
+      loadGlobal: async () => [asset("Shared", "global"), asset("GlobalOnly", "global")],
+      loadChannel: async (channelId: string) => [asset("Shared", `room-${channelId}`), asset(`Only${channelId}`)],
+    };
+    const lookup = createEmoteLookup({ providers: [provider] });
+    lookup.setChannelIds(["10", "20"]);
+    await vi.waitFor(() => {
+      expect(lookup.resolve("Only10", "10")).toBeDefined();
+      expect(lookup.resolve("Only20", "20")).toBeDefined();
+    });
+    expect(lookup.resolve("Shared", "10")?.provider).toBe("room-10");
+    expect(lookup.resolve("Shared", "20")?.provider).toBe("room-20");
+    expect(lookup.resolve("Shared")?.provider).toBe("room-10");
+    expect(lookup.resolve("Only10", "20")).toBeUndefined();
+    lookup.dispose();
+  });
+
   it("only treats a zero-width emote after an emote as an overlay", async () => {
     const lookup = createEmoteLookup({ providers: [{
       name: "7tv",
@@ -135,6 +154,108 @@ describe("emote lookup", () => {
     expect(subscriptions).toHaveLength(2);
     lookup.dispose();
     for (const { unsubscribe } of subscriptions) expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases removed channel subscriptions across repeated add/remove cycles and reconnects", async () => {
+    const subscriptions: Array<{ condition: Record<string, string>; unsubscribe: ReturnType<typeof vi.fn> }> = [];
+    let reconnect: (() => void) | undefined;
+    const eventApi = {
+      subscribe: vi.fn((_type: string, condition: string | Record<string, string>) => {
+        const normalized = typeof condition === "string" ? { object_id: condition } : condition;
+        const unsubscribe = vi.fn();
+        subscriptions.push({ condition: normalized, unsubscribe });
+        return unsubscribe;
+      }),
+      onReconnect: vi.fn((listener: () => void) => { reconnect = listener; return vi.fn(); }),
+      dispose: vi.fn(),
+    };
+    let channelFetches = 0;
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/emote-sets/global")) return new Response(JSON.stringify({ id: "global-set", emotes: [] }), { status: 200 });
+      if (url.startsWith("https://7tv.io/v3/users/twitch/42")) {
+        channelFetches += 1;
+        return new Response(JSON.stringify({ user: { id: "user-42" }, emote_set: { id: "channel-set", emotes: [] } }), { status: 200 });
+      }
+      throw new Error("unexpected fetch");
+    });
+    const lookup = createEmoteLookup({ eventApi, fetcher });
+    const activeChannelSubscriptions = () => subscriptions.filter(({ condition, unsubscribe }) =>
+      condition.object_id === "channel-set" && unsubscribe.mock.calls.length === 0).length;
+
+    for (let cycle = 1; cycle <= 3; cycle += 1) {
+      lookup.setChannelIds(["42"]);
+      await vi.waitFor(() => expect(channelFetches).toBe(cycle));
+      await vi.waitFor(() => expect(activeChannelSubscriptions()).toBe(1));
+      lookup.setChannelIds([]);
+      await vi.waitFor(() => expect(activeChannelSubscriptions()).toBe(0));
+    }
+
+    const channelFetchesBeforeReconnect = channelFetches;
+    reconnect?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(channelFetches).toBe(channelFetchesBeforeReconnect);
+    expect(activeChannelSubscriptions()).toBe(0);
+    lookup.dispose();
+  });
+
+  it("ignores a reconnect refresh that completes after its channel is removed", async () => {
+    const subscriptions: Array<{ condition: Record<string, string>; unsubscribe: ReturnType<typeof vi.fn> }> = [];
+    let reconnect: (() => void) | undefined;
+    let resolvePendingRefresh: ((response: Response) => void) | undefined;
+    let channelFetches = 0;
+    const eventApi = {
+      subscribe: vi.fn((_type: string, condition: string | Record<string, string>) => {
+        const normalized = typeof condition === "string" ? { object_id: condition } : condition;
+        const unsubscribe = vi.fn();
+        subscriptions.push({ condition: normalized, unsubscribe });
+        return unsubscribe;
+      }),
+      onReconnect: vi.fn((listener: () => void) => { reconnect = listener; return vi.fn(); }),
+      dispose: vi.fn(),
+    };
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/emote-sets/global")) {
+        return new Response(JSON.stringify({ id: "global-set", emotes: [] }), { status: 200 });
+      }
+      if (url.startsWith("https://7tv.io/v3/users/twitch/42")) {
+        channelFetches += 1;
+        if (channelFetches === 2) {
+          return await new Promise<Response>((resolve) => { resolvePendingRefresh = resolve; });
+        }
+        return new Response(JSON.stringify({
+          user: { id: "user-42" },
+          emote_set: { id: "channel-set", emotes: [] },
+        }), { status: 200 });
+      }
+      if (url.startsWith("https://7tv.io/v3/emote-sets/")) {
+        return new Response(JSON.stringify({ id: "channel-set", emotes: [] }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const lookup = createEmoteLookup({ eventApi, fetcher });
+    const activeChannelSubscriptions = () => subscriptions.filter(({ condition, unsubscribe }) =>
+      condition.object_id !== "global-set" && unsubscribe.mock.calls.length === 0).length;
+
+    lookup.setChannelIds(["42"]);
+    await vi.waitFor(() => expect(activeChannelSubscriptions()).toBe(1));
+    reconnect?.();
+    await vi.waitFor(() => expect(channelFetches).toBe(2));
+    expect(resolvePendingRefresh).toBeDefined();
+
+    lookup.setChannelIds([]);
+    resolvePendingRefresh!(new Response(JSON.stringify({
+      user: { id: "user-42" },
+      emote_set: { id: "stale-set", emotes: [] },
+    }), { status: 200 }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    reconnect?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(channelFetches).toBe(2);
+    expect(activeChannelSubscriptions()).toBe(0);
+    lookup.dispose();
   });
 
   it("renders chat immediately when one provider rejects or hangs", async () => {

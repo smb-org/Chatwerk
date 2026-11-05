@@ -25,6 +25,13 @@ body {
   overflow: hidden;
 }
 
+#chat[data-layout="ticker"] {
+  position: relative;
+  display: block;
+  align-items: initial;
+  justify-content: initial;
+}
+
 #chat[data-line-order="message-first"] {
   flex-direction: column-reverse;
 }
@@ -39,6 +46,49 @@ body {
   overflow-wrap: anywhere;
   border-radius: 2px;
   transition: opacity 200ms linear, transform 200ms linear;
+}
+
+.chat-line.chat-highlighted {
+  background-color: var(--t-highlight-background-color, #ffe680);
+  color: var(--t-highlight-text-color, #17181b);
+}
+
+#chat[data-layout="ticker"] .chat-line {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  width: max-content;
+  max-width: none;
+  margin: 0;
+  white-space: nowrap;
+  animation: chatwerk-ticker var(--ticker-duration, 10s) linear forwards;
+}
+
+#chat[data-layout="ticker"] .chat-message {
+  flex: 0 0 auto;
+  min-width: auto;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+#chat[data-layout="ticker"] .chat-line.ticker-static {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  animation: none;
+  transform: none;
+  overflow: hidden;
+}
+
+#chat[data-layout="ticker"] .ticker-static .chat-message {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+}
+
+@keyframes chatwerk-ticker {
+  from { transform: translateX(100vw); }
+  to { transform: translateX(-100%); }
 }
 
 .chat-name {
@@ -63,6 +113,7 @@ body {
   display: inline-block;
   max-width: 3em;
   object-fit: contain;
+  margin-inline-end: var(--t-emote-spacing, 0px);
 }
 
 .chat-emote-overlay {
@@ -70,7 +121,8 @@ body {
 }
 
 .chat-pronouns,
-.chat-source-room {
+.chat-source-room,
+.chat-source-channel {
   flex: 0 0 auto;
   font-size: 0.8em;
   opacity: 0.85;
@@ -78,7 +130,9 @@ body {
 
 .chat-badges:empty,
 .chat-pronouns:empty,
-.chat-source-room:empty {
+.chat-source-room:empty,
+.chat-source-channel:empty,
+.chat-source-channel[hidden] {
   display: none;
 }
 

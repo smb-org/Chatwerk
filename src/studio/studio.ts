@@ -3,6 +3,7 @@ import {
   DEFAULTS,
   FONT_FAMILIES,
   LEGIBILITY_MINIMUM_RATIO,
+  SCHEMA_VERSION,
   THEME_FIELDS,
   THEME_UI_GROUPS,
   estimateTextLegibility,
@@ -171,7 +172,7 @@ async function loadConfig(): Promise<void> {
   }
   if (!response.ok) throw new Error("config-read");
   const snapshot = await response.json() as ConfigResponse;
-  theme = validateTheme(snapshot.config);
+  theme = hydrateConfig(snapshot.config, snapshot.channel ?? channel);
   revision = snapshot.revision;
   renderThemeControls();
   applyPreviewTheme();
@@ -188,7 +189,7 @@ function connectStudioSocket(): void {
   nextSocket.addEventListener("open", () => {
     socketAttempt = 0;
     connectionLost = false;
-    nextSocket.send(JSON.stringify({ type: "hello", schemaVersion: 1, client: "studio" }));
+    nextSocket.send(JSON.stringify({ type: "hello", schemaVersion: SCHEMA_VERSION, client: "studio" }));
     updateWarning();
   });
   nextSocket.addEventListener("message", (event) => {
@@ -332,6 +333,9 @@ function makeThemeControl(name: ThemeFieldName, definition: ThemeFieldDefinition
     return control;
   }
 
+  if (definition.ui.control === "list") return makeListEditor(name, labelText);
+  if (definition.ui.control === "channels") return makeChannelsEditor(name, labelText);
+
   if (definition.ui.control === "color") {
     const head = document.createElement("div");
     head.className = "control-head";
@@ -451,16 +455,195 @@ function makeThemeControl(name: ThemeFieldName, definition: ThemeFieldDefinition
   return control;
 }
 
+function makeListEditor(name: ThemeFieldName, labelText: string): HTMLElement {
+  const control = document.createElement("div");
+  control.className = "theme-control";
+  control.dataset.themeField = name;
+  const label = document.createElement("label");
+  label.className = "control-label";
+  label.htmlFor = `theme-${name}`;
+  label.textContent = labelText;
+  const input = document.createElement("textarea");
+  input.id = `theme-${name}`;
+  input.className = "list-control";
+  input.dataset.listField = name;
+  input.rows = 3;
+  input.value = (theme[name] as string[]).join("\n");
+  input.setAttribute("aria-label", labelText);
+  input.setAttribute("placeholder", translate(language, "oneEntryPerLine"));
+  input.addEventListener("change", () => {
+    const values = input.value.split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
+    if (!setThemeField(name, values as ThemeValues[typeof name])) {
+      input.setAttribute("aria-invalid", "true");
+      errorArea.textContent = translate(language, "invalidList");
+      return;
+    }
+    input.removeAttribute("aria-invalid");
+  });
+  control.appendChild(label);
+  control.appendChild(input);
+  return control;
+}
+
+function makeChannelsEditor(name: ThemeFieldName, labelText: string): HTMLElement {
+  const control = document.createElement("div");
+  control.className = "theme-control channel-editor";
+  control.dataset.themeField = name;
+  const label = document.createElement("span");
+  label.className = "control-label";
+  label.textContent = labelText;
+  const list = document.createElement("ol");
+  list.className = "channel-list";
+  list.setAttribute("aria-label", labelText);
+  const values = currentChannels();
+  values.forEach((value, index) => {
+    const row = document.createElement("li");
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "channel-input";
+    input.dataset.channelValue = "true";
+    input.dataset.channelFocus = `channel-${index}`;
+    input.value = value;
+    input.maxLength = 25;
+    input.pattern = "[A-Za-z0-9_]{1,25}";
+    input.autocomplete = "off";
+    input.required = true;
+    input.setAttribute("aria-label", translate(language, "channelNumber", { number: index + 1 }));
+    input.addEventListener("change", () => { setTimeout(saveChannelInputs, 0); });
+    row.appendChild(input);
+
+    const moveUp = document.createElement("button");
+    moveUp.type = "button";
+    moveUp.className = "channel-order-button";
+    moveUp.dataset.channelFocus = `up-${index}`;
+    moveUp.textContent = "↑";
+    moveUp.setAttribute("aria-label", translate(language, "moveChannelUp", { channel: value }));
+    moveUp.disabled = index === 0;
+    moveUp.addEventListener("click", () => reorderChannel(index, index - 1));
+    row.appendChild(moveUp);
+
+    const moveDown = document.createElement("button");
+    moveDown.type = "button";
+    moveDown.className = "channel-order-button";
+    moveDown.dataset.channelFocus = `down-${index}`;
+    moveDown.textContent = "↓";
+    moveDown.setAttribute("aria-label", translate(language, "moveChannelDown", { channel: value }));
+    moveDown.disabled = index === values.length - 1;
+    moveDown.addEventListener("click", () => reorderChannel(index, index + 1));
+    row.appendChild(moveDown);
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "channel-remove-button";
+    remove.dataset.channelFocus = `remove-${index}`;
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", translate(language, "removeChannel", { channel: value }));
+    remove.disabled = values.length <= 1;
+    remove.addEventListener("click", () => {
+      if (values.length <= 1) return;
+      const previous = [...theme.channels];
+      if (saveChannels(values.filter((_item, itemIndex) => itemIndex !== index)) && !sameChannels(previous, theme.channels)) {
+        refreshChannelsEditor();
+      }
+    });
+    row.appendChild(remove);
+    list.appendChild(row);
+  });
+
+  const addRow = document.createElement("div");
+  addRow.className = "channel-add-row";
+  const addInput = document.createElement("input");
+  addInput.type = "text";
+  addInput.maxLength = 25;
+  addInput.autocomplete = "off";
+  addInput.dataset.channelNew = "true";
+  addInput.dataset.channelFocus = "new";
+  addInput.setAttribute("aria-label", translate(language, "addChannel"));
+  addInput.setAttribute("placeholder", translate(language, "channelLoginPlaceholder"));
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "channel-add-button";
+  add.dataset.channelAdd = "true";
+  add.dataset.channelFocus = "add";
+  add.textContent = translate(language, "addChannel");
+  add.disabled = values.length >= 5;
+  add.addEventListener("click", () => {
+    const value = addInput.value.trim();
+    const next = [...currentChannels(), value];
+    if (!value || !saveChannels(next)) {
+      addInput.setAttribute("aria-invalid", "true");
+      errorArea.textContent = translate(language, "invalidChannel");
+      return;
+    }
+    refreshChannelsEditor();
+  });
+  addInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      add.click();
+    }
+  });
+  addRow.appendChild(addInput);
+  addRow.appendChild(add);
+  control.appendChild(label);
+  control.appendChild(list);
+  control.appendChild(addRow);
+  return control;
+
+  function saveChannelInputs(): void {
+    const inputs = [...list.querySelectorAll<HTMLInputElement>("[data-channel-value]")];
+    const next = inputs.map((input) => input.value.trim());
+    const seen = new Set<string>();
+    for (const input of inputs) {
+      const normalized = input.value.trim().toLowerCase();
+      const duplicate = seen.has(normalized);
+      if (!input.checkValidity() || duplicate) input.setAttribute("aria-invalid", "true");
+      else input.removeAttribute("aria-invalid");
+      seen.add(normalized);
+    }
+    const previous = [...theme.channels];
+    if (!saveChannels(next)) {
+      list.querySelector<HTMLInputElement>("[data-channel-value][aria-invalid='true']")?.focus();
+      errorArea.textContent = translate(language, "invalidChannel");
+      return;
+    }
+    if (!sameChannels(previous, theme.channels)) refreshChannelsEditor();
+  }
+
+  function reorderChannel(from: number, to: number): void {
+    if (to < 0 || to >= values.length) return;
+    const next = [...values];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved!);
+    const previous = [...theme.channels];
+    if (saveChannels(next) && !sameChannels(previous, theme.channels)) refreshChannelsEditor();
+  }
+}
+
+function currentChannels(): string[] {
+  return theme.channels.length > 0 ? [...theme.channels] : channel ? [channel] : [];
+}
+
+function saveChannels(channels: string[]): boolean {
+  if (sameChannels(theme.channels, channels)) return true;
+  const valid = setThemeField("channels", channels);
+  if (!valid) return false;
+  errorArea.textContent = "";
+  return true;
+}
+
 function fieldOptions(name: ThemeFieldName): string[] {
   if (name === "fontFamily") return [...FONT_FAMILIES];
   if (name === "nameColorMode") return ["tag", "text"];
   if (name === "lineOrder") return ["name-first", "message-first"];
   if (name === "motion") return ["fade", "none"];
+  if (name === "layout") return ["stack", "ticker"];
   return [];
 }
 
 function valueLabel(name: ThemeFieldName, value: string): string {
-  const key = name === "nameColorMode" ? (value === "tag" ? "valueNameTag" : "valueNameText")
+  const key = name === "layout" ? (value === "ticker" ? "valueTicker" : "valueStack")
+    : name === "nameColorMode" ? (value === "tag" ? "valueNameTag" : "valueNameText")
     : name === "lineOrder" ? (value === "name-first" ? "valueNameFirst" : "valueMessageFirst")
       : value === "fade" ? "valueFade" : "valueNone";
   return translate(language, key);
@@ -478,15 +661,16 @@ function formattedRange(name: ThemeFieldName, value: number, unit: string): stri
   if (unit === "ratio") return translate(language, "rangeValue", { value: Math.round(value * 100), unit: translate(language, "percentUnit") });
   if (unit === "ms") return translate(language, "rangeValue", { value: Math.round(value / 1_000), unit: translate(language, "secondsUnit") });
   if (unit === "px") return translate(language, "rangeValue", { value, unit: translate(language, "pixelsUnit") });
+  if (unit === "px/s") return translate(language, "rangeValue", { value, unit: translate(language, "pixelsPerSecondUnit") });
   if (name === "fontWeight") return String(value);
   return String(value);
 }
 
-function setThemeField<K extends ThemeFieldName>(name: K, value: ThemeValues[K]): void {
+function setThemeField<K extends ThemeFieldName>(name: K, value: ThemeValues[K]): boolean {
   try {
     theme = validateTheme({ ...theme, [name]: value });
   } catch {
-    return;
+    return false;
   }
   pendingPatch = { ...pendingPatch, [name]: value };
   lastEditAt = Date.now();
@@ -496,6 +680,7 @@ function setThemeField<K extends ThemeFieldName>(name: K, value: ThemeValues[K])
   applyPreviewTheme();
   updateWarning();
   scheduleSave(200);
+  return true;
 }
 
 function scheduleSave(delay: number): void {
@@ -536,13 +721,15 @@ async function sendQueuedChanges(): Promise<void> {
     const saved = await response.json() as { revision: number; config: unknown };
     revision = saved.revision;
     if (Object.keys(pendingPatch).length > 0) {
-      theme = validateTheme({ ...saved.config as object, ...pendingPatch });
-      syncControls();
+      const previousChannels = [...theme.channels];
+      theme = hydrateConfig({ ...saved.config as object, ...pendingPatch }, channel);
+      syncControls(previousChannels);
       applyPreviewTheme();
       scheduleSave(Math.max(0, 200 - (Date.now() - lastEditAt)));
     } else {
-      theme = validateTheme(saved.config);
-      syncControls();
+      const previousChannels = [...theme.channels];
+      theme = hydrateConfig(saved.config, channel);
+      syncControls(previousChannels);
       applyPreviewTheme();
       setStatus(conflictNotice ? "saveConflict" : "savedRevision", { revision }, true);
       conflictNotice = false;
@@ -580,15 +767,16 @@ async function recoverConflict(sentPatch: Partial<ThemeValues>): Promise<void> {
   if (!response.ok) throw new Error("conflict-reread");
   const fresh = await response.json() as ConfigResponse;
   revision = fresh.revision;
-  theme = validateTheme({ ...fresh.config as object, ...pendingPatch });
-  syncControls();
+  const previousChannels = [...theme.channels];
+  theme = hydrateConfig({ ...fresh.config as object, ...pendingPatch }, fresh.channel ?? channel);
+  syncControls(previousChannels);
   applyPreviewTheme();
   conflictNotice = true;
   setStatus("saveConflict", {}, true);
   scheduleSave(0);
 }
 
-function syncControls(): void {
+function syncControls(previousChannels: string[]): void {
   for (const name of Object.keys(THEME_FIELDS) as ThemeFieldName[]) {
     const value = theme[name];
     const range = document.querySelector<HTMLInputElement>(`#theme-${name}[type=range]`);
@@ -608,11 +796,47 @@ function syncControls(): void {
       radio.checked = radio.value === String(value);
       radio.tabIndex = radio.checked ? 0 : -1;
     });
+    const list = document.querySelector<HTMLTextAreaElement>(`textarea[data-list-field="${name}"]`);
+    if (list && Array.isArray(value)) list.value = value.join("\n");
   }
+  if (!sameChannels(previousChannels, theme.channels)) refreshChannelsEditor();
+}
+
+function refreshChannelsEditor(): void {
+  const current = document.querySelector<HTMLElement>('[data-theme-field="channels"]');
+  if (!current) return;
+  const active = document.activeElement;
+  const focusKey = active instanceof HTMLElement && current.contains(active) ? active.dataset.channelFocus : undefined;
+  const addInput = current.querySelector<HTMLInputElement>("[data-channel-new]");
+  const addValue = addInput?.value ?? "";
+  const selection = active instanceof HTMLInputElement && focusKey ? [active.selectionStart, active.selectionEnd] as const : undefined;
+  const replacement = makeChannelsEditor("channels", translate(language, "fieldChannels"));
+  const nextAddInput = replacement.querySelector<HTMLInputElement>("[data-channel-new]");
+  if (nextAddInput) nextAddInput.value = addValue;
+  current.replaceWith(replacement);
+  if (focusKey) {
+    let nextFocus = replacement.querySelector<HTMLElement>(`[data-channel-focus="${focusKey}"]`);
+    if (!nextFocus && focusKey.startsWith("remove-")) {
+      const lastIndex = replacement.querySelectorAll("[data-channel-value]").length - 1;
+      const removedIndex = Number(focusKey.slice("remove-".length));
+      const neighborIndex = Math.min(removedIndex, lastIndex);
+      nextFocus = replacement.querySelector<HTMLElement>(`[data-channel-focus="remove-${neighborIndex}"]`);
+    }
+    nextFocus ??= nextAddInput;
+    nextFocus?.focus();
+    if (selection && nextFocus instanceof HTMLInputElement) nextFocus.setSelectionRange(selection[0], selection[1]);
+  }
+}
+
+function sameChannels(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((channel, index) => channel === right[index]);
 }
 
 function applyPreviewTheme(): void {
   preview.contentWindow?.postMessage({ type: "chatwerk:studio-theme", theme }, "*");
+  if (document.querySelector<HTMLInputElement>("#live-chat")?.checked) {
+    postPreviewMessage({ type: "chatwerk:studio-live", enabled: true, channels: currentChannels() });
+  }
 }
 
 function postPreviewMessage(message: Record<string, unknown>): void {
@@ -728,7 +952,7 @@ function wireStaticControls(): void {
   });
   $("#live-chat").addEventListener("change", (event) => {
     const enabled = (event.currentTarget as HTMLInputElement).checked;
-    postPreviewMessage({ type: "chatwerk:studio-live", enabled, channel });
+    postPreviewMessage({ type: "chatwerk:studio-live", enabled, channels: currentChannels(), channel });
     document.querySelectorAll<HTMLButtonElement>(".scenario-button").forEach((button) => { button.disabled = enabled; });
     $(".sample-label").textContent = translate(language, enabled ? "liveChat" : "sampleChat");
     if (!enabled) $("#rehearse-quiet").setAttribute("aria-pressed", "true");
@@ -1007,6 +1231,15 @@ function updatePreviewScale(): void {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hydrateConfig(value: unknown, legacyChannel: string): ThemeConfig {
+  const config = isRecord(value) ? value : {};
+  const configuredChannels = Array.isArray(config.channels) ? config.channels : [];
+  const channels = configuredChannels.length > 0
+    ? configuredChannels
+    : legacyChannel ? [legacyChannel] : [];
+  return validateTheme({ ...config, channels });
 }
 
 function safeCount(value: unknown): number {

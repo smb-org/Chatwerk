@@ -104,6 +104,23 @@ describe("overlay config API", () => {
     } });
   });
 
+  it("validates channel lists on the server before storing them", async () => {
+    const overlay = await seedOverlay(env.DB);
+    const url = `https://chatwerk.test/api/overlays/${overlay.overlayId}/config`;
+    const invalid = await handleApiRequest(await ownerRequest(overlay.ownerId, url, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ baseRevision: 0, patch: { channels: ["valid", "bad channel"] } }),
+    }), apiEnv());
+    const valid = await handleApiRequest(await ownerRequest(overlay.ownerId, url, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ baseRevision: 0, patch: { channels: ["first", "second"] } }),
+    }), apiEnv());
+
+    expect(invalid?.status).toBe(400);
+    expect(valid?.status).toBe(200);
+    expect(await valid?.json()).toMatchObject({ config: { channels: ["first", "second"] } });
+  });
+
   it("rejects declared and streamed request bodies above 64 KiB before JSON parsing", async () => {
     const overlay = await seedOverlay(env.DB);
     const url = `https://chatwerk.test/api/overlays/${overlay.overlayId}/config`;

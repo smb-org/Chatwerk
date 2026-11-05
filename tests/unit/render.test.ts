@@ -131,6 +131,124 @@ describe("text renderer", () => {
     renderedRenderer.dispose();
   });
 
+  it("deduplicates source-id messages across rooms while applying clear commands per room", () => {
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, scheduler: (callback) => callback() });
+    renderer.handle(parseIrcLine("@id=one;room-id=10;source-id=shared :viewer!viewer@host PRIVMSG #one :same")!);
+    renderer.handle(parseIrcLine("@id=two;room-id=20;source-id=shared :viewer!viewer@host PRIVMSG #two :same")!);
+    expect(root.querySelectorAll(".chat-line")).toHaveLength(1);
+
+    renderer.handle(parseIrcLine("@room-id=20;target-msg-id=two :tmi.twitch.tv CLEARMSG #two :same")!);
+    expect(root.querySelectorAll(".chat-line")).toHaveLength(1);
+    renderer.handle(parseIrcLine("@room-id=10;target-msg-id=one :tmi.twitch.tv CLEARMSG #one :same")!);
+    expect(root.querySelectorAll(".chat-line")).toHaveLength(0);
+    renderer.dispose();
+  });
+
+  it("filters queued and rendered messages and styles observed power-up tags", () => {
+    let flush: (() => void) | undefined;
+    const renderer = createChatRenderer({
+      root,
+      theme: {
+        ...DEFAULTS,
+        hideNumbers: true,
+        filterWords: ["blocked"],
+        layout: "ticker",
+        channels: ["main", "second"],
+        gigantifiedScale: 3,
+      },
+      scheduler: (callback) => { flush = callback; return 1; },
+      cancelScheduled: () => { flush = undefined; },
+    });
+    renderer.handle(parseIrcLine("@id=numbers;room-id=10 :viewer!viewer@host PRIVMSG #main :12345")!);
+    renderer.handle(parseIrcLine("@id=filtered;room-id=10 :viewer!viewer@host PRIVMSG #main :blocked")!);
+    renderer.handle(parseIrcLine("@id=power;room-id=10;msg-id=power-up-message;msg-param-power-up-type=gigantify_an_emote;emotes=25:0-4 :viewer!viewer@host PRIVMSG #main :Kappa")!);
+    flush?.();
+    expect(root.dataset.layout).toBe("ticker");
+    expect(root.querySelectorAll(".chat-line")).toHaveLength(1);
+    expect(root.querySelector(".chat-line")?.classList.contains("chat-gigantified")).toBe(true);
+    expect(root.querySelector<HTMLImageElement>(".chat-emote")?.getAttribute("height")).toBe("54");
+    expect(root.querySelector(".chat-source-channel")?.textContent).toBe("#main");
+    renderer.dispose();
+  });
+
+  it("styles highlighted messages and leaves animated power-ups at normal size", () => {
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, highlightBackgroundColor: "#123456", highlightTextColor: "#abcdef" },
+      scheduler: (callback) => callback(),
+    });
+    renderer.handle(parseIrcLine("@id=highlight;msg-id=highlighted-message :viewer!viewer@host PRIVMSG #room :highlighted")!);
+    renderer.handle(parseIrcLine("@id=animated;msg-id=power-up-message;msg-param-power-up-type=animated_emote;emotes=25:0-4 :viewer!viewer@host PRIVMSG #room :Kappa")!);
+    const highlighted = root.querySelector<HTMLElement>(".chat-highlighted");
+    const animated = root.querySelector<HTMLImageElement>('img[alt="Kappa"]')?.closest<HTMLElement>(".chat-line");
+    expect(highlighted?.classList.contains("chat-highlighted")).toBe(true);
+    expect(highlighted?.style.getPropertyValue("background-color")).toBe("var(--t-highlight-background-color)");
+    expect(root.style.getPropertyValue("--t-highlight-background-color")).toBe("#123456");
+    expect(root.style.getPropertyValue("--t-highlight-text-color")).toBe("#abcdef");
+    expect(highlighted?.style.getPropertyValue("--t-highlight-background-color")).toBe("");
+    expect(highlighted?.style.getPropertyValue("--t-highlight-text-color")).toBe("");
+    expect(animated?.classList.contains("chat-gigantified")).toBe(false);
+    expect(animated?.classList.contains("chat-highlighted")).toBe(false);
+    expect(animated?.querySelector(".chat-emote")?.getAttribute("height")).toBe(String(DEFAULTS.fontSize * DEFAULTS.emoteScale));
+    renderer.dispose();
+  });
+
+  it("keeps only the latest static ticker line when theme motion is none", () => {
+    vi.useFakeTimers();
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, layout: "ticker", motion: "none", lifetime: 1_000 },
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=old;room-id=10 :viewer!viewer@host PRIVMSG #room :old line")!);
+    renderer.handle(parseIrcLine("@id=new;room-id=10 :viewer!viewer@host PRIVMSG #room :latest line")!);
+    expect(root.querySelectorAll(".chat-line")).toHaveLength(1);
+    expect(root.textContent).toContain("latest line");
+    expect(root.textContent).not.toContain("old line");
+    expect(root.querySelector(".ticker-static")).not.toBeNull();
+    vi.advanceTimersByTime(200_000);
+    expect(root.textContent).toContain("latest line");
+    renderer.dispose();
+  });
+
+  it("skips expired queued ticker entries before showing the next live message", () => {
+    vi.useFakeTimers();
+    let flush: (() => void) | undefined;
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, layout: "ticker", lifetime: 2_000 },
+      scheduler: (callback) => { flush = callback; return 1; },
+      cancelScheduled: () => { flush = undefined; },
+    });
+    renderer.handle(parseIrcLine("@id=old;room-id=10 :viewer!viewer@host PRIVMSG #room :expired queued item")!);
+    vi.advanceTimersByTime(2_001);
+    renderer.handle(parseIrcLine("@id=current;room-id=10 :viewer!viewer@host PRIVMSG #room :current queued item")!);
+    flush?.();
+
+    expect(root.textContent).toContain("current queued item");
+    expect(root.textContent).not.toContain("expired queued item");
+    renderer.dispose();
+  });
+
+  it("moderates ticker messages while they are queued", () => {
+    let flush: (() => void) | undefined;
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, layout: "ticker" },
+      scheduler: (callback) => { flush = callback; return 1; },
+      cancelScheduled: () => { flush = undefined; },
+    });
+    renderer.handle(parseIrcLine("@id=active;room-id=10;login=alice :alice!alice@host PRIVMSG #room :active")!);
+    renderer.handle(parseIrcLine("@id=queued;room-id=10;login=alice :alice!alice@host PRIVMSG #room :queued")!);
+    flush?.();
+    renderer.handle(parseIrcLine("@room-id=10;target-msg-id=queued :tmi.twitch.tv CLEARMSG #room :queued")!);
+    root.querySelector(".ticker-line")?.dispatchEvent(new dom.window.Event("animationend"));
+    flush?.();
+    expect(root.textContent).not.toContain("queued");
+    expect(root.children).toHaveLength(0);
+    renderer.dispose();
+  });
+
   it("uses a timer for the default batch and drops stale messages after a delayed flush", () => {
     vi.useFakeTimers();
     const renderer = createChatRenderer({ root, theme: { ...DEFAULTS, lifetime: 1_000 } });
