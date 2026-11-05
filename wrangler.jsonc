@@ -12,7 +12,8 @@
   "assets": {
     "binding": "ASSETS",
     "directory": "./dist/client",
-    "run_worker_first": ["/api/*", "/auth/*", "/health"]
+    "html_handling": "none",
+    "run_worker_first": ["/", "/api/*", "/auth/*", "/health", "/login*", "/overlay*", "/studio*", "/export*"]
   },
   "durable_objects": {
     "bindings": [{ "name": "OVERLAY", "class_name": "OverlayObject" }]
@@ -27,6 +28,6 @@
     }
   ],
   "dev": {
-    "port": 17173
+    "port": 17473
   }
 }

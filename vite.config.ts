@@ -10,7 +10,9 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        index: resolve(import.meta.dirname, "src/studio/index.html"),
+        login: resolve(import.meta.dirname, "src/studio/login.html"),
+        studio: resolve(import.meta.dirname, "src/studio/studio.html"),
+        export: resolve(import.meta.dirname, "src/studio/export.html"),
         overlay: resolve(import.meta.dirname, "src/studio/overlay.html"),
       },
     },

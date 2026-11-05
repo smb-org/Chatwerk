@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULTS,
+  LEGIBILITY_MINIMUM_RATIO,
+  LEGIBILITY_OUTLINE_OPACITY_THRESHOLD,
   THEME_FIELDS,
   THEME_UI_GROUPS,
   cssVariableName,
@@ -61,6 +63,12 @@ describe("theme schema", () => {
     expect(effectiveOutline(theme)).toEqual({ width: 1, color: "#ffffff" });
     const estimate = estimateTextLegibility("#ffffff", "#000000", 0.5);
     expect(estimate).toMatchObject({ againstBlack: true, againstWhite: false, meetsOnBoth: false });
+  });
+
+  it("uses the shared minimum contrast and outline opacity thresholds", () => {
+    expect(LEGIBILITY_MINIMUM_RATIO).toBe(4.5);
+    expect(LEGIBILITY_OUTLINE_OPACITY_THRESHOLD).toBe(0.35);
+    expect(estimateTextLegibility("#ffffff", "#000000", 0.35).meetsOnBoth).toBe(false);
   });
 
   it("makes unreadable tag colors readable and preserves colors that already pass", () => {

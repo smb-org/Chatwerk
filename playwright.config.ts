@@ -1,9 +1,10 @@
 import { defineConfig } from "@playwright/test";
 import { TEST_SESSION_KEY } from "./tests/e2e/test-session";
-const port = Number(process.env.PLAYWRIGHT_PORT ?? 17174);
+const port = Number(process.env.PLAYWRIGHT_PORT ?? 17474);
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  workers: 1,
   use: {
     baseURL: `http://127.0.0.1:${port}`,
   },
