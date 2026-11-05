@@ -17,6 +17,12 @@ import {
 import { currentLanguage, saveLanguage, translate, type Language, type TranslationKey } from "../shared/i18n";
 import { applyTranslations } from "./i18n-dom";
 import { initialLoadRetryDelayMs } from "./retry";
+import {
+  DEFAULT_PREVIEW_SOURCE_SIZE,
+  calculatePreviewScale,
+  isValidPreviewSourceSize,
+  type PreviewSourceSize,
+} from "./preview-sizing";
 
 interface OwnedOverlay {
   id: string;
@@ -65,6 +71,12 @@ const preview = $("#studio-preview") as HTMLIFrameElement;
 const previewWindow = $("#preview-window") as HTMLElement;
 const previewFrameWrap = $("#preview-frame-wrap") as HTMLElement;
 const previewScale = $("#preview-scale") as HTMLElement;
+const previewSizePreset = $("#preview-size-preset") as HTMLSelectElement;
+const previewCustomSize = $("#preview-custom-size") as HTMLElement;
+const previewCustomWidth = $("#preview-custom-width") as HTMLInputElement;
+const previewCustomHeight = $("#preview-custom-height") as HTMLInputElement;
+const previewSizeError = $("#preview-size-error") as HTMLElement;
+const obsSizeHint = $("#obs-size-hint") as HTMLElement;
 const controlsRoot = $("#theme-controls") as HTMLElement;
 const statusVisible = $("#status-visible") as HTMLElement;
 const statusAnnouncer = $("#status-announcer") as HTMLElement;
@@ -92,6 +104,7 @@ let language: Language = currentLanguage();
 let overlay: OwnedOverlay | undefined;
 let ownedOverlays: OwnedOverlay[] = [];
 let theme: ThemeConfig = DEFAULTS;
+let previewSourceSize: PreviewSourceSize = DEFAULT_PREVIEW_SOURCE_SIZE;
 let revision = 0;
 let channel = "";
 let connectedOutputs = 0;
@@ -152,6 +165,7 @@ async function initialize(): Promise<void> {
       ownedOverlays.find((item) => item.id === storedOverlayId) ??
       ownedOverlays.find((item) => item.name === "Main") ?? ownedOverlays[0];
     if (!overlay) throw new Error("overlay-missing");
+    loadPreviewSourceSize(overlay.id);
     try { localStorage.setItem("chatwerk-overlay-id", overlay.id); } catch { /* The server's first overlay remains selected for this page. */ }
     channel = overlay.channel;
     updateActiveOverlayLabel();
@@ -931,6 +945,7 @@ function applyPageLanguage(): void {
   }
   updateWarning();
   updateTestButton();
+  updateSourceSizeHint();
   renderThemeControls();
   updatePreviewScale();
 }
@@ -955,6 +970,29 @@ function wireStaticControls(): void {
   const resizeObserver = new ResizeObserver(updatePreviewScale);
   resizeObserver.observe(previewWindow);
   window.addEventListener("resize", updateHeaderResponsive);
+
+  previewSizePreset.addEventListener("change", () => {
+    previewSizeError.hidden = true;
+    if (previewSizePreset.value === "custom") {
+      previewCustomWidth.value = String(previewSourceSize.width);
+      previewCustomHeight.value = String(previewSourceSize.height);
+      previewCustomSize.hidden = false;
+      previewCustomWidth.focus();
+      return;
+    }
+    previewCustomSize.hidden = true;
+    const [width, height] = previewSizePreset.value.split("x").map(Number);
+    applyPreviewSourceSize({ width: width!, height: height! }, true);
+  });
+  $("#preview-custom-apply").addEventListener("click", () => {
+    const candidate = { width: previewCustomWidth.valueAsNumber, height: previewCustomHeight.valueAsNumber };
+    if (!previewCustomWidth.checkValidity() || !previewCustomHeight.checkValidity() || !isValidPreviewSourceSize(candidate)) {
+      previewSizeError.hidden = false;
+      return;
+    }
+    applyPreviewSourceSize(candidate, true);
+    previewSizeError.hidden = true;
+  });
 
   $("#copy-link").addEventListener("click", () => void copyOverlayLink());
   $("#language-en").addEventListener("click", () => setLanguage("en"));
@@ -1620,6 +1658,7 @@ async function selectOverlay(next: OwnedOverlay): Promise<void> {
   lastAnnouncedCount = undefined;
   updateClientCount();
   overlay = next;
+  loadPreviewSourceSize(next.id);
   channel = next.channel;
   clearUndoOffer();
   updateActiveOverlayLabel();
@@ -1763,13 +1802,61 @@ function setScaleMode(enabled: boolean): void {
 
 function updatePreviewScale(): void {
   if (!previewWindow || !previewFrameWrap || !previewScale) return;
-  const availableWidth = Math.max(0, previewWindow.clientWidth - 40);
-  const availableHeight = Math.max(0, previewWindow.clientHeight - 40);
-  const scale = oneToOne ? 1 : Math.max(0.05, Math.min(availableWidth / 1920, availableHeight / 1080));
-  previewFrameWrap.style.width = `${1920 * scale}px`;
-  previewFrameWrap.style.height = `${1080 * scale}px`;
+  const scale = oneToOne ? 1 : Math.max(0.05, calculatePreviewScale(
+    previewSourceSize,
+    previewWindow.clientWidth,
+    previewWindow.clientHeight,
+    20,
+  ));
+  preview.width = String(previewSourceSize.width);
+  preview.height = String(previewSourceSize.height);
+  preview.style.width = `${previewSourceSize.width}px`;
+  preview.style.height = `${previewSourceSize.height}px`;
+  previewFrameWrap.style.width = `${previewSourceSize.width * scale}px`;
+  previewFrameWrap.style.height = `${previewSourceSize.height * scale}px`;
   preview.style.transform = `scale(${scale})`;
   previewScale.textContent = translate(language, "previewScale", { percent: Math.round(scale * 100) });
+}
+
+function loadPreviewSourceSize(overlayId: string): void {
+  try {
+    const stored = localStorage.getItem(`chatwerk-source-size:${overlayId}`);
+    const parsed: unknown = stored ? JSON.parse(stored) as unknown : DEFAULT_PREVIEW_SOURCE_SIZE;
+    previewSourceSize = isValidPreviewSourceSize(parsed) ? parsed : DEFAULT_PREVIEW_SOURCE_SIZE;
+  } catch {
+    previewSourceSize = DEFAULT_PREVIEW_SOURCE_SIZE;
+  }
+  previewSizeError.hidden = true;
+  updatePreviewSizeControl();
+  updateSourceSizeHint();
+  updatePreviewScale();
+}
+
+function applyPreviewSourceSize(size: PreviewSourceSize, persist: boolean): void {
+  previewSourceSize = size;
+  previewSizeError.hidden = true;
+  updatePreviewSizeControl();
+  updateSourceSizeHint();
+  updatePreviewScale();
+  if (persist && overlay) {
+    try { localStorage.setItem(`chatwerk-source-size:${overlay.id}`, JSON.stringify(size)); } catch { /* This setting is a local Studio convenience. */ }
+  }
+}
+
+function updatePreviewSizeControl(): void {
+  const preset = `${previewSourceSize.width}x${previewSourceSize.height}`;
+  const isPreset = ["400x600", "300x900", "1920x1080"].includes(preset);
+  previewSizePreset.value = isPreset ? preset : "custom";
+  previewCustomWidth.value = String(previewSourceSize.width);
+  previewCustomHeight.value = String(previewSourceSize.height);
+  previewCustomSize.hidden = previewSizePreset.value !== "custom";
+}
+
+function updateSourceSizeHint(): void {
+  obsSizeHint.textContent = translate(language, "obsSourceSizeHint", {
+    width: previewSourceSize.width,
+    height: previewSourceSize.height,
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
-test("ticker flood and a very long message stay clipped to a 1920 by 1080 viewport", async ({ page }) => {
-  await page.setViewportSize({ width: 1920, height: 1080 });
+test("ticker flood enters and moves through a 400 by 600 browser source", async ({ page }) => {
+  await page.setViewportSize({ width: 400, height: 600 });
   const messages = Array.from({ length: 105 }, (_, index) =>
     `@id=ticker-${index};room-id=10;display-name=Viewer :viewer!viewer@host PRIVMSG #ticker :${index === 49 ? "x".repeat(10_000) : `message ${index}`}`);
   await page.routeWebSocket("wss://irc-ws.chat.twitch.tv/**", (socket) => {
@@ -14,8 +14,8 @@ test("ticker flood and a very long message stay clipped to a 1920 by 1080 viewpo
     const frame = document.createElement("iframe");
     frame.id = "ticker-preview";
     frame.setAttribute("sandbox", "allow-scripts");
-    frame.width = "1920";
-    frame.height = "1080";
+    frame.width = "400";
+    frame.height = "600";
     frame.style.border = "0";
     frame.style.position = "fixed";
     frame.style.inset = "0";
@@ -35,13 +35,33 @@ test("ticker flood and a very long message stay clipped to a 1920 by 1080 viewpo
   });
   await expect(frame.locator(".chat-line")).toHaveCount(1);
   await expect(frame.locator(".chat-line")).toContainText("message 5");
-  await expect.poll(() => frame.locator("#chat").evaluate((chat) => chat.ownerDocument.documentElement.scrollWidth)).toBe(1920);
+  await expect.poll(() => frame.locator("#chat").evaluate((chat) => chat.ownerDocument.documentElement.scrollWidth)).toBe(400);
   const dimensions = await frame.locator(".chat-line").evaluate((line) => {
     const chat = line.parentElement!.getBoundingClientRect();
     const documentWidth = line.ownerDocument.documentElement.scrollWidth;
-    return { chatWidth: chat.width, documentWidth, layout: line.parentElement!.getAttribute("data-layout") };
+    const animation = line.getAnimations()[0];
+    if (animation) animation.currentTime = 0;
+    const startX = line.getBoundingClientRect().left;
+    if (animation) animation.currentTime = 200;
+    const progressedX = line.getBoundingClientRect().left;
+    return {
+      chatWidth: chat.width,
+      documentWidth,
+      layout: line.parentElement!.getAttribute("data-layout"),
+      duration: Number.parseFloat(getComputedStyle(line).animationDuration),
+      lineWidth: line.getBoundingClientRect().width,
+      startX,
+      progressedX,
+      viewportWidth: line.ownerDocument.defaultView!.innerWidth,
+    };
   });
-  expect(dimensions).toEqual({ chatWidth: 1920, documentWidth: 1920, layout: "ticker" });
+  expect(dimensions.chatWidth).toBe(400);
+  expect(dimensions.documentWidth).toBe(400);
+  expect(dimensions.layout).toBe("ticker");
+  expect(dimensions.viewportWidth).toBe(400);
+  expect(dimensions.startX).toBeCloseTo(400, 0);
+  expect(dimensions.progressedX).toBeLessThan(dimensions.startX);
+  expect(dimensions.duration).toBeCloseTo((400 + dimensions.lineWidth) / 400, 1);
 
   await page.waitForTimeout(150);
   const before = await frame.locator(".chat-line").boundingBox();
