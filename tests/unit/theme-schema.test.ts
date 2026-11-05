@@ -10,10 +10,12 @@ import {
   effectiveOutline,
   estimateTextLegibility,
   ensureTagColorContrast,
+  ensureReadableNameColor,
   getShareableThemeKeys,
   migrate,
   themeCssVariables,
   validateTheme,
+  validateShareableTheme,
 } from "../../src/shared/theme";
 import { isAllowedImageUrl } from "../../src/shared/hosts";
 
@@ -45,9 +47,14 @@ describe("theme schema", () => {
     expect(messageFields.map((field) => field.ui.label)).toEqual([
       "Lifetime", "Never expire", "Maximum lines", "Maximum chat height", "Line padding", "Text outline", "Motion",
       "Highlight background", "Highlight text", "Emote size", "Gigantified emote size", "Show badges", "Show pronouns",
-      "Recent message backlog",
+      "Recent message backlog", "Name on own line", "Hide names", "Readable names",
     ]);
     expect(new Set(messageFields.map((field) => field.ui.order)).size).toBe(messageFields.length);
+    const textFields = Object.values(THEME_FIELDS).filter((field) => field.ui.group === "Text");
+    expect(new Set(textFields.map((field) => field.ui.order)).size).toBe(textFields.length);
+    expect(textFields.sort((left, right) => left.ui.order - right.ui.order).map((field) => field.ui.label)).toEqual([
+      "Font", "Text size", "Weight", "Text shadow", "Small caps",
+    ]);
   });
 
   it("migrates idempotently and ignores unknown fields", () => {
@@ -94,10 +101,25 @@ describe("theme schema", () => {
     expect(ensureTagColorContrast("#00ff00", darkTheme)).toBe("#00ff00");
   });
 
+  it("adjusts name colors to 4.5:1 by lightness, and leaves invalid colors untouched", () => {
+    const whiteOnWhite = ensureReadableNameColor("#ffffff", "#ffffff");
+    const blackOnBlack = ensureReadableNameColor("#000000", "#000000");
+    expect(whiteOnWhite).not.toBe("#ffffff");
+    expect(estimateTextLegibility(whiteOnWhite, "#ffffff", 1).contrastOnWhite).toBeGreaterThanOrEqual(4.5);
+    expect(blackOnBlack).not.toBe("#000000");
+    expect(estimateTextLegibility(blackOnBlack, "#000000", 1).contrastOnBlack).toBeGreaterThanOrEqual(4.5);
+    expect(ensureReadableNameColor("not-a-color", "#000000")).toBe("not-a-color");
+    const translucentFallback = ensureReadableNameColor("#00000001", "#000000");
+    expect(translucentFallback).toMatch(/^#[0-9a-f]{6}$/iu);
+    expect(estimateTextLegibility(translucentFallback, "#000000", 1).contrastOnBlack).toBeGreaterThanOrEqual(4.5);
+    expect(ensureReadableNameColor("#a020f0", "#000000")).not.toBe("#a020f0");
+  });
+
   it("accepts images only from the documented HTTPS hosts", () => {
     expect(isAllowedImageUrl("https://cdn.7tv.app/emote/1x.webp")).toBe(true);
     expect(isAllowedImageUrl("https://evilcdn.7tv.app/emote/1x.webp")).toBe(false);
     expect(isAllowedImageUrl("http://static-cdn.jtvnw.net/badge.png")).toBe(false);
+    expect(isAllowedImageUrl("https://cdn.chatterinohomies.com/badges/example/36.webp")).toBe(true);
   });
 
   it("validates emote scale and chat decoration toggles", () => {
@@ -238,5 +260,36 @@ describe("theme schema", () => {
     expect(() => validateTheme({ panelRadius: 33 })).toThrow();
     expect(() => validateTheme({ panelPadding: 33 })).toThrow();
     expect(() => validateTheme({ linePadding: 17 })).toThrow();
+  });
+
+  it("adds the ChatIS display fields with compatible defaults and shareable values", () => {
+    expect(SCHEMA_VERSION).toBe(1);
+    expect(DEFAULTS).toMatchObject({
+      textShadow: 0,
+      smallCaps: false,
+      nameOnOwnLine: false,
+      hideNames: false,
+      badgesHomies: false,
+      readableNames: false,
+    });
+    expect(THEME_FIELDS.textShadow.range).toMatchObject({ min: 0, max: 8, step: 1, unit: "px" });
+    expect(() => validateTheme({ textShadow: -1 })).toThrow();
+    expect(() => validateTheme({ textShadow: 8.5 })).toThrow();
+    expect(() => validateTheme({ textShadow: 9 })).toThrow();
+    const oldConfig = validateTheme({ schemaVersion: 1, fontSize: 20 });
+    expect(oldConfig).toMatchObject({
+      schemaVersion: 1,
+      textShadow: 0,
+      smallCaps: false,
+      nameOnOwnLine: false,
+      hideNames: false,
+      badgesHomies: false,
+      readableNames: false,
+    });
+    for (const key of ["textShadow", "smallCaps", "nameOnOwnLine", "hideNames", "badgesHomies", "readableNames"] as const) {
+      expect(getShareableThemeKeys()).toContain(key);
+      expect(validateShareableTheme({ [key]: DEFAULTS[key] })).toHaveProperty(key, DEFAULTS[key]);
+    }
+    expect(THEME_FIELDS.badgesHomies.defaultValue).toBe(false);
   });
 });

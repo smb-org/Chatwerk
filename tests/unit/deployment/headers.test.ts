@@ -133,8 +133,10 @@ describe("deployment headers", () => {
     for (const origin of ALLOWED_CONNECT_ORIGINS) expect(studioConnect).toContain(origin);
     for (const host of ALLOWED_IMAGE_HOSTS) expect(studioImages).toContain(`https://${host}`);
     expect(ALLOWED_CONNECT_ORIGINS).toContain("https://api.chatterino.com");
+    expect(ALLOWED_CONNECT_ORIGINS).toContain("https://chatterinohomies.com");
     expect(ALLOWED_CONNECT_ORIGINS).toContain("https://recent-messages.robotty.de");
     expect(ALLOWED_IMAGE_HOSTS).toContain("fourtf.com");
+    expect(ALLOWED_IMAGE_HOSTS).toContain("cdn.chatterinohomies.com");
     for (const path of ["/", "/login", "/export.html"]) {
       const policy = headersForPath(path).filter((line) => line.startsWith("Content-Security-Policy:")).join(" ");
       for (const origin of ALLOWED_CONNECT_ORIGINS) expect(policy).not.toContain(origin);

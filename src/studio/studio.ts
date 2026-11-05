@@ -980,6 +980,7 @@ function syncControlAvailability(): void {
     ["neverFade", theme.layout === "ticker"],
     ["maxLines", theme.layout === "ticker"],
     ["maxChatHeight", theme.layout === "ticker"],
+    ["nameOnOwnLine", theme.layout === "ticker"],
     ["panelBackgroundColor", !theme.panelEnabled],
     ["panelBackgroundOpacity", !theme.panelEnabled],
     ["panelBorderWidth", !theme.panelEnabled],

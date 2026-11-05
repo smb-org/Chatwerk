@@ -21,6 +21,7 @@ export interface ReactionEffectsOptions {
   theme: ThemeConfig;
   emotes?: Pick<EmoteLookup, "resolve">;
   fetcher?: typeof fetch;
+  onLineHighlightChange?: (line: HTMLElement) => void;
 }
 
 export interface ReactionEffects {
@@ -99,6 +100,7 @@ export function createReactionEffects(options: ReactionEffectsOptions): Reaction
     request.highlightedLines.add(line);
     highlightCounts.set(line, (highlightCounts.get(line) ?? 0) + 1);
     line.classList.add("chat-reaction-highlight");
+    options.onLineHighlightChange?.(line);
   };
 
   const detachHighlight = (request: ReactionRequest, line: HTMLElement): void => {
@@ -108,6 +110,7 @@ export function createReactionEffects(options: ReactionEffectsOptions): Reaction
     else {
       highlightCounts.delete(line);
       line.classList.remove("chat-reaction-highlight");
+      options.onLineHighlightChange?.(line);
     }
   };
 
