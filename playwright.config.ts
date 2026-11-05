@@ -1,17 +1,23 @@
 import { defineConfig } from "@playwright/test";
 import { TEST_SESSION_KEY } from "./tests/e2e/test-session";
-const port = Number(process.env.PLAYWRIGHT_PORT ?? 17474);
+const port = Number(process.env.PLAYWRIGHT_PORT ?? 17174);
 
 export default defineConfig({
   testDir: "./tests/e2e",
   workers: 1,
   use: {
-    baseURL: `http://127.0.0.1:${port}`,
+    baseURL: `https://127.0.0.1:${port}`,
+    ignoreHTTPSErrors: true,
+    launchOptions: {
+      // The generated opaque sandbox frame needs to connect to Wrangler's loopback HTTPS origin.
+      args: ["--ignore-certificate-errors", "--disable-features=LocalNetworkAccessChecks"],
+    },
   },
   webServer: {
     command: `pnpm run build && node scripts/wrangler-dev.mjs ${port}`,
-    url: `http://127.0.0.1:${port}/`,
+    url: `https://127.0.0.1:${port}/`,
     reuseExistingServer: false,
+    ignoreHTTPSErrors: true,
     timeout: 120_000,
     env: {
       ...process.env,

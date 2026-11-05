@@ -89,6 +89,17 @@ describe("deployment headers", () => {
     expect(headerValues(assetHeaders, "Content-Security-Policy")).toHaveLength(0);
   });
 
+  it("keeps framing protection on the gallery and public look shells", () => {
+    for (const path of ["/themes", "/gallery.html", "/t/night-ledger-abc123", "/theme.html"]) {
+      const headers = headersForPath(path);
+      expect(headerValues(headers, "X-Frame-Options"), path).toEqual(["SAMEORIGIN"]);
+      expect(headerValues(headers, "Content-Security-Policy").join("\n"), path).toContain("frame-ancestors __PUBLIC_ORIGIN__");
+      expect(headerValues(headers, "Content-Security-Policy").join("\n"), path).toContain("frame-src __PUBLIC_ORIGIN__");
+      expect(headerValues(headers, "Cache-Control"), path).toEqual(["no-cache"]);
+    }
+    for (const route of ["/themes*", "/t/*"]) expect(wrangler.assets.run_worker_first).toContain(route);
+  });
+
   it("uses explicit origins and Twitch IRC without self in every CSP", () => {
     for (const [rule, headers] of rules) {
       const policies = headers.filter((line) => line.toLowerCase().startsWith("content-security-policy:"));

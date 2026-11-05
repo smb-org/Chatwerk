@@ -86,4 +86,23 @@ describe("Studio page routing", () => {
     expect(response?.status).toBe(200);
     expect(await response?.text()).toBe("/overlay.html");
   });
+
+  it("requires login for the themes gallery and serves its shell to a session", async () => {
+    const signedOut = await handlePageRequest(new Request("https://chatwerk.test/themes"), pageEnv());
+    const cookie = await mintSessionCookie(sessionKey, "owner-themes");
+    const signedIn = await handlePageRequest(new Request("https://chatwerk.test/themes", { headers: { cookie } }), pageEnv());
+
+    expect(signedOut?.status).toBe(302);
+    expect(signedOut?.headers.get("location")).toBe("https://chatwerk.test/login?next=%2Fthemes");
+    expect(await signedIn?.text()).toBe("/gallery.html");
+  });
+
+  it("serves public look pages without login and keeps gallery assets private", async () => {
+    const publicLook = await handlePageRequest(new Request("https://chatwerk.test/t/night-ledger-abc123"), pageEnv());
+    const privateAsset = await handlePageRequest(new Request("https://chatwerk.test/gallery.html"), pageEnv());
+
+    expect(await publicLook?.text()).toBe("/theme.html");
+    expect(privateAsset?.status).toBe(302);
+    expect(privateAsset?.headers.get("location")).toBe("https://chatwerk.test/login?next=%2Fthemes");
+  });
 });

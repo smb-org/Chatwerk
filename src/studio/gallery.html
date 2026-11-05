@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#17181B" />
+    <title>Chatwerk</title>
+  </head>
+  <body>
+    <div class="gallery-shell" id="gallery-page">
+      <header class="studio-header gallery-header">
+        <a class="wordmark" href="/studio" data-i18n="brand"></a>
+        <nav class="top-nav" data-i18n-aria-label="primaryNavigation">
+          <a href="/studio" data-i18n="studioTitle"></a>
+          <a href="/themes" aria-current="page" data-i18n="themes"></a>
+        </nav>
+        <div class="header-spacer"></div>
+        <span class="gallery-active-overlay" id="active-overlay-name"></span>
+        <details class="account-menu" id="account-menu">
+          <summary data-i18n="account"></summary>
+          <div class="account-popover">
+            <a href="/studio" data-i18n="studioTitle"></a>
+            <a href="/studio/export" data-i18n="widgetExport"></a>
+          </div>
+        </details>
+      </header>
+
+      <main class="gallery-main">
+        <aside class="look-list-pane" id="look-list-pane" data-i18n-aria-label="themes">
+          <div class="look-sort-row">
+            <label class="toolbar-label" for="look-sort" data-i18n="sortBy"></label>
+            <select id="look-sort" class="select-control">
+              <option value="newest" data-i18n="sortNewest"></option>
+              <option value="name" data-i18n="sortName"></option>
+            </select>
+          </div>
+          <div class="look-list" id="look-list" role="listbox" tabindex="0" data-i18n-aria-label="themes" aria-activedescendant=""></div>
+          <div class="gallery-list-message" id="gallery-message" role="status" aria-live="polite"></div>
+          <div class="gallery-empty-action" id="gallery-empty-action" hidden>
+            <a class="button button-primary" href="/studio?publish=1" data-i18n="publishMyLook"></a>
+          </div>
+        </aside>
+
+        <section class="look-detail" id="look-detail" data-i18n-aria-label="preview">
+          <header class="look-detail-head">
+            <div class="look-heading-copy">
+              <h1 id="look-name" class="look-title" data-i18n="lookLoading"></h1>
+              <p id="look-author" class="look-author"></p>
+              <p id="look-lineage" class="look-lineage"></p>
+            </div>
+            <div class="look-primary-action" id="look-primary-action">
+              <button class="button button-primary" id="use-look" type="button" data-i18n="useOnOverlay" disabled></button>
+              <span class="look-copy-hint" id="look-copy-hint" data-i18n="copyCssHint"></span>
+            </div>
+          </header>
+          <div class="look-stage" id="look-stage">
+            <span class="sample-label" data-i18n="sampleChat"></span>
+            <div class="gallery-frame-wrap" id="gallery-frame-wrap">
+              <iframe id="look-preview" title="" sandbox="allow-scripts" src="/overlay#client=studio" tabindex="-1"></iframe>
+            </div>
+            <span class="preview-meta" id="look-preview-status" data-i18n="previewScale" data-percent="100"></span>
+          </div>
+          <div class="look-rehearse" data-i18n-aria-label="rehearseControls">
+            <span class="footer-title" data-i18n="rehearse"></span>
+            <div class="scenario-buttons" role="group" data-i18n-aria-label="rehearsalScenarios">
+              <button class="scenario-button" type="button" data-scenario="quiet" aria-pressed="true" data-i18n="quietChat"></button>
+              <button class="scenario-button" type="button" data-scenario="flood" aria-pressed="false" data-i18n="messageFlood"></button>
+              <button class="scenario-button" type="button" data-scenario="raid" aria-pressed="false" data-i18n="raid"></button>
+            </div>
+          </div>
+          <dl class="look-values" id="look-values" data-i18n-aria-label="lookValues">
+            <div><dt data-i18n="fieldFontFamily"></dt><dd data-value="fontFamily"></dd></div>
+            <div><dt data-i18n="fieldFontSize"></dt><dd data-value="fontSize"></dd></div>
+            <div><dt data-i18n="fieldTextColor"></dt><dd data-value="textColor"></dd></div>
+            <div><dt data-i18n="fieldBackgroundColor"></dt><dd data-value="backgroundColor"></dd></div>
+            <div><dt data-i18n="fieldBackgroundOpacity"></dt><dd data-value="backgroundOpacity"></dd></div>
+            <div><dt data-i18n="fieldSpacing"></dt><dd data-value="spacing"></dd></div>
+          </dl>
+        </section>
+      </main>
+
+      <footer class="gallery-mobile-action" id="gallery-mobile-action">
+        <span id="gallery-mobile-hint" data-i18n="copyCssHint"></span>
+        <button class="button button-primary" id="use-look-mobile" type="button" data-i18n="useOnOverlay" disabled></button>
+      </footer>
+
+      <div class="gallery-toast" id="gallery-toast" role="status" aria-live="polite"></div>
+    </div>
+    <script type="module" src="./look-page.ts"></script>
+  </body>
+</html>

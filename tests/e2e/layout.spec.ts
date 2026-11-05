@@ -49,7 +49,7 @@ test("loads an existing Main overlay through / with defaults at revision zero", 
   expect(errors).toEqual([]);
 });
 
-test("renders current theme controls, hides empty groups, and marks Themes as coming soon", async ({ page }) => {
+test("renders current theme controls, hides empty groups, and links Themes", async ({ page }) => {
   const { login } = await seedStudioSession(page);
   await page.goto("/studio");
 
@@ -63,10 +63,7 @@ test("renders current theme controls, hides empty groups, and marks Themes as co
   await expect(page.locator('[data-group="Advanced"]')).toHaveCount(0);
 
   const themes = page.getByText("Themes", { exact: true });
-  await expect(themes).toHaveAttribute("aria-disabled", "true");
-  await expect(themes).toHaveAttribute("aria-describedby", "themes-coming-soon-hint");
-  await expect(themes).not.toHaveAttribute("href", /.+/u);
-  await expect(page.locator("#themes-coming-soon-hint")).toHaveText("Coming soon");
+  await expect(themes).toHaveAttribute("href", "/themes");
 
   const borders = await page.locator('.theme-control[data-control], #preview-background-group').evaluateAll((items) =>
     items.map((item) => {
@@ -93,7 +90,8 @@ test("lists owned overlays from the account API", async ({ page }) => {
   await page.getByRole("button", { name: "Overlays" }).click();
   const dialog = page.getByRole("dialog", { name: "Overlays" });
   await expect(dialog.getByRole("group", { name: "Overlays" })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: /^Main · e2e_/u })).toHaveAttribute("aria-pressed", "true");
+  await expect(dialog.locator(".manage-row").filter({ hasText: "Main" }).getByRole("button", { name: "Select" }))
+    .toHaveAttribute("aria-pressed", "true");
 });
 
 test("opens Widget export from Account and protects the direct export asset", async ({ page }) => {
@@ -106,7 +104,8 @@ test("opens Widget export from Account and protects the direct export asset", as
     page.locator("#export-link").click(),
   ]);
   expect(exportResponse.status()).toBe(200);
-  await expect(page.locator("#export-placeholder")).toHaveText("Widget export is not available yet.");
+  await expect(page.locator("#export-url")).toHaveValue(new RegExp(`${e2eOrigin.replaceAll(".", "\\.")}\\/overlay#token=.+&client=widget&placement=origin`, "u"));
+  await expect(page.locator("#code-html")).toContainText('sandbox="allow-scripts"');
   expect(exportResponse.headers()["x-frame-options"]).toBe("SAMEORIGIN");
   expect(exportResponse.headers()["content-security-policy"]).toContain("frame-ancestors");
   expect(exportResponse.headers()["cache-control"]).toBe("no-cache");
@@ -124,10 +123,10 @@ test("switches between overlays with the existing owner read API", async ({ page
   await page.getByRole("button", { name: "Overlays" }).click();
   const dialog = page.getByRole("dialog", { name: "Overlays" });
   const overlayList = dialog.getByRole("group", { name: "Overlays" });
-  await expect(overlayList.getByRole("button")).toHaveCount(2);
-  const main = overlayList.getByRole("button", { name: /^Main · e2e_/u });
+  await expect(overlayList.locator(".manage-row")).toHaveCount(2);
+  const main = overlayList.locator(".manage-row").filter({ hasText: "Main" }).getByRole("button", { name: "Select" });
   await expect(main).toHaveAttribute("aria-pressed", "true");
-  await overlayList.getByRole("button", { name: "Second · second_channel" }).click();
+  await overlayList.locator(".manage-row").filter({ hasText: "Second" }).getByRole("button", { name: "Select" }).click();
   await expect(dialog).toBeHidden();
   await expect(page.locator("#overlay-url")).toHaveValue(`${e2eOrigin}/overlay#token=${alternate.token}`);
   await expect(page.locator("#overlay-url")).not.toHaveValue(`${e2eOrigin}/overlay#token=${mainToken}`);

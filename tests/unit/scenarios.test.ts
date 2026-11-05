@@ -12,6 +12,13 @@ describe("Studio rehearsal scenarios", () => {
     expect([...quiet, ...flood, ...raid].every((message) => message.channel === "#sample")).toBe(true);
   });
 
+  it("shows several quiet messages immediately when a preview starts", () => {
+    const emit = vi.fn();
+    const stop = runScenario("quiet", emit);
+    expect(emit).toHaveBeenCalledTimes(3);
+    stop();
+  });
+
   it("stops scheduled rehearsal messages when another scenario starts", () => {
     vi.useFakeTimers();
     const emit = vi.fn();

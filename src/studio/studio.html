@@ -12,9 +12,9 @@
         <a class="wordmark" href="/studio" data-i18n="brand">Chatwerk</a>
         <nav class="top-nav" data-i18n-aria-label="primaryNavigation">
           <a href="/studio" aria-current="page" data-i18n="studioTitle">Studio</a>
-          <span class="nav-disabled" aria-disabled="true" aria-describedby="themes-coming-soon-hint" data-i18n="themes"></span>
-          <span class="visually-hidden" id="themes-coming-soon-hint" data-i18n="comingSoon"></span>
+          <a href="/themes" data-i18n="themes"></a>
         </nav>
+        <span class="active-overlay-label" id="active-overlay-name"></span>
         <div class="header-spacer"></div>
         <div class="link-copy">
           <label class="visually-hidden" for="overlay-url" data-i18n="overlayLink"></label>
@@ -70,6 +70,7 @@
             <span class="status-text" id="status-visible" aria-live="off" data-i18n="loading"></span>
             <span class="status-announcer" id="status-announcer" aria-live="polite"></span>
             <span class="error-area" id="save-error" role="alert"></span>
+            <button class="small-button undo-look-button" id="undo-look" type="button" data-i18n="undo" hidden></button>
           </div>
           <div class="warning-row" id="warning-row" aria-live="polite"></div>
           <div class="settings-scroll" id="settings-scroll">
@@ -98,7 +99,7 @@
           <div class="scenario-buttons" role="group" data-i18n-aria-label="rehearsalScenarios">
             <button class="scenario-button" id="rehearse-quiet" type="button" aria-pressed="true" data-i18n="quietChat"></button>
             <button class="scenario-button" id="rehearse-flood" type="button" aria-pressed="false" data-i18n="messageFlood"></button>
-            <button class="scenario-button" id="rehearse-raid" type="button" aria-pressed="false" data-i18n="raidDrive"></button>
+            <button class="scenario-button" id="rehearse-raid" type="button" aria-pressed="false" data-i18n="raid"></button>
           </div>
           <label class="live-toggle"><input id="live-chat" type="checkbox" /><span data-i18n="liveChat"></span></label>
           <span class="footer-spacer"></span>
@@ -119,6 +120,25 @@
       <div class="dialog-head"><h2 id="dialog-title"></h2><button class="small-button" id="dialog-x" type="button" data-i18n-aria-label="close">×</button></div>
       <div class="dialog-body" id="dialog-body"></div>
       <div class="dialog-footer"><button class="button" id="dialog-close" type="button" data-i18n="dialogClose"></button></div>
+    </dialog>
+    <dialog id="publish-dialog" aria-labelledby="publish-dialog-title">
+      <form id="publish-form" novalidate>
+        <div class="dialog-head"><h2 id="publish-dialog-title" data-i18n="shareLook"></h2><button class="small-button" id="publish-x" type="button" data-i18n-aria-label="close">×</button></div>
+        <div class="dialog-body publish-dialog-body">
+          <label class="control-label" for="publish-name" data-i18n="publishNameLabel"></label>
+          <input class="dialog-input" id="publish-name" name="name" type="text" maxlength="40" autocomplete="off" required />
+          <p class="dialog-state" id="publish-status" role="status" aria-live="polite"></p>
+          <a id="publish-open" class="publish-open" href="#" data-i18n="open" hidden></a>
+          <div class="limit-row" id="publish-limit" hidden>
+            <span data-i18n="lookLimitStatus"></span>
+            <button type="button" class="small-button" id="publish-manage-looks" data-i18n="manageLooks"></button>
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <button class="button button-quiet" id="publish-cancel" type="button" data-i18n="dialogClose"></button>
+          <button class="button button-primary" id="publish-submit" type="submit" data-i18n="publishSubmit" disabled></button>
+        </div>
+      </form>
     </dialog>
     <script type="module" src="./studio.ts"></script>
   </body>

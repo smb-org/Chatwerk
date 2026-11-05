@@ -7,14 +7,74 @@
     <title>Chatwerk</title>
   </head>
   <body>
-    <main class="login-shell">
-      <section class="login-content">
-        <p class="login-wordmark" data-i18n="brand"></p>
-        <h1 class="login-title" data-i18n="widgetExport"></h1>
-        <p class="login-copy" id="export-placeholder" data-i18n="exportPlaceholder"></p>
-        <a class="button button-primary" href="/studio" data-i18n="studioTitle"></a>
-      </section>
-    </main>
+    <div class="export-shell">
+      <header class="studio-header export-header">
+        <a class="wordmark" href="/studio" data-i18n="brand"></a>
+        <nav class="top-nav" data-i18n-aria-label="primaryNavigation">
+          <a href="/studio" data-i18n="studioTitle"></a>
+          <a href="/themes" data-i18n="themes"></a>
+        </nav>
+        <div class="header-spacer"></div>
+        <span class="connection-chip" id="export-connection" data-i18n="connectionUnknown"></span>
+        <a class="button" href="/studio" data-i18n="studioTitle"></a>
+      </header>
+
+      <main class="export-main">
+        <div class="export-title-row">
+          <div>
+            <h1 class="page-title" data-i18n="widgetExport"></h1>
+            <p class="export-lead" data-i18n="exportInstructions"></p>
+          </div>
+          <label class="export-platform">
+            <span class="toolbar-label" data-i18n="platformChoice"></span>
+            <select id="export-platform" class="select-control">
+              <option value="streamelements" data-i18n="streamElements"></option>
+              <option value="soundalerts" data-i18n="soundAlerts"></option>
+            </select>
+          </label>
+        </div>
+
+        <div class="export-notices">
+          <p id="soundalerts-note" class="export-note" data-i18n="soundAlertsUnmeasured" hidden></p>
+          <p class="export-note export-note-permanent" data-i18n="widgetNoCloudflare"></p>
+          <p class="export-error" id="export-error" role="alert"></p>
+        </div>
+
+        <div class="export-workspace">
+          <section class="export-code-column" aria-labelledby="export-code-title">
+            <h2 id="export-code-title" class="section-title" data-i18n="widgetFormLabel"></h2>
+            <div class="export-tabs" role="tablist" data-i18n-aria-label="widgetFormLabel">
+              <button type="button" role="tab" id="tab-html" aria-controls="panel-html" aria-selected="true" tabindex="0" data-block="html" data-i18n="exportHtml"></button>
+              <button type="button" role="tab" id="tab-js" aria-controls="panel-js" aria-selected="false" tabindex="-1" data-block="js" data-i18n="exportJs"></button>
+              <button type="button" role="tab" id="tab-fields" aria-controls="panel-fields" aria-selected="false" tabindex="-1" data-block="fields" data-i18n="exportFields"></button>
+            </div>
+            <section class="export-code-panel" id="panel-html" role="tabpanel" aria-labelledby="tab-html">
+              <pre class="export-code" id="code-html" tabindex="0"></pre>
+              <button class="button export-copy-button" type="button" data-copy="html" data-i18n="exportCopy"></button>
+            </section>
+            <section class="export-code-panel" id="panel-js" role="tabpanel" aria-labelledby="tab-js" hidden>
+              <pre class="export-code" id="code-js" tabindex="0"></pre>
+              <button class="button export-copy-button" type="button" data-copy="js" data-i18n="exportCopy"></button>
+            </section>
+            <section class="export-code-panel" id="panel-fields" role="tabpanel" aria-labelledby="tab-fields" hidden>
+              <pre class="export-code" id="code-fields" tabindex="0"></pre>
+              <button class="button export-copy-button" type="button" data-copy="fields" data-i18n="exportCopy"></button>
+            </section>
+          </section>
+
+          <aside class="export-actions" aria-labelledby="export-actions-title">
+            <h2 id="export-actions-title" class="section-title" data-i18n="outputAndTest"></h2>
+            <label class="control-label" for="export-url" data-i18n="exportUrlLabel"></label>
+            <input id="export-url" class="export-url" type="text" readonly />
+            <div class="export-test-controls">
+              <button class="button button-primary export-test-button" id="export-test-in-obs" type="button" data-i18n="testInObs" aria-describedby="export-test-hint" disabled></button>
+              <p class="export-test-hint" id="export-test-hint" data-i18n="exportTestHint"></p>
+            </div>
+            <span class="export-action-status" id="export-action-status" role="status" aria-live="polite"></span>
+          </aside>
+        </div>
+      </main>
+    </div>
     <script type="module" src="./export.ts"></script>
   </body>
 </html>

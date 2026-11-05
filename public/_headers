@@ -38,6 +38,34 @@
   X-Frame-Options: SAMEORIGIN
   Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__; img-src __PUBLIC_ORIGIN__ data: blob:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; frame-src __PUBLIC_ORIGIN__; form-action __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
 
+/themes*
+  Cache-Control: no-cache
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__; img-src __PUBLIC_ORIGIN__ data: blob:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; frame-src __PUBLIC_ORIGIN__; form-action __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
+
+/gallery.html
+  Cache-Control: no-cache
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__; img-src __PUBLIC_ORIGIN__ data: blob:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; frame-src __PUBLIC_ORIGIN__; form-action __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
+
+/t/*
+  Cache-Control: no-cache
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__; img-src __PUBLIC_ORIGIN__ data: blob:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; frame-src __PUBLIC_ORIGIN__; form-action __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
+
+/theme.html
+  Cache-Control: no-cache
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__; img-src __PUBLIC_ORIGIN__ data: blob:; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; frame-src __PUBLIC_ORIGIN__; form-action __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
+
 # Both routes are embeddable; deliberately no frame-ancestors or X-Frame-Options.
 /overlay
   Cache-Control: no-cache
