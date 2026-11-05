@@ -142,6 +142,8 @@ let pendingPatch: Partial<ThemeValues> = {};
 let lastEditAt = 0;
 let retryStartedAt = 0;
 let conflictNotice = false;
+let hypeTrainOwnerLogin: string | undefined;
+let hypeTrainDisconnecting = false;
 let signedOut = false;
 let initializationRetrying = false;
 const updateRequired = false;
@@ -610,23 +612,33 @@ function translateHypeTrainConsent(): void {
   if (!box || !status || !copy || !button) return;
   copy.textContent = "";
   button.hidden = true;
-  if (box.dataset.state === "connected") {
+  const state = box.dataset.state;
+  const foreignChannel = Boolean(hypeTrainOwnerLogin) && state !== "loading" && state !== "unavailable" &&
+    !currentChannels().some((value) => value.trim().toLowerCase() === hypeTrainOwnerLogin);
+  if (foreignChannel) {
+    status.textContent = translate(language, box.dataset.role === "editor" ? "hypeTrainForeignHelper" : "hypeTrainForeignOwner");
+  } else if (state === "connected") {
     status.textContent = translate(language, "hypeTrainConnected");
-    button.hidden = false;
-    button.textContent = translate(language, "hypeTrainDisconnect");
-    if (overlay) button.onclick = () => void disconnectHypeTrain(overlay!.id, button);
-  } else if (box.dataset.state === "disconnected") {
+  } else if (state === "disconnected") {
     status.textContent = translate(language, "hypeTrainNotConnected");
-    copy.textContent = translate(language, "hypeTrainPermissionExplanation");
-    button.hidden = false;
-    button.textContent = translate(language, "hypeTrainConnect");
-    if (overlay) button.onclick = () => window.location.assign(`/auth/hype-train?overlayId=${encodeURIComponent(overlay!.id)}`);
-  } else if (box.dataset.state === "helper") {
+  } else if (state === "helper") {
     status.textContent = translate(language, "hypeTrainHelper");
-  } else if (box.dataset.state === "loading") {
+  } else if (state === "loading") {
     status.textContent = translate(language, "hypeTrainLoading");
   } else {
     status.textContent = translate(language, "hypeTrainStatusUnavailable");
+  }
+  if (state === "connected") {
+    button.hidden = false;
+    button.textContent = translate(language, "hypeTrainDisconnect");
+    button.disabled = hypeTrainDisconnecting;
+    if (overlay) button.onclick = () => void disconnectHypeTrain(overlay!.id, button);
+  } else if (state === "disconnected") {
+    copy.textContent = translate(language, "hypeTrainPermissionExplanation");
+    button.hidden = false;
+    button.textContent = translate(language, "hypeTrainConnect");
+    button.disabled = hypeTrainDisconnecting || foreignChannel;
+    if (overlay) button.onclick = () => window.location.assign(`/auth/hype-train?overlayId=${encodeURIComponent(overlay!.id)}`);
   }
 }
 
@@ -640,55 +652,51 @@ async function refreshHypeTrainConsent(): Promise<void> {
   const requestId = ++hypeConsentRequest;
   const selectedOverlay = overlay;
   const selectionVersion = overlaySelectionVersion;
+  hypeTrainOwnerLogin = undefined;
+  box.dataset.role = "";
+  box.dataset.state = "loading";
   if (!selectedOverlay) {
-    status.textContent = translate(language, "hypeTrainStatusUnavailable");
-    copy.textContent = "";
-    button.hidden = true;
+    box.dataset.state = "unavailable";
+    syncControlAvailability();
     return;
   }
-  status.textContent = translate(language, "hypeTrainLoading");
   copy.textContent = "";
   button.hidden = true;
+  button.disabled = false;
+  syncControlAvailability();
   try {
     const response = await fetch(`/api/hype-train?overlayId=${encodeURIComponent(selectedOverlay.id)}`, {
       credentials: "same-origin", cache: "no-store",
     });
     if (requestId !== hypeConsentRequest || overlay?.id !== selectedOverlay.id || selectionVersion !== overlaySelectionVersion) return;
     if (!response.ok) throw new Error("hype-status");
-    const result = await response.json() as { role?: unknown; connected?: unknown };
+    const result = await response.json() as { role?: unknown; connected?: unknown; ownerLogin?: unknown };
+    if ((result.role !== "owner" && result.role !== "editor") || typeof result.connected !== "boolean" ||
+      typeof result.ownerLogin !== "string" || !/^[a-z0-9_]{1,25}$/iu.test(result.ownerLogin)) throw new Error("hype-status");
+    hypeTrainOwnerLogin = result.ownerLogin.toLowerCase();
+    box.dataset.role = result.role;
     if (result.role === "editor") {
       box.dataset.state = "helper";
-      status.textContent = translate(language, "hypeTrainHelper");
-      copy.textContent = "";
-      button.hidden = true;
-      return;
-    }
-    if (result.role !== "owner" || typeof result.connected !== "boolean") throw new Error("hype-status");
-    if (result.connected) {
+    } else if (result.connected) {
       box.dataset.state = "connected";
-      status.textContent = translate(language, "hypeTrainConnected");
-      copy.textContent = "";
-      button.hidden = false;
-      button.textContent = translate(language, "hypeTrainDisconnect");
-      button.onclick = () => void disconnectHypeTrain(selectedOverlay.id, button);
     } else {
       box.dataset.state = "disconnected";
-      status.textContent = translate(language, "hypeTrainNotConnected");
-      copy.textContent = translate(language, "hypeTrainPermissionExplanation");
-      button.hidden = false;
-      button.textContent = translate(language, "hypeTrainConnect");
-      button.onclick = () => window.location.assign(`/auth/hype-train?overlayId=${encodeURIComponent(selectedOverlay.id)}`);
     }
+    syncControlAvailability();
   } catch {
     if (requestId !== hypeConsentRequest || overlay?.id !== selectedOverlay.id) return;
+    hypeTrainOwnerLogin = undefined;
+    box.dataset.role = "";
     box.dataset.state = "unavailable";
-    status.textContent = translate(language, "hypeTrainStatusUnavailable");
     copy.textContent = "";
     button.hidden = true;
+    syncControlAvailability();
   }
 }
 
 async function disconnectHypeTrain(overlayId: string, button: HTMLButtonElement): Promise<void> {
+  if (hypeTrainDisconnecting) return;
+  hypeTrainDisconnecting = true;
   button.disabled = true;
   try {
     const response = await fetch("/api/hype-train/disconnect", {
@@ -701,7 +709,8 @@ async function disconnectHypeTrain(overlayId: string, button: HTMLButtonElement)
   } catch {
     showToast("hypeTrainDisconnectFailed", true);
   } finally {
-    button.disabled = false;
+    hypeTrainDisconnecting = false;
+    updateHypeTrainAvailability();
   }
 }
 
@@ -938,6 +947,7 @@ function formattedRange(name: ThemeFieldName, value: number, unit: string): stri
 
 function setThemeField<K extends ThemeFieldName>(name: K, value: ThemeValues[K]): boolean {
   if (activeDeleteInFlight) return false;
+  if (name === "reactionHypeTrain" && !isHypeTrainOwnChannel()) return false;
   try {
     theme = validateTheme({ ...theme, [name]: value });
   } catch {
@@ -1123,6 +1133,22 @@ function syncControlAvailability(): void {
     });
     if (control) control.dataset.disabled = String(disabled);
   }
+  updateHypeTrainAvailability();
+}
+
+function isHypeTrainOwnChannel(): boolean {
+  return !hypeTrainOwnerLogin || currentChannels().some((value) => value.trim().toLowerCase() === hypeTrainOwnerLogin);
+}
+
+function updateHypeTrainAvailability(): void {
+  const ownChannel = isHypeTrainOwnChannel();
+  const control = controlsRoot.querySelector<HTMLElement>('[data-theme-field="reactionHypeTrain"]');
+  const checkbox = control?.querySelector<HTMLInputElement>("#theme-reactionHypeTrain");
+  if (checkbox) checkbox.disabled = !ownChannel;
+  if (control) control.dataset.disabled = String(!ownChannel);
+  const rehearsal = document.querySelector<HTMLButtonElement>("#rehearse-hype-train");
+  if (rehearsal) rehearsal.disabled = livePreviewEnabled || !ownChannel;
+  translateHypeTrainConsent();
 }
 
 function refreshChannelsEditor(): void {
@@ -1318,6 +1344,7 @@ function updatePreviewModeUi(): void {
   document.querySelectorAll<HTMLButtonElement>(".scenario-button").forEach((button) => {
     button.disabled = livePreviewEnabled;
   });
+  updateHypeTrainAvailability();
   liveNoChannelMessage.hidden = !livePreviewEnabled || currentChannels().length > 0;
   updateLiveChatStatus();
 }

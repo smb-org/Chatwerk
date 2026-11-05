@@ -128,6 +128,8 @@
   "hypeTrainDisconnect": "Verbindung trennen",
   "hypeTrainPermissionExplanation": "Einmalige Twitch-Erlaubnis für Hype Trains. Gespeichert wird nur die Zustimmung.",
   "hypeTrainHelper": "Nur der Streamer kann dieses Overlay verbinden.",
+  "hypeTrainForeignOwner": "Funktioniert nur auf deinem eigenen Kanal.",
+  "hypeTrainForeignHelper": "Funktioniert nur auf dem Kanal des Streamers.",
   "hypeTrainConnectSuccess": "Hype Train verbunden.",
   "hypeTrainDenied": "Die Hype-Train-Berechtigung wurde nicht erteilt.",
   "hypeTrainScopeMissing": "Twitch hat die Hype-Train-Berechtigung nicht erteilt.",
