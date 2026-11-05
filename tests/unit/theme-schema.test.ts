@@ -30,7 +30,7 @@ describe("theme schema", () => {
   it("ships valid defaults and gives each field ordered UI metadata", () => {
     expect(validateTheme(DEFAULTS)).toEqual(DEFAULTS);
     expect(THEME_UI_GROUPS).toEqual([
-      "Text", "Colors", "Layout", "Messages", "Reactions", "Channels", "Filters", "Advanced",
+      "Text", "Colors", "Panel", "Layout", "Messages", "Emotes & Effects", "Reactions", "Channels", "Filters", "Advanced",
     ]);
     for (const field of Object.values(THEME_FIELDS)) {
       expect(field.ui.label).toBeTruthy();
@@ -39,6 +39,15 @@ describe("theme schema", () => {
         expect(field.range).toMatchObject({ min: expect.any(Number), max: expect.any(Number), unit: expect.any(String) });
       }
     }
+    const messageFields = Object.values(THEME_FIELDS)
+      .filter((field) => field.ui.group === "Messages")
+      .sort((left, right) => left.ui.order - right.ui.order);
+    expect(messageFields.map((field) => field.ui.label)).toEqual([
+      "Lifetime", "Never expire", "Maximum lines", "Maximum chat height", "Line padding", "Text outline", "Motion",
+      "Highlight background", "Highlight text", "Emote size", "Gigantified emote size", "Show badges", "Show pronouns",
+      "Recent message backlog",
+    ]);
+    expect(new Set(messageFields.map((field) => field.ui.order)).size).toBe(messageFields.length);
   });
 
   it("migrates idempotently and ignores unknown fields", () => {
@@ -175,5 +184,59 @@ describe("theme schema", () => {
     expect(shareable).not.toContain("filterPrefixes");
     expect(shareable).not.toContain("hideBots");
     expect(shareable).not.toContain("botNames");
+  });
+
+  it("adds display switches without changing version 1 defaults or existing ranges", () => {
+    expect(SCHEMA_VERSION).toBe(1);
+    const oldShape = validateTheme({ schemaVersion: 1, fontSize: 20 });
+    expect(oldShape).toMatchObject({
+      emotes7tv: true,
+      emotesBttv: true,
+      emotesFfz: true,
+      showPaints: true,
+      badges7tv: true,
+      badgesBttv: true,
+      badgesFfz: true,
+      badgesChatterino: true,
+      backlog: true,
+      panelEnabled: false,
+      panelBackgroundColor: "#000000",
+      panelBackgroundOpacity: 0.5,
+      panelBorderWidth: 0,
+      panelBorderColor: "#ffffff",
+      panelRadius: 8,
+      panelPadding: 8,
+      linePadding: 0,
+      neverFade: false,
+      maxLines: 100,
+      maxChatHeight: 0,
+    });
+    expect(THEME_FIELDS.maxLines.range).toMatchObject({ min: 1, max: 100, step: 1, unit: "lines" });
+    expect(THEME_FIELDS.maxChatHeight.range).toMatchObject({ min: 0, max: 2160, step: 10, unit: "px" });
+    expect(() => validateTheme({ maxLines: 0 })).toThrow();
+    expect(() => validateTheme({ maxLines: 101 })).toThrow();
+    expect(() => validateTheme({ maxChatHeight: 5 })).toThrow();
+    expect(() => validateTheme({ maxChatHeight: 2_170 })).toThrow();
+    for (const name of ["emotes7tv", "emotesBttv", "emotesFfz", "showPaints", "neverFade", "maxLines", "maxChatHeight"] as const) {
+      expect(getShareableThemeKeys()).toContain(name);
+    }
+    for (const name of ["badges7tv", "badgesBttv", "badgesFfz", "badgesChatterino", "backlog"] as const) {
+      expect(getShareableThemeKeys()).toContain(name);
+      expect(THEME_FIELDS[name].defaultValue).toBe(true);
+    }
+    expect(getShareableThemeKeys()).toContain("panelEnabled");
+    expect(THEME_FIELDS.panelEnabled.defaultValue).toBe(false);
+    expect(THEME_FIELDS.panelBackgroundOpacity.range).toMatchObject({ min: 0, max: 1, step: 0.01, unit: "ratio" });
+    expect(THEME_FIELDS.panelBorderWidth.range).toMatchObject({ min: 0, max: 8, step: 1, unit: "px" });
+    expect(THEME_FIELDS.panelRadius.range).toMatchObject({ min: 0, max: 32, step: 1, unit: "px" });
+    expect(THEME_FIELDS.panelPadding.range).toMatchObject({ min: 0, max: 32, step: 1, unit: "px" });
+    expect(THEME_FIELDS.linePadding.range).toMatchObject({ min: 0, max: 16, step: 1, unit: "px" });
+    expect(DEFAULTS.panelBackgroundColor).toBe("#000000");
+    expect(DEFAULTS.panelBorderColor).toBe("#ffffff");
+    expect(() => validateTheme({ panelBackgroundOpacity: 1.01 })).toThrow();
+    expect(() => validateTheme({ panelBorderWidth: 9 })).toThrow();
+    expect(() => validateTheme({ panelRadius: 33 })).toThrow();
+    expect(() => validateTheme({ panelPadding: 33 })).toThrow();
+    expect(() => validateTheme({ linePadding: 17 })).toThrow();
   });
 });

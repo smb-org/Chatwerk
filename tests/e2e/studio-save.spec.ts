@@ -22,6 +22,19 @@ async function readLinkedConfig(page: import("@playwright/test").Page, token: st
   return (await response.json() as { config: Record<string, unknown> }).config;
 }
 
+function waitForStudioLiveConnection(page: import("@playwright/test").Page): Promise<void> {
+  return new Promise((resolve) => {
+    page.on("websocket", (socket) => {
+      if (!new URL(socket.url()).pathname.endsWith("/api/overlay/live")) return;
+      socket.on("framereceived", (frame) => {
+        try {
+          if ((JSON.parse(String(frame.payload)) as { type?: string }).type === "clients") resolve();
+        } catch { /* Ignore unrelated live frames. */ }
+      });
+    });
+  });
+}
+
 test("coalesces slider changes while one delayed save is in flight", async ({ page }) => {
   const { overlayId, token } = await seedStudioSession(page);
   await page.goto("/studio");
@@ -89,20 +102,42 @@ test("reloads after a 409 and reapplies the pending slider change", async ({ pag
 
 test("uses a local object URL for Mine without sending a network request", async ({ page }) => {
   await seedStudioSession(page);
-  await page.goto("/studio");
+  await page.route("**/api/overlay/config", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const response = await route.fetch();
+    const snapshot = await response.json() as { config: Record<string, unknown> };
+    await route.fulfill({
+      response,
+      body: JSON.stringify({
+        ...snapshot,
+        config: { ...snapshot.config, emotes7tv: false, emotesBttv: false, emotesFfz: false, showPaints: false },
+      }),
+    });
+  });
   const requests: string[] = [];
   page.on("request", (request) => requests.push(request.url()));
+  await page.goto("/studio");
+  await expect(page.locator("#status-visible")).toContainText("Saved");
+  const effects = page.locator('.settings-group[data-group="Emotes & Effects"]');
+  await expect(effects.getByRole("checkbox", { name: "7TV emotes" })).not.toBeChecked();
+  await expect(effects.getByRole("checkbox", { name: "BTTV emotes" })).not.toBeChecked();
+  await expect(effects.getByRole("checkbox", { name: "FFZ emotes" })).not.toBeChecked();
+  await expect(effects.getByRole("checkbox", { name: "7TV paints" })).not.toBeChecked();
+  const requestCountBeforeFile = requests.length;
   await page.locator("#preview-background-file").setInputFiles({
     name: "local.png", mimeType: "image/png", buffer: Buffer.from("local-test-image"),
   });
   await expect(page.getByRole("radio", { name: "Mine" })).toBeChecked();
-  expect(requests.filter((url) => new URL(url).origin !== e2eOrigin)).toEqual([]);
+  expect(requests.slice(requestCountBeforeFile).filter((url) => new URL(url).origin !== e2eOrigin)).toEqual([]);
   expect(requests.filter((url) => url.includes("local.png"))).toEqual([]);
 });
 
 test("keeps an uncommitted filter list through an incoming config and saves it on blur", async ({ page }) => {
   const { overlayId, token } = await seedStudioSession(page);
+  const liveReady = waitForStudioLiveConnection(page);
   await page.goto("/studio");
+  await expect(page.locator("#status-visible")).toHaveText("Saved, rev 0");
+  await liveReady;
   const field = page.locator('textarea[data-list-field="filterWords"]');
   await field.fill("spoiler\nscam");
 
@@ -118,7 +153,10 @@ test("keeps an uncommitted filter list through an incoming config and saves it o
 
 test("keeps a half-typed hex value through an incoming config and saves the completed value", async ({ page }) => {
   const { overlayId, token } = await seedStudioSession(page);
+  const liveReady = waitForStudioLiveConnection(page);
   await page.goto("/studio");
+  await expect(page.locator("#status-visible")).toHaveText("Saved, rev 0");
+  await liveReady;
   const field = page.locator("#theme-highlightBackgroundColor-hex");
   await field.fill("#ABC");
 

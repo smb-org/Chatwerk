@@ -394,6 +394,7 @@ function renderThemeControls(): void {
     }
     controlsRoot.appendChild(groupRoot);
   }
+  syncControlAvailability();
 }
 
 function makeThemeControl(name: ThemeFieldName, definition: ThemeFieldDefinition): HTMLElement {
@@ -534,6 +535,12 @@ function makeThemeControl(name: ThemeFieldName, definition: ThemeFieldDefinition
     label.appendChild(input);
     label.appendChild(document.createTextNode(labelText));
     control.appendChild(label);
+    if (name === "backlog") {
+      const hint = document.createElement("p");
+      hint.className = "control-hint";
+      hint.textContent = translate(language, "backlogStackOnlyHint");
+      control.appendChild(hint);
+    }
     return control;
   }
 
@@ -782,6 +789,7 @@ function valueLabel(name: ThemeFieldName, value: string): string {
 }
 
 function groupKey(group: ThemeUiGroup): TranslationKey {
+  if (group === "Emotes & Effects") return "groupEmotesEffects";
   return `group${group}` as TranslationKey;
 }
 
@@ -790,8 +798,10 @@ function fieldKey(name: ThemeFieldName): TranslationKey {
 }
 
 function formattedRange(name: ThemeFieldName, value: number, unit: string): string {
+  if (name === "maxChatHeight" && value === 0) return translate(language, "fullHeight");
   if (unit === "ratio") return translate(language, "rangeValue", { value: Math.round(value * 100), unit: translate(language, "percentUnit") });
   if (unit === "ms") return translate(language, "rangeValue", { value: Math.round(value / 1_000), unit: translate(language, "secondsUnit") });
+  if (unit === "lines") return translate(language, "rangeValue", { value, unit: translate(language, "linesUnit") });
   if (unit === "px") return translate(language, "rangeValue", { value, unit: translate(language, "pixelsUnit") });
   if (unit === "px/s") return translate(language, "rangeValue", { value, unit: translate(language, "pixelsPerSecondUnit") });
   if (name === "fontWeight") return String(value);
@@ -805,6 +815,7 @@ function setThemeField<K extends ThemeFieldName>(name: K, value: ThemeValues[K])
   } catch {
     return false;
   }
+  syncControlAvailability();
   pendingPatch = { ...pendingPatch, [name]: value };
   clearUndoOffer();
   lastEditAt = Date.now();
@@ -960,6 +971,29 @@ function syncControls(previousChannels: string[]): void {
   }
   if (!sameChannels(previousChannels, theme.channels)) refreshChannelsEditor();
   updateChannelHeader();
+  syncControlAvailability();
+}
+
+function syncControlAvailability(): void {
+  const disabledFields: Array<[ThemeFieldName, boolean]> = [
+    ["lifetime", theme.neverFade && theme.layout !== "ticker"],
+    ["neverFade", theme.layout === "ticker"],
+    ["maxLines", theme.layout === "ticker"],
+    ["maxChatHeight", theme.layout === "ticker"],
+    ["panelBackgroundColor", !theme.panelEnabled],
+    ["panelBackgroundOpacity", !theme.panelEnabled],
+    ["panelBorderWidth", !theme.panelEnabled],
+    ["panelBorderColor", !theme.panelEnabled],
+    ["panelRadius", !theme.panelEnabled],
+    ["panelPadding", !theme.panelEnabled],
+  ];
+  for (const [name, disabled] of disabledFields) {
+    const control = controlsRoot.querySelector<HTMLElement>(`[data-theme-field="${name}"]`);
+    control?.querySelectorAll("input, select, textarea").forEach((element) => {
+      (element as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).disabled = disabled;
+    });
+    if (control) control.dataset.disabled = String(disabled);
+  }
 }
 
 function refreshChannelsEditor(): void {

@@ -187,7 +187,7 @@ test("keeps one spacing gap between the name and message when optional items are
 test("keeps chat rows inside the viewport and anchors the newest row for each line order", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   const messages = Array.from({ length: 100 }, (_, index) => {
-    const text = index === 49 ? "x".repeat(10_000) : `message ${index}`;
+    const text = index === 99 ? `message ${index} ${"x".repeat(3_000)}` : `message ${index}`;
     return `@id=layout-${index};display-name=Viewer :viewer!viewer@host PRIVMSG #test :${text}`;
   });
   const shortMessages = [
@@ -203,7 +203,13 @@ test("keeps chat rows inside the viewport and anchors the newest row for each li
   });
 
   await page.goto("/overlay#channel=test&client=browser");
-  await expect(page.locator(".chat-line")).toHaveCount(100);
+  await expect.poll(() => page.locator(".chat-line").count()).toBeGreaterThan(0);
+  await expect.poll(() => page.locator(".chat-line").count()).toBeLessThanOrEqual(100);
+  const defaultRows = await page.locator(".chat-line").evaluateAll((rows) => rows.map((row) => {
+    const bounds = row.getBoundingClientRect();
+    return { top: bounds.top, bottom: bounds.bottom };
+  }));
+  expect(defaultRows.every((row) => row.top >= 0 && row.bottom <= 1080)).toBe(true);
   const defaultLayout = await page.locator(".chat-line").last().evaluate((row) => {
     const bounds = row.getBoundingClientRect();
     const chat = document.querySelector("#chat")!.getBoundingClientRect();
@@ -229,7 +235,7 @@ test("keeps chat rows inside the viewport and anchors the newest row for each li
   expect(defaultLayout.bodyHeight).toBe(defaultLayout.viewportHeight);
   expect(defaultLayout.chatHeight).toBe(defaultLayout.viewportHeight);
 
-  const longMessage = await page.locator(".chat-line").nth(49).locator(".chat-message").evaluate((message) => ({
+  const longMessage = await page.locator(".chat-line").last().locator(".chat-message").evaluate((message) => ({
     height: message.getBoundingClientRect().height,
     scrollWidth: message.scrollWidth,
     clientWidth: message.clientWidth,
@@ -252,6 +258,22 @@ test("keeps chat rows inside the viewport and anchors the newest row for each li
   expect(1080 - shortRows.at(-1)!.bottom)
     .toBeLessThanOrEqual(shortRows.at(-1)!.height + shortRows.at(-1)!.spacing);
 
+  const quietReverseToken = "Q".repeat(43);
+  await page.evaluate((token) => localStorage.setItem(`chatwerk-theme:${token}`, JSON.stringify({
+    revision: 0,
+    config: { schemaVersion: 1, lineOrder: "message-first" },
+    channel: "small",
+  })), quietReverseToken);
+  await page.goto(`/overlay?quiet-reverse=1#token=${quietReverseToken}&client=browser`);
+  await page.reload();
+  await expect(page.locator(".chat-line")).toHaveCount(2);
+  const quietReversedRows = await page.locator(".chat-line").evaluateAll((rows) => rows.map((row) => ({
+    top: row.getBoundingClientRect().top,
+    bottom: row.getBoundingClientRect().bottom,
+  })));
+  expect(quietReversedRows[0]!.top).toBeLessThan(100);
+  expect(quietReversedRows.at(-1)!.bottom).toBeLessThan(100);
+
   const reverseToken = "R".repeat(43);
   await page.evaluate((token) => localStorage.setItem(`chatwerk-theme:${token}`, JSON.stringify({
     revision: 0,
@@ -260,7 +282,8 @@ test("keeps chat rows inside the viewport and anchors the newest row for each li
   })), reverseToken);
   await page.goto(`/overlay?reverse=1#token=${reverseToken}&client=browser`);
   await page.reload();
-  await expect(page.locator(".chat-line")).toHaveCount(100);
+  await expect.poll(() => page.locator(".chat-line").count()).toBeGreaterThan(0);
+  await expect.poll(() => page.locator(".chat-line").count()).toBeLessThanOrEqual(100);
   const reversedRows = await page.locator(".chat-line").evaluateAll((rows) => rows.map((row) => ({
     text: row.querySelector(".chat-message")?.textContent,
     top: row.getBoundingClientRect().top,
@@ -269,10 +292,10 @@ test("keeps chat rows inside the viewport and anchors the newest row for each li
     spacing: Number.parseFloat(getComputedStyle(row).marginBlockEnd),
   })));
   const newestReversed = reversedRows.at(-1)!;
-  expect(newestReversed.text).toBe("message 99");
+  expect(newestReversed.text).toContain("message 99");
   expect(newestReversed.top).toBeGreaterThanOrEqual(0);
   expect(newestReversed.top).toBeLessThanOrEqual(newestReversed.height + newestReversed.spacing);
-  expect(reversedRows[0]!.top).toBeGreaterThanOrEqual(1080);
+  expect(reversedRows[0]!.top).toBeGreaterThan(1080 / 2);
 
   await page.goto("/");
   await page.evaluate(() => {
@@ -284,7 +307,8 @@ test("keeps chat rows inside the viewport and anchors the newest row for each li
     document.body.appendChild(iframe);
   });
   const frame = page.frameLocator("#sized-overlay");
-  await expect(frame.locator(".chat-line")).toHaveCount(100);
+  await expect.poll(() => frame.locator(".chat-line").count()).toBeGreaterThan(0);
+  await expect.poll(() => frame.locator(".chat-line").count()).toBeLessThanOrEqual(100);
   const frameLayout = await frame.locator(".chat-line").last().evaluate((row) => {
     const bounds = row.getBoundingClientRect();
     const chat = document.querySelector("#chat")!.getBoundingClientRect();

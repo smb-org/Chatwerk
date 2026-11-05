@@ -13,6 +13,7 @@ export interface EmoteProvider {
   loadGlobal(onUpdate: (assets: EmoteAsset[]) => void, signal?: AbortSignal): Promise<EmoteAsset[]>;
   loadChannel?(channelId: string, onUpdate: (assets: EmoteAsset[]) => void, signal?: AbortSignal): Promise<EmoteAsset[]>;
   removeChannel?(channelId: string): void;
+  pause?(): void;
   dispose?(): void;
 }
 
@@ -21,6 +22,8 @@ export interface EmoteLookup {
   add(assets: EmoteAsset[]): void;
   setChannelId(channelId: string): void;
   setChannelIds(channelIds: string[]): void;
+  setEnabledProviders(providerNames: string[]): void;
+  setProviderEnabled(providerName: string, enabled: boolean): void;
   dispose(): void;
 }
 
@@ -29,6 +32,7 @@ export interface EmoteLookupOptions {
   fetcher?: typeof fetch;
   eventApi?: SevenTvEventApi;
   timeoutMs?: number;
+  enabledProviders?: string[];
 }
 
 export type MessagePart =
@@ -64,6 +68,7 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
   const scopes = new Map<string, Map<string, EmoteAsset>>();
   const tasks = new Map<string, ScopeTask>();
   const providerNames = providers.map((provider) => provider.name.trim().toUpperCase());
+  const enabledProviders = new Set((options.enabledProviders ?? providerNames).map((name) => name.trim().toUpperCase()));
   let channelIds: string[] = [];
   let disposed = false;
 
@@ -152,8 +157,17 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
     });
   }
 
-  const startGlobal = (): void => {
-    const tasks = providers.map((provider) => run(provider, `${scopeProviderName(provider)}:global`, (update, signal) => provider.loadGlobal(update, signal)));
+  const startProvider = (provider: EmoteProvider): void => {
+    const name = scopeProviderName(provider);
+    const tasks = [run(provider, `${name}:global`, (update, signal) => provider.loadGlobal(update, signal))];
+    if (provider.loadChannel) {
+      tasks.push(...channelIds.map((channelId) => run(
+        provider,
+        `${name}:channel:${channelId}`,
+        (update, signal) => provider.loadChannel!(channelId, update, signal),
+        () => channelIds.includes(channelId),
+      )));
+    }
     void Promise.allSettled(tasks);
   };
 
@@ -177,7 +191,7 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
     }
     const previousSet = new Set(channelIds);
     channelIds = next;
-    const taskPromises = providers.flatMap((provider) => provider.loadChannel
+    const taskPromises = providers.filter((provider) => enabledProviders.has(scopeProviderName(provider))).flatMap((provider) => provider.loadChannel
       ? next.filter((id) => !previousSet.has(id)).map((id) => {
         const scope = `${scopeProviderName(provider)}:channel:${id}`;
         return run(provider, scope, (update, signal) => provider.loadChannel!(id, update, signal), () => channelIds.includes(id));
@@ -186,7 +200,9 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
     void Promise.allSettled(taskPromises);
   };
 
-  startGlobal();
+  for (const provider of providers) {
+    if (enabledProviders.has(scopeProviderName(provider))) startProvider(provider);
+  }
   return {
     resolve(name, selectedChannelId) {
       const manual = scopes.get("manual")?.get(name);
@@ -210,6 +226,36 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
     },
     setChannelId,
     setChannelIds,
+    setEnabledProviders(nextProviders) {
+      if (disposed) return;
+      const next = new Set(nextProviders.map((name) => name.trim().toUpperCase()));
+      for (const provider of providers) {
+        const name = scopeProviderName(provider);
+        const wasEnabled = enabledProviders.has(name);
+        const isEnabled = next.has(name);
+        if (wasEnabled && !isEnabled) {
+          enabledProviders.delete(name);
+          for (const scope of [...tasks.keys()]) {
+            if (scope === `${name}:global` || scope.startsWith(`${name}:channel:`)) cancelTask(scope);
+          }
+          for (const scope of [...scopes.keys()]) {
+            if (scope === `${name}:global` || scope.startsWith(`${name}:channel:`)) scopes.delete(scope);
+          }
+          for (const channelId of channelIds) provider.removeChannel?.(channelId);
+          provider.pause?.();
+        } else if (!wasEnabled && isEnabled) {
+          enabledProviders.add(name);
+          startProvider(provider);
+        }
+      }
+    },
+    setProviderEnabled(providerName, isEnabled) {
+      const name = providerName.trim().toUpperCase();
+      const next = new Set(enabledProviders);
+      if (isEnabled) next.add(name);
+      else next.delete(name);
+      this.setEnabledProviders([...next]);
+    },
     dispose() {
       disposed = true;
       for (const scope of [...tasks.keys()]) cancelTask(scope);
@@ -492,13 +538,12 @@ function createSevenTvProvider(fetcher: typeof fetch, events: SevenTvEventApi): 
     }
     for (const [id, update] of channelUpdates) void refreshChannel(id, update).catch(() => undefined);
   });
-  cleanups.add(stopReconnect);
 
   return {
     name: "7TV",
     async loadGlobal(update, signal) {
       const globalSet = await fetchJson(fetcher, "https://7tv.io/v3/emote-sets/global", signal);
-      if (disposed) return [];
+      if (disposed || signal?.aborted) return [];
       const assets = readSevenTvSet(globalSet);
       if (isRecord(globalSet) && typeof globalSet.id === "string") cleanups.add(refreshSet(globalSet.id, update, assets));
       return assets;
@@ -511,9 +556,19 @@ function createSevenTvProvider(fetcher: typeof fetch, events: SevenTvEventApi): 
       channelGenerations.set(channelId, (channelGenerations.get(channelId) ?? 0) + 1);
       releaseChannel(channelId);
     },
+    pause() {
+      for (const cleanup of [...cleanups]) cleanup();
+      cleanups.clear();
+      for (const state of setSubscriptions.values()) state.unsubscribe();
+      setSubscriptions.clear();
+      channelData.clear();
+      channelSetCleanups.clear();
+      channelUpdates.clear();
+    },
     dispose() {
       disposed = true;
-      for (const cleanup of cleanups) cleanup();
+      stopReconnect();
+      for (const cleanup of [...cleanups]) cleanup();
       cleanups.clear();
       for (const subscription of setSubscriptions.values()) subscription.unsubscribe();
       setSubscriptions.clear();

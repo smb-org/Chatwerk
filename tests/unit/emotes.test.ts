@@ -4,6 +4,8 @@ import { createChatRenderer } from "../../src/renderer/render";
 import { DEFAULTS } from "../../src/shared/theme";
 import { JSDOM } from "jsdom";
 import { parseIrcLine } from "../../src/renderer/irc-parse";
+import { createPaintLookup } from "../../src/renderer/paints";
+import { createSevenTvEventApi } from "../../src/renderer/seventv-events";
 
 const asset = (name: string, provider = "test", zeroWidth = false): EmoteAsset => ({
   name,
@@ -18,6 +20,62 @@ afterEach(() => {
 });
 
 describe("emote lookup", () => {
+  it("does not request a disabled provider, renders its emote as text, and reloads it when re-enabled", async () => {
+    const provider = {
+      name: "7TV",
+      loadGlobal: vi.fn(async () => [asset("Seven", "7TV")]),
+    };
+    const lookup = createEmoteLookup({ providers: [provider], enabledProviders: [] });
+    expect(provider.loadGlobal).not.toHaveBeenCalled();
+    expect(splitMessage("Seven", [], lookup)).toEqual([{ type: "text", value: "Seven" }]);
+
+    lookup.setEnabledProviders(["7TV"]);
+    await vi.waitFor(() => expect(lookup.resolve("Seven")?.provider).toBe("7TV"));
+    expect(provider.loadGlobal).toHaveBeenCalledTimes(1);
+
+    lookup.setEnabledProviders([]);
+    expect(lookup.resolve("Seven")).toBeUndefined();
+    expect(splitMessage("Seven", [], lookup)).toEqual([{ type: "text", value: "Seven" }]);
+    lookup.setEnabledProviders(["7TV"]);
+    await vi.waitFor(() => expect(lookup.resolve("Seven")?.provider).toBe("7TV"));
+    expect(provider.loadGlobal).toHaveBeenCalledTimes(2);
+    lookup.dispose();
+  });
+
+  it.each([
+    ["7TV", "7tv.io"],
+    ["BTTV", "betterttv.net"],
+    ["FFZ", "frankerfacez.com"],
+  ] as const)("does not fetch the %s host while that provider is disabled", async (disabledProvider, host) => {
+    const requestedUrls: string[] = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      requestedUrls.push(String(input));
+      return new Response("{}", { status: 200 });
+    });
+    const lookup = createEmoteLookup({
+      fetcher,
+      enabledProviders: ["7TV", "BTTV", "FFZ"].filter((name) => name !== disabledProvider),
+    });
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalled());
+    expect(requestedUrls.some((url) => url.includes(host))).toBe(false);
+    lookup.dispose();
+  });
+
+  it("keeps the shared Event API closed while 7TV emotes and paints are both disabled", () => {
+    const socketFactory = vi.fn(() => { throw new Error("socket must remain closed"); });
+    const eventApi = createSevenTvEventApi({ socketFactory });
+    const fetcher = vi.fn(async () => new Response("{}", { status: 200 }));
+    const emotes = createEmoteLookup({ eventApi, fetcher, enabledProviders: [] });
+    const paints = createPaintLookup({ eventApi, fetcher, enabled: false });
+    emotes.setChannelIds(["42"]);
+    paints.setChannelId("42");
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(socketFactory).not.toHaveBeenCalled();
+    emotes.dispose();
+    paints.dispose();
+    eventApi.dispose();
+  });
+
   it("uses Twitch code-point ranges after surrogate pairs", () => {
     const parts = splitMessage("😀 Kappa ok", [{ id: "25", ranges: [{ start: 2, end: 6 }] }]);
     expect(parts).toEqual([

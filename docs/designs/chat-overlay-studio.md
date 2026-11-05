@@ -1127,6 +1127,12 @@ Ein Einladungslink gilt 48 Stunden, kann einmal angenommen werden und pro Overla
 | Galerie | docs/designs/mockup-20261104/gallery.jpg | Liste plus große Vorschau, D3 | Emoji und Sortierung "Popular" gelten nicht |
 | Erster Start | docs/designs/mockup-20261104/firstrun.jpg | Drei-Schritte-Leiste | Leiste liegt im Fuß statt über der Vorschau, Inter gilt nicht |
 
+## Anzeigegrenzen und Anbieter
+
+Shareable Theme fields switch Twitch, 7TV, BTTV, FFZ, and Chatterino badges independently from emotes and paints. Provider failures stay quiet, and badge images are restricted to each provider's HTTPS image host. The optional backlog calls the third-party service `recent-messages.robotty.de` once per channel when live chat starts or the channel changes; it applies the current age, line-count, filter, and moderation rules, merges channel results by timestamp, and skips ticker and sample modes. Reconnects do not fetch it again, and historical events do not trigger reactions, sound, rain, or bursts.
+
+The panel is the chat box background and keeps a fixed frame height, or `maxChatHeight` in a height-limited stack. Its padding and border count against available line height; independent line padding defaults to zero so existing looks stay unchanged. The reaction layer still covers the full frame. In ticker layout the panel wraps the ticker strip, while backlog is skipped.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
