@@ -15,7 +15,7 @@ import { BoundedTickerQueue } from "./ticker-queue";
 import type { CommonMessage, IrcEvent } from "./irc-parse";
 import { parseReactionEvent } from "./irc-parse";
 import { splitMessage, type EmoteLookup } from "./emotes";
-import { createReactionEffects } from "./reactions";
+import { createReactionEffects, type HypeTrainReactionMessage } from "./reactions";
 import { isAllowedImageUrl } from "../shared/hosts";
 import type { BadgeLookup } from "./badges";
 import type { PaintLookup, PaintStyle } from "./paints";
@@ -66,6 +66,7 @@ interface RenderedLine {
 
 export interface ChatRenderer {
   handle(event: IrcEvent, receivedAt?: number): void;
+  handleHypeTrain(message: HypeTrainReactionMessage): void;
   beginBacklogFetch(): () => void;
   setTheme(theme: ThemeConfig): void;
   setChannels(channels: string[]): void;
@@ -646,6 +647,9 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   applyTheme();
   return {
     handle,
+    handleHypeTrain(message) {
+      reactionEffects.handleHypeTrain(message);
+    },
     beginBacklogFetch() {
       if (backlogFetches === 0) clearModerationTombstones();
       backlogFetches += 1;

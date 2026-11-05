@@ -177,6 +177,12 @@ a.button:not([hidden]) { display: inline-flex; align-items: center; justify-cont
 .theme-control { display: grid; min-width: 0; gap: 6px; margin: 0; padding: 6px 0 8px; border: 0; }
 .theme-control[data-disabled="true"] { opacity: .55; }
 .control-hint { margin: 3px 0 0; color: var(--ui-muted); font-size: 11px; line-height: 15px; }
+.hype-consent { display: grid; grid-template-rows: 18px 30px 28px; align-content: start; gap: 2px; height: 80px; min-height: 80px; overflow: hidden; }
+.hype-consent-status, .hype-consent-copy { min-width: 0; margin: 0; overflow: hidden; color: var(--ui-muted); font-size: 10px; }
+.hype-consent-status { line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.hype-consent-copy { line-height: 15px; }
+.hype-consent-status { color: var(--ui-fg); }
+.hype-consent-action { justify-self: start; min-height: 26px; padding: 2px 8px; border-color: var(--ui-line); }
 .settings-group .theme-control legend { display: block; width: auto; margin: 0; padding: 0; color: var(--ui-fg); font-size: 13px; font-weight: 400; line-height: 18px; text-transform: none; letter-spacing: normal; }
 .control-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .control-label { display: block; color: var(--ui-fg); font-size: 13px; font-weight: 400; line-height: 18px; }

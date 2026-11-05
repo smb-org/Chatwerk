@@ -32,7 +32,7 @@ export interface CommonMessage {
   historical?: boolean;
 }
 
-export type ReactionType = "raid" | "sub" | "resub" | "subgift" | "bits";
+export type ReactionType = "raid" | "sub" | "resub" | "subgift" | "bits" | "hype";
 
 export interface ParsedReactionEvent {
   type: ReactionType;

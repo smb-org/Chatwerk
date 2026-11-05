@@ -9,7 +9,22 @@ const manifest = {
   raid: { image: "/effects/raid.svg", sound: "/effects/raid.mp3" },
   sub: { image: "/effects/sub.svg", sound: "/effects/sub.mp3" },
   bits: { image: "/effects/bits.svg", sound: "/effects/bits.mp3" },
+  hype: { image: "/effects/hype.svg", sound: "/effects/hype.mp3" },
 };
+
+type HypeTrainMessage = { type: "hype-train"; id: string; trainId: string; channel: string; phase: "begin" | "progress" | "end"; level: number; expiresAt: string | null };
+function hype(
+  id: string,
+  phase: HypeTrainMessage["phase"],
+  level: number,
+  expiresAt: string | null = new Date(Date.now() + 20_000).toISOString(),
+  trainId = id,
+): HypeTrainMessage {
+  return { type: "hype-train", id, trainId, channel: "sample", phase, level, expiresAt };
+}
+function sendHype(effects: ReturnType<typeof createReactionEffects>, message: HypeTrainMessage): void {
+  (effects as unknown as { handleHypeTrain(message: HypeTrainMessage): void }).handleHypeTrain(message);
+}
 
 function fixture(type: ReactionType, id: string, room = "10", sourceId?: string): CommonMessage {
   const tags = type === "bits"
@@ -46,6 +61,189 @@ afterEach(() => {
 });
 
 describe("stream reactions", () => {
+  it("shows a Hype Train ring and chip at begin, then clears on end", async () => {
+    vi.useFakeTimers();
+    const effects = makeEffects();
+    sendHype(effects, hype("begin-1", "begin", 1));
+    await settleEffects();
+    expect(document.querySelector(".reaction-layer")?.classList.contains("hype-train-active")).toBe(true);
+    expect(document.querySelector(".hype-train-chip")?.textContent).toContain("LV 1");
+    sendHype(effects, hype("end-1", "end", 1, null));
+    expect(document.querySelector(".hype-train-chip")).toBeNull();
+    expect(document.querySelector(".reaction-layer")?.classList.contains("hype-train-active")).toBe(false);
+    effects.dispose();
+  });
+
+  it("keeps the Hype Train ring but skips its burst and sound when a cached manifest lacks Hype", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window.HTMLMediaElement.prototype, "play").mockResolvedValue();
+    vi.spyOn(window.HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    const legacyManifest = {
+      raid: manifest.raid, sub: manifest.sub, bits: manifest.bits,
+    };
+    const requested: string[] = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith("manifest.json")
+      ? Response.json(legacyManifest) : (requested.push(String(input)), new Response(new Uint8Array([1]), { status: 200 })));
+    const effects = makeEffects({ ...DEFAULTS, reactionSoundEnabled: true }, fetcher);
+    const raid = fixture("raid", "legacy-raid");
+    effects.enqueue(raid, { type: "raid", amount: 1 }, alias(raid));
+    sendHype(effects, hype("legacy-manifest-hype", "begin", 1));
+    await settleEffects();
+    expect(document.querySelector('.reaction-burst[data-effect="raid"]')).not.toBeNull();
+    expect(fetcher).toHaveBeenCalledWith("/effects/manifest.json", { cache: "no-cache" });
+    await vi.advanceTimersByTimeAsync(1_200);
+    await settleEffects();
+    expect(document.querySelector(".hype-train-chip")).not.toBeNull();
+    expect(document.querySelector('.reaction-burst[data-effect="hype"]')).toBeNull();
+    expect(requested).not.toContain("/effects/hype.mp3");
+    effects.dispose();
+  });
+
+  it("drops late events for ended trains while accepting another train and evicting old ended ids", () => {
+    vi.useFakeTimers();
+    const effects = makeEffects();
+    sendHype(effects, hype("a-begin", "begin", 1, undefined, "train-a"));
+    sendHype(effects, hype("a-end", "end", 1, null, "train-a"));
+    sendHype(effects, hype("a-late", "progress", 8, undefined, "train-a"));
+    expect(document.querySelector(".hype-train-chip")).toBeNull();
+
+    sendHype(effects, hype("b-begin", "begin", 2, undefined, "train-b"));
+    expect(document.querySelector(".hype-train-chip")?.textContent).toContain("LV 2");
+    sendHype(effects, hype("b-end", "end", 2, null, "train-b"));
+    for (let index = 0; index < 16; index += 1) {
+      sendHype(effects, hype(`ended-${index}`, "end", 1, null, `ended-train-${index}`));
+    }
+    sendHype(effects, hype("a-late-after-eviction", "progress", 3, undefined, "train-a"));
+    expect(document.querySelector(".hype-train-chip")?.textContent).toContain("LV 3");
+    effects.dispose();
+  });
+
+  it("ignores expired Hype Train begin and progress events without visual or sound effects", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(window.HTMLMediaElement.prototype, "play").mockResolvedValue();
+    vi.spyOn(window.HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
+    const requested: string[] = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      requested.push(String(input));
+      return String(input).endsWith("manifest.json") ? Response.json(manifest) : new Response(new Uint8Array([1]));
+    });
+    const effects = makeEffects({ ...DEFAULTS, reactionSoundEnabled: true }, fetcher);
+    const expired = new Date(Date.now() - 1).toISOString();
+    sendHype(effects, hype("expired-begin", "begin", 1, expired, "expired-train"));
+    await settleEffects();
+    expect(document.querySelector(".hype-train-chip")).toBeNull();
+    expect(document.querySelector('.reaction-burst[data-effect="hype"]')).toBeNull();
+    expect(requested).not.toContain("/effects/hype.mp3");
+
+    sendHype(effects, hype("live-begin", "begin", 1, undefined, "live-train"));
+    await settleEffects();
+    const soundRequests = requested.filter((path) => path === "/effects/hype.mp3").length;
+    const burstCount = document.querySelectorAll('.reaction-burst[data-effect="hype"]').length;
+    sendHype(effects, hype("expired-progress", "progress", 9, expired, "live-train"));
+    await settleEffects();
+    expect(document.querySelector(".hype-train-chip")?.textContent).toContain("LV 1");
+    expect(document.querySelectorAll('.reaction-burst[data-effect="hype"]')).toHaveLength(burstCount);
+    expect(requested.filter((path) => path === "/effects/hype.mp3")).toHaveLength(soundRequests);
+    effects.dispose();
+  });
+
+  it("keeps Hype Train message ids deduped after 300 chat source ids", async () => {
+    vi.useFakeTimers();
+    const effects = makeEffects();
+    sendHype(effects, hype("hype-retry-id", "begin", 1, undefined, "stable-train"));
+    for (let index = 0; index < 300; index += 1) {
+      const message = fixture("raid", `chat-${index}`, "10", `chat-source-${index}`);
+      effects.enqueue(message, { type: "raid", amount: 1 }, alias(message));
+      effects.clearRoom("10");
+    }
+    sendHype(effects, hype("hype-retry-id", "progress", 9, undefined, "stable-train"));
+    await settleEffects();
+    expect(document.querySelector(".hype-train-chip")?.textContent).toContain("LV 1");
+    expect(document.querySelectorAll('.reaction-burst[data-effect="hype"]')).toHaveLength(1);
+    effects.dispose();
+  });
+
+  it("keeps the active ring and chip when motion is disabled, but removes its burst", async () => {
+    vi.useFakeTimers();
+    const effects = makeEffects();
+    sendHype(effects, hype("motion-none", "begin", 1));
+    await settleEffects();
+    effects.setTheme({ ...DEFAULTS, motion: "none" });
+    expect(document.querySelector(".reaction-layer")?.classList.contains("hype-train-active")).toBe(true);
+    expect(document.querySelector(".hype-train-chip")).not.toBeNull();
+    expect(document.querySelectorAll(".reaction-burst")).toHaveLength(0);
+    effects.dispose();
+  });
+
+  it("bursts only when progress raises the level and does not add sound bursts otherwise", async () => {
+    vi.useFakeTimers();
+    const effects = makeEffects({ ...DEFAULTS, reactionSoundEnabled: true });
+    sendHype(effects, hype("progress-join", "progress", 1));
+    await settleEffects();
+    expect(document.querySelectorAll('.reaction-burst[data-effect="hype"]')).toHaveLength(0);
+    sendHype(effects, hype("progress-same", "progress", 1));
+    sendHype(effects, hype("progress-up", "progress", 2));
+    sendHype(effects, hype("progress-late", "progress", 1, new Date(Date.now() + 30_000).toISOString()));
+    await settleEffects();
+    expect(document.querySelectorAll('.reaction-burst[data-effect="hype"]')).toHaveLength(1);
+    expect(document.querySelector(".hype-train-chip")?.textContent).toContain("LV 2");
+    await vi.advanceTimersByTimeAsync(20_001);
+    expect(document.querySelector(".hype-train-chip")).not.toBeNull();
+    effects.dispose();
+  });
+
+  it("expires the active look at expiresAt", async () => {
+    vi.useFakeTimers();
+    const effects = makeEffects();
+    sendHype(effects, hype("expire", "begin", 3, new Date(Date.now() + 2_000).toISOString()));
+    expect(document.querySelector(".hype-train-chip")).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(2_001);
+    expect(document.querySelector(".hype-train-chip")).toBeNull();
+    effects.dispose();
+  });
+
+  it("clears Hype Train expiry and burst timers on dispose", async () => {
+    vi.useFakeTimers();
+    const effects = makeEffects();
+    sendHype(effects, hype("dispose", "begin", 1));
+    await settleEffects();
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    effects.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("drops repeated EventSub message ids", async () => {
+    vi.useFakeTimers();
+    const effects = makeEffects();
+    sendHype(effects, hype("same-id", "begin", 1));
+    sendHype(effects, hype("same-id", "progress", 9));
+    await settleEffects();
+    expect(document.querySelector(".hype-train-chip")?.textContent).toContain("LV 1");
+    expect(document.querySelectorAll('.reaction-burst[data-effect="hype"]')).toHaveLength(1);
+    effects.dispose();
+  });
+
+  it("ends the active look immediately when the toggle is disabled", async () => {
+    vi.useFakeTimers();
+    const effects = makeEffects();
+    sendHype(effects, hype("toggle-on", "begin", 1));
+    effects.setTheme({ ...DEFAULTS, reactionHypeTrain: false });
+    expect(document.querySelector(".hype-train-chip")).toBeNull();
+    sendHype(effects, hype("toggle-off", "begin", 2));
+    expect(document.querySelector(".hype-train-chip")).toBeNull();
+    effects.dispose();
+  });
+
+  it("shows no look or burst at zero reaction intensity", async () => {
+    vi.useFakeTimers();
+    const effects = makeEffects({ ...DEFAULTS, reactionIntensity: 0 });
+    sendHype(effects, hype("zero", "begin", 1));
+    await settleEffects();
+    expect(document.querySelector(".hype-train-chip")).toBeNull();
+    expect(document.querySelectorAll('.reaction-burst[data-effect="hype"]')).toHaveLength(0);
+    effects.dispose();
+  });
+
   it("keeps 200 gift-sub reactions under the element cap and drops the oldest queued work", async () => {
     vi.useFakeTimers();
     const effects = makeEffects();

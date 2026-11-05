@@ -60,4 +60,17 @@ describe("Studio translations", () => {
     expect(load("en").couldNotLoadRetrying).toBe("Could not load. Retrying...");
     expect(load("de").couldNotLoadRetrying).toBe("Laden fehlgeschlagen. Neuer Versuch …");
   });
+
+  it("translates each Hype Train control, permission state, action, and rehearsal label", () => {
+    for (const key of [
+      "hypeTrain", "fieldReactionHypeTrain", "hypeTrainLoading", "hypeTrainStatusUnavailable",
+      "hypeTrainNotConnected", "hypeTrainConnected", "hypeTrainConnect", "hypeTrainDisconnect",
+      "hypeTrainPermissionExplanation", "hypeTrainHelper", "hypeTrainConnectSuccess", "hypeTrainDenied",
+      "hypeTrainScopeMissing", "hypeTrainUserMismatch", "hypeTrainConnectFailed", "hypeTrainSessionExpired",
+      "hypeTrainDisconnected", "hypeTrainDisconnectFailed",
+    ]) {
+      expect(load("en")[key], `English translation missing ${key}`).toBeTruthy();
+      expect(load("de")[key], `German translation missing ${key}`).toBeTruthy();
+    }
+  });
 });

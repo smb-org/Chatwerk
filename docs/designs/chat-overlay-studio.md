@@ -132,7 +132,7 @@ Eine feste Liste aus Sounds und Bild-Effekten mit sauberen Rechten. Der Streamer
 ### Bekannte Grenzen
 
 - Der Login begrenzt nur Anlegen. Ein geleakter Overlay-Link oder ein fehlerhafter Client kann weiter Verbindungen und Schreibzugriffe erzeugen. Ausbau, sobald die Cloudflare-Metriken es zeigen: Schreiblimits pro Konto und Einladungsliste. Nie ein Limit, das ein laufendes Overlay abschaltet.
-- Twitch könnte das anonyme IRC einschränken. Dann muss der Chat-Zugang über Login und EventSub laufen, mit dem zusätzlichen Scope `user:read:chat` und gespeicherten Tokens wie beim Hype Train in Schritt 6.
+- Twitch könnte das anonyme IRC einschränken. Dann muss der Chat-Zugang über Login und EventSub laufen, mit dem zusätzlichen Scope `user:read:chat`; die Hype-Train-Zustimmung gewährt keinen Chat-Zugriff, dafür wäre ein eigener Token-Fluss nötig.
 
 ## Open Questions
 
@@ -161,7 +161,7 @@ Gehosteter Web-Dienst auf Cloudflare Workers. Deploy per GitHub Actions bei Merg
 3. **Studio und Live-Updates:** Twitch-Login, `/o/:id`, Durable Object, Regler, Probebühne.
 4. **Galerie:** Teilen, Kopieren, Herkunftsanzeige, Quoten für Overlays und Themes. Danach Einladung an die Streamer-Runde.
 5. **Widget-Export:** in der Form, die Schritt 1 erlaubt.
-6. **Reaktionen:** anonyme Events gegen einen eingeloggten Client testen, dann Reaktionen und feste Effekte. Der Hype Train ist ein eigener Baustein: Der Streamer stimmt erneut zu (`channel:read:hype_train`), der Worker speichert Token und Refresh in D1, empfängt EventSub per Webhook mit Signaturprüfung und leitet Events ans Durable Object weiter. Ohne Zustimmung bleibt alles andere nutzbar.
+6. **Reaktionen:** anonyme Events gegen einen eingeloggten Client testen, dann Reaktionen und feste Effekte. Der Hype Train ist ein eigener Baustein: Der Streamer stimmt erneut zu (`channel:read:hype_train`), der Worker prüft Scope und Nutzer-ID, verwirft danach das Nutzertoken, legt mit einem App-Token Webhook-Subscriptions an, speichert nur die Zustimmung in D1 und leitet signierte EventSub-Events ans Durable Object weiter. Ohne Zustimmung bleibt alles andere nutzbar.
 
 Bestehender Code als Vorlage, noch nicht im Detail geprüft: `recipeOverlay/src/worker/oauth.ts` (Twitch-OAuth), `recipeOverlay/src/channel/channel-object.ts` (Durable Object mit WebSockets), `twitchMarbles/apps/server/src/chat/ircReader.ts` (IRC), dazu der Skill `streamelements-widget`.
 
@@ -517,7 +517,7 @@ Grundlage: globale Vorgabe "rein technische Punkte ohne echten Trade-off selbst 
 | S8 | IRC fordert `twitch.tv/tags` und `twitch.tv/commands`, behandelt `RECONNECT` sofort, würfelt bei `NOTICE Login unsuccessful` eine neue `justinfan`-Nummer | `twitchMarbles/.../ircReader.ts:72` kennt nur `tags` |
 | S9 | Knotenlimit im Renderer (Standard 100, maximal 300), Aufbau je Frame gebündelt, Animation nur über `transform` und `opacity` | Performance |
 | S10 | Test-Stack wie in `recipeOverlay`: vitest, `@cloudflare/vitest-plugin`, Playwright auf festem Port 17174 | `recipeOverlay/vitest.worker.config.ts` |
-| S11 | Hype Train ohne gespeichertes Nutzer-Token: einmalige Zustimmung, App-Token legt die Webhook-Subscription an, `authorization_revoked` schaltet ab | Twitch-Doku, Create EventSub Subscription |
+| S11 | Hype Train ohne gespeichertes Nutzer-Token: einmalige Zustimmung, App-Token legt die Webhook-Subscriptions an, alle Twitch-Revoke-Statuswerte schalten ab | Twitch-Doku, Create EventSub Subscription |
 | S13 | Das Durable Object prüft eine Link-Generation. Neu erzeugen erhöht sie, verspätete Upgrades mit alter Generation werden abgewiesen | Codex 3 |
 | S14 | Protokoll und Konfiguration ändern sich nur additiv, unbekannte Felder werden ignoriert. Bei höherer `schemaVersion` behält der Renderer geladenen Code und letzte gültige Konfiguration und lädt nie automatisch neu. Das Studio zeigt in der Warnzeile "Update required after your stream" | Codex 4, korrigiert im Design-Zweitreview |
 | S15 | Das Studio speichert nacheinander: eine Anfrage läuft, neue Änderungen werden zusammengefasst. Bei 409 wird neu gelesen und die offene Änderung erneut angewendet | Codex 5 |
@@ -532,7 +532,7 @@ Grundlage: globale Vorgabe "rein technische Punkte ohne echten Trade-off selbst 
 | R3-3 | Hosts in `shared/hosts.ts`: `static-cdn.jtvnw.net`, `cdn.7tv.app`, `cdn.betterttv.net`, `cdn.frankerfacez.com` |
 | R3-4 | Notfallplan ist EventSub per WebSocket direkt im Browser (Nutzer-Token, `user:read:chat`). Prämisse 1 und Ausfall-Constraint bleiben. Wird nicht vorab gebaut |
 | R3-5 | Pronomen-Cache: `Map` pro Seitenaufruf, 24 h, optional `localStorage` in `try/catch` |
-| R3-6, R3-7 | Siehe S11. Gespeichert werden nur Zeitpunkt der Zustimmung und Subscription-ID |
+| R3-6, R3-7 | Siehe S11 und Hype Train unten. Gespeichert werden Nutzer-ID, Login und Zeitpunkt der Zustimmung; Subscription-IDs und Nutzer-Tokens bleiben flüchtig |
 | R3-8 | Routen `/api/twitch/badges/global` und `/api/twitch/badges/:broadcasterId`, ID aus `room-id` und `source-room-id` |
 | R3-9 | Live-Socket: Backoff 1 s bis 30 s mit Jitter, schlägt der Abruf fehl, bleibt die letzte Revision aktiv |
 | R3-10 | Siehe S5 |
@@ -793,10 +793,10 @@ Synthesized from this review's findings. Reihenfolge nach R4: erst die Kernkette
   - Surfaced by: Distribution Plan
   - Files: `.github/workflows/*`
   - Verify: Deploy bei Merge auf `main`
-- [ ] **T15 (P3, human: ~16h / CC: ~3h)** — Reaktionen, feste Effekte und Hype Train
+- [x] **T15 (P3, human: ~16h / CC: ~3h)** — Reaktionen, feste Effekte und Hype Train
   - Surfaced by: Next Steps 6, S11
   - Files: `src/renderer/*`, `src/worker/*`
-  - Verify: anonyme Events gegen eingeloggten Client geprüft
+  - Verify: lokale signierte EventSub-Fixtures, WebSocket-Fan-out, Renderer und Studio geprüft; echte Twitch-Auslieferung nicht geprüft
 
 ### Unresolved decisions
 
@@ -1138,6 +1138,16 @@ The additive display fields stay at schema version 1 and default to today's appe
 `readableNames` adjusts tag-based names along HSL lightness to reach 4.5:1; it leaves a color already meeting that ratio unchanged, has no effect in text name-color mode, and does not modify 7TV paints. If an alpha color cannot reach the ratio at its current opacity, the adjusted name color becomes opaque. Highlighted lines use the highlight background. Otherwise, effective line opacity is `backgroundOpacity × backgroundColor alpha`: at 0.35 or above, use `backgroundColor`; below 0.35, use `panelBackgroundColor` when the panel is enabled; with a low-opacity line and no panel, use `backgroundColor` as the best known tint over variable video. Text-shadow paint can extend no more than 10px outside line and panel bounds; the document still clips at the overlay viewport.
 
 The panel is the chat box background and keeps a fixed frame height, or `maxChatHeight` in a height-limited stack. Its padding and border count against available line height; independent line padding defaults to zero so existing looks stay unchanged. The reaction layer still covers the full frame. In ticker layout the panel wraps the ticker strip, while backlog is skipped.
+
+## Hype Train
+
+Twitch documents `channel.hype_train.begin`, `channel.hype_train.progress`, and `channel.hype_train.end` at EventSub version `2`; all require `channel:read:hype_train`. Begin and progress carry a level and `expires_at`; end carries `ended_at` and cooldown data. Twitch warns that deliveries can be out of order, including progress arriving before begin. The webhook validates the signed raw body, accepts only the subscribed broadcaster and version, and forwards only for a matching consent row. Socket messages have `{ type: "hype-train", id, trainId, channel, phase, level, expiresAt }`: `id` is the EventSub message ID for delivery deduplication, and `trainId` is Twitch's `event.id` for train ordering. Ended train IDs are remembered briefly so a late begin or progress cannot restore the treatment. A progress event can establish the active frame treatment for an overlay opened mid-train.
+
+The streamer grants the scope once. Chatwerk immediately discards the user access token after checking its scope and identity. D1 stores only the Twitch `user_id`, lowercase `login`, and `created_at` in `hype_train_consents`; it stores neither user tokens nor subscription IDs. Subscription IDs exist only in memory while creating or deleting subscriptions. The webhook secret is the lowercase hexadecimal HMAC-SHA256 of `SESSION_KEY` with the fixed UTF-8 label `eventsub-webhook-v1`. Rotating `SESSION_KEY` leaves the consent row in place, but the signature check rejects revocations too because they use the old derived secret. Clicking Connect again repairs the subscriptions: Chatwerk best-effort deletes the old ones, stores the consent row, then creates replacements with the new secret.
+
+The implementation ceiling is broadcaster ownership: only overlays whose owner is the broadcaster receive Hype Train events, and each Durable Object checks that the broadcaster login is among its configured channels. An overlay owned by someone else gets no Hype Train, even when a helper can edit it. No active train state is persisted; an overlay opened during a train shows the treatment after its next progress event. A revocation is accepted only when its subscription status is a string other than `enabled` or `webhook_callback_verification_pending` and the body has no `event`; accepted revocations clear consent even for a status Twitch adds later, then best-effort delete the remaining subscriptions.
+
+Worker and browser tests use local signed fixtures and mocked Twitch API responses. They do not contact Twitch, verify a production callback, observe Twitch retries or revocations, or exercise an actual Hype Train. Those delivery behaviors remain unverified until a real train is available.
 
 ## GSTACK REVIEW REPORT
 

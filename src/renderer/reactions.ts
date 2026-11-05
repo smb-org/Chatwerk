@@ -9,6 +9,9 @@ export const REACTION_COOLDOWN_MS = 1_200;
 export const REACTION_DURATION_MS = 3_500;
 const MAX_RAIN_EMOTES = 5;
 const MAX_SEEN_SOURCE_IDS = 300;
+const MAX_ENDED_HYPE_TRAINS = 16;
+// ponytail: 64 Hype message IDs; a reload between delivery and retry can repeat one burst. There is no server-side dedupe; add it if retries show up in practice.
+const MAX_SEEN_HYPE_MESSAGE_IDS = 64;
 
 export interface ReactionAlias {
   key: string;
@@ -25,6 +28,7 @@ export interface ReactionEffectsOptions {
 }
 
 export interface ReactionEffects {
+  handleHypeTrain(message: HypeTrainReactionMessage): void;
   enqueue(event: CommonMessage, reaction: ParsedReactionEvent, alias: ReactionAlias): void;
   cancelAlias(aliasKey: string): void;
   clearRoom(room: string): void;
@@ -36,12 +40,22 @@ export interface ReactionEffects {
   dispose(): void;
 }
 
-type EffectKind = "raid" | "sub" | "bits";
+export interface HypeTrainReactionMessage {
+  type: "hype-train";
+  id: string;
+  trainId: string;
+  channel: string;
+  phase: "begin" | "progress" | "end";
+  level: number;
+  expiresAt: string | null;
+}
+
+type EffectKind = "raid" | "sub" | "bits" | "hype";
 interface EffectAsset {
   image: string;
   sound: string;
 }
-type EffectManifest = Record<EffectKind, EffectAsset>;
+type EffectManifest = Partial<Record<EffectKind, EffectAsset>>;
 
 interface ReactionRequest {
   id: number;
@@ -59,6 +73,8 @@ interface ReactionRequest {
   burst: HTMLElement | undefined;
   audio: HTMLAudioElement | undefined;
   objectUrl: string | undefined;
+  standalone: boolean;
+  playSound: boolean;
 }
 
 const DEFAULT_RAIN = [
@@ -68,7 +84,7 @@ const DEFAULT_RAIN = [
   "/effects/rain-diamond.svg",
   "/effects/rain-dot.svg",
 ];
-const EFFECT_KINDS = ["raid", "sub", "bits"] as const;
+const LEGACY_EFFECT_KINDS = ["raid", "sub", "bits"] as const;
 
 export function createReactionEffects(options: ReactionEffectsOptions): ReactionEffects {
   const { root } = options;
@@ -90,10 +106,112 @@ export function createReactionEffects(options: ReactionEffectsOptions): Reaction
   const requestBySourceId = new Map<string, ReactionRequest>();
   const seenSourceIds = new Set<string>();
   const seenSourceOrder: string[] = [];
+  const seenHypeMessageIds = new Set<string>();
+  const seenHypeMessageOrder: string[] = [];
+  const endedHypeTrainIds = new Set<string>();
+  const endedHypeTrainOrder: string[] = [];
   const linesByAlias = new Map<string, HTMLElement>();
   const highlightCounts = new Map<HTMLElement, number>();
   const soundBlobs = new Map<string, Promise<Blob | null>>();
   const manifestPromise = loadManifest(fetcher);
+  let activeHypeLevel: number | undefined;
+  let activeHypeExpiresAt: string | null = null;
+  let hypeExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearHypeLook = (): void => {
+    if (hypeExpiryTimer !== undefined) clearTimeout(hypeExpiryTimer);
+    hypeExpiryTimer = undefined;
+    activeHypeLevel = undefined;
+    activeHypeExpiresAt = null;
+    layer.classList.remove("hype-train-active");
+    layer.querySelector(".hype-train-chip")?.remove();
+  };
+
+  const rememberSourceId = (sourceId: string): boolean => {
+    if (seenSourceIds.has(sourceId)) return false;
+    seenSourceIds.add(sourceId);
+    seenSourceOrder.push(sourceId);
+    while (seenSourceOrder.length > MAX_SEEN_SOURCE_IDS) {
+      const oldest = seenSourceOrder.shift();
+      if (oldest) seenSourceIds.delete(oldest);
+    }
+    return true;
+  };
+
+  const rememberHypeMessageId = (messageId: string): boolean => {
+    if (seenHypeMessageIds.has(messageId)) return false;
+    seenHypeMessageIds.add(messageId);
+    seenHypeMessageOrder.push(messageId);
+    while (seenHypeMessageOrder.length > MAX_SEEN_HYPE_MESSAGE_IDS) {
+      const oldest = seenHypeMessageOrder.shift();
+      if (oldest) seenHypeMessageIds.delete(oldest);
+    }
+    return true;
+  };
+
+  const rememberEndedHypeTrain = (trainId: string): void => {
+    if (endedHypeTrainIds.has(trainId)) return;
+    endedHypeTrainIds.add(trainId);
+    endedHypeTrainOrder.push(trainId);
+    while (endedHypeTrainOrder.length > MAX_ENDED_HYPE_TRAINS) {
+      const oldest = endedHypeTrainOrder.shift();
+      if (oldest) endedHypeTrainIds.delete(oldest);
+    }
+  };
+
+  const showHypeLook = (level: number, expiresAt: string | null): void => {
+    if (!theme.reactionHypeTrain || theme.reactionIntensity <= 0) {
+      clearHypeLook();
+      return;
+    }
+    if (hypeExpiryTimer !== undefined) clearTimeout(hypeExpiryTimer);
+    hypeExpiryTimer = undefined;
+    activeHypeLevel = level;
+    activeHypeExpiresAt = expiresAt;
+    layer.classList.add("hype-train-active");
+    layer.style.setProperty("--hype-train-intensity", String(theme.reactionIntensity));
+    let chip = layer.querySelector<HTMLElement>(".hype-train-chip");
+    if (!chip) {
+      chip = document.createElement("div");
+      chip.className = "hype-train-chip";
+      chip.setAttribute("aria-label", "Hype Train level");
+      const icon = document.createElement("img");
+      icon.src = "/effects/hype.svg";
+      icon.alt = "";
+      icon.decoding = "async";
+      const label = document.createElement("span");
+      label.className = "hype-train-level";
+      chip.appendChild(icon);
+      chip.appendChild(label);
+      layer.appendChild(chip);
+    }
+    const label = chip.querySelector<HTMLElement>(".hype-train-level");
+    if (label) label.textContent = `LV ${level}`;
+    if (expiresAt) {
+      const delay = Date.parse(expiresAt) - Date.now();
+      if (Number.isFinite(delay)) {
+        if (delay <= 0) clearHypeLook();
+        else hypeExpiryTimer = setTimeout(clearHypeLook, delay);
+      }
+    }
+  };
+
+  const triggerHypeBurst = (message: HypeTrainReactionMessage, playSound: boolean): void => {
+    const event: CommonMessage = {
+      type: "PRIVMSG", channel: `#${message.channel}`, userLogin: null, id: null, roomId: null,
+      sourceRoomId: null, sourceId: message.id, displayName: null, color: null, badges: [], emotes: [], text: "", tags: {},
+    };
+    const request: ReactionRequest = {
+      id: nextId++, sourceId: message.id, event, reaction: { type: "hype", amount: message.level },
+      aliases: new Map(), pendingLineAliases: new Set(), highlightedLines: new Set(), highlightTimers: new Map(),
+      active: false, visualActive: false, timer: undefined, fallbackTimer: undefined, burst: undefined,
+      audio: undefined, objectUrl: undefined, standalone: true, playSound,
+    };
+    requests.add(request);
+    queue.push(request);
+    if (queue.length > MAX_QUEUED_REACTIONS) dropRequest(queue[0]!);
+    drainQueue();
+  };
 
   const attachHighlight = (request: ReactionRequest, line: HTMLElement): void => {
     if (request.highlightedLines.has(line)) return;
@@ -188,8 +306,9 @@ export function createReactionEffects(options: ReactionEffectsOptions): Reaction
   };
 
   const playSound = async (request: ReactionRequest, manifest: EffectManifest): Promise<void> => {
-    if (!theme.reactionSoundEnabled || theme.reactionVolume <= 0 || disposed) return;
-    const path = manifest[effectKind(request.reaction.type)].sound;
+    if (!request.playSound || !theme.reactionSoundEnabled || theme.reactionVolume <= 0 || disposed) return;
+    const path = manifest[effectKind(request.reaction.type)]?.sound;
+    if (!path) return;
     const blob = await getSoundBlob(path);
     if (!blob || !request.active || !request.visualActive || disposed || !theme.reactionSoundEnabled || theme.reactionVolume <= 0) return;
     let objectUrl: string | undefined;
@@ -233,6 +352,8 @@ export function createReactionEffects(options: ReactionEffectsOptions): Reaction
   const addVisuals = (request: ReactionRequest, manifest: EffectManifest): void => {
     if (!request.active || !request.visualActive || disposed || theme.motion === "none" || theme.reactionIntensity <= 0) return;
     const kind = effectKind(request.reaction.type);
+    const asset = manifest[kind];
+    if (!asset) return;
     const items = makeRainItems(request.event);
     const size = 2 + items.length;
     if (layer.querySelectorAll("*").length + size > MAX_REACTION_ELEMENTS) return;
@@ -244,7 +365,7 @@ export function createReactionEffects(options: ReactionEffectsOptions): Reaction
     burst.style.setProperty("--reaction-intensity", String(theme.reactionIntensity));
     const image = document.createElement("img");
     image.className = "reaction-effect";
-    image.src = manifest[kind].image;
+    image.src = asset.image;
     image.alt = "";
     image.decoding = "async";
     burst.appendChild(image);
@@ -265,7 +386,7 @@ export function createReactionEffects(options: ReactionEffectsOptions): Reaction
   };
 
   const startRequest = (request: ReactionRequest): void => {
-    if (!request.aliases.size || !isEnabled(theme, request.reaction.type)) {
+    if ((!request.aliases.size && !request.standalone) || !isEnabled(theme, request.reaction.type)) {
       dropRequest(request);
       drainQueue();
       return;
@@ -356,6 +477,33 @@ export function createReactionEffects(options: ReactionEffectsOptions): Reaction
   }
 
   return {
+    handleHypeTrain(message) {
+      if (disposed || !message.id || message.id.length > 256 || !message.trainId || message.trainId.length > 256 ||
+        !rememberHypeMessageId(message.id)) return;
+      if (message.phase === "end") {
+        rememberEndedHypeTrain(message.trainId);
+        clearHypeLook();
+        return;
+      }
+      if (endedHypeTrainIds.has(message.trainId)) return;
+      if (message.expiresAt !== null) {
+        const expiresAt = Date.parse(message.expiresAt);
+        if (Number.isFinite(expiresAt) && expiresAt <= Date.now()) return;
+      }
+      if (!theme.reactionHypeTrain || theme.reactionIntensity <= 0) {
+        clearHypeLook();
+        return;
+      }
+      const previousLevel = activeHypeLevel;
+      const level = previousLevel === undefined ? message.level : Math.max(previousLevel, message.level);
+      const previousExpiry = activeHypeExpiresAt ? Date.parse(activeHypeExpiresAt) : Number.NEGATIVE_INFINITY;
+      const eventExpiry = message.expiresAt ? Date.parse(message.expiresAt) : Number.NEGATIVE_INFINITY;
+      const expiresAt = eventExpiry >= previousExpiry ? message.expiresAt : activeHypeExpiresAt;
+      showHypeLook(level, expiresAt);
+      if (message.phase === "begin" || (previousLevel !== undefined && message.level > previousLevel)) {
+        triggerHypeBurst(message, message.phase === "begin");
+      }
+    },
     enqueue(event, reaction, alias) {
       if (disposed || !isEnabled(theme, reaction.type)) return;
       const sourceId = event.sourceId && event.sourceId.length <= 256 ? event.sourceId : null;
@@ -364,14 +512,7 @@ export function createReactionEffects(options: ReactionEffectsOptions): Reaction
         if (existing) addAlias(existing, alias);
         return;
       }
-      if (sourceId) {
-        seenSourceIds.add(sourceId);
-        seenSourceOrder.push(sourceId);
-        while (seenSourceOrder.length > MAX_SEEN_SOURCE_IDS) {
-          const oldest = seenSourceOrder.shift();
-          if (oldest) seenSourceIds.delete(oldest);
-        }
-      }
+      if (sourceId) rememberSourceId(sourceId);
       const request: ReactionRequest = {
         id: nextId++,
         sourceId,
@@ -388,6 +529,8 @@ export function createReactionEffects(options: ReactionEffectsOptions): Reaction
         burst: undefined,
         audio: undefined,
         objectUrl: undefined,
+        standalone: false,
+        playSound: true,
       };
       addAlias(request, alias);
       requests.add(request);
@@ -443,8 +586,12 @@ export function createReactionEffects(options: ReactionEffectsOptions): Reaction
       const soundDisabled = !nextTheme.reactionSoundEnabled || nextTheme.reactionVolume <= 0;
       theme = nextTheme;
       if (soundDisabled) for (const request of requests) stopSound(request);
+      if (!theme.reactionHypeTrain || theme.reactionIntensity <= 0) {
+        clearHypeLook();
+        for (const request of [...requests]) if (request.reaction.type === "hype") dropRequest(request);
+      }
       if (theme.motion === "none" || theme.reactionIntensity <= 0) {
-        layer.replaceChildren();
+        layer.querySelectorAll(".reaction-burst").forEach((burst) => burst.remove());
         for (const request of requests) request.burst = undefined;
       }
       else {
@@ -457,6 +604,7 @@ export function createReactionEffects(options: ReactionEffectsOptions): Reaction
       queue.length = 0;
       for (const request of [...requests]) dropRequest(request);
       layer.replaceChildren();
+      clearHypeLook();
       seenSourceIds.clear();
       seenSourceOrder.length = 0;
       nextAllowedAt = 0;
@@ -472,26 +620,32 @@ export function createReactionEffects(options: ReactionEffectsOptions): Reaction
 }
 
 function isEnabled(theme: ThemeConfig, type: ReactionType): boolean {
+  if (type === "hype") return theme.reactionHypeTrain;
   const fieldName = `reaction${type[0]!.toUpperCase()}${type.slice(1)}` as ThemeFieldName;
   return Boolean(theme[fieldName]);
 }
 
 function effectKind(type: ReactionType): EffectKind {
-  return type === "raid" ? "raid" : type === "bits" ? "bits" : "sub";
+  return type === "raid" || type === "bits" || type === "hype" ? type : "sub";
 }
 
 async function loadManifest(fetcher: typeof fetch): Promise<EffectManifest | null> {
   try {
-    const response = await fetcher("/effects/manifest.json", { cache: "force-cache" });
+    const response = await fetcher("/effects/manifest.json", { cache: "no-cache" });
     if (!response.ok) return null;
     const raw: unknown = await response.json();
     if (!isRecord(raw)) return null;
     const manifest = {} as EffectManifest;
-    for (const kind of EFFECT_KINDS) {
+    for (const kind of LEGACY_EFFECT_KINDS) {
       const asset = raw[kind];
       if (!isRecord(asset) || !isEffectPath(asset.image, /\.(?:svg|png|webp)$/u) ||
         !isEffectPath(asset.sound, /\.(?:mp3|ogg|wav)$/u)) return null;
       manifest[kind] = { image: asset.image, sound: asset.sound };
+    }
+    const hypeAsset = raw.hype;
+    if (isRecord(hypeAsset) && isEffectPath(hypeAsset.image, /\.(?:svg|png|webp)$/u) &&
+      isEffectPath(hypeAsset.sound, /\.(?:mp3|ogg|wav)$/u)) {
+      manifest.hype = { image: hypeAsset.image, sound: hypeAsset.sound };
     }
     return manifest;
   } catch {

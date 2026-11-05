@@ -51,6 +51,28 @@ const storageStub = (): LiveStorage & { values: Map<string, string> } => {
 afterEach(() => vi.useRealTimers());
 
 describe("live overlay client", () => {
+  it("ignores additive Hype Train socket messages when no optional message handler is present", () => {
+    vi.useFakeTimers();
+    const socket = new FakeSocket();
+    const live = startLiveUpdates({
+      hash: `#token=${token}&client=widget`,
+      origin: "https://chatwerk.test",
+      userAgent: "Chrome",
+      fetcher: vi.fn<typeof fetch>(async () => new Response(null, { status: 404 })),
+      socketFactory: () => socket as unknown as WebSocket,
+      applyTheme: vi.fn(),
+      registerServiceWorker: false,
+    });
+    socket.open();
+    const sentBeforeEvent = [...socket.sent];
+    socket.receive({
+      type: "hype-train", id: "event-id", trainId: "train-id", channel: "sample", phase: "begin", level: 1,
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(socket.sent).toEqual(sentBeforeEvent);
+    expect(() => live.stop()).not.toThrow();
+  });
+
   it("reads token, client and placement from the hash and preserves keyless channel previews", () => {
     expect(parseLiveLocation(`#token=${token}&client=widget&placement=origin`, "Chrome")).toEqual({
       token, client: "widget", placement: "origin", channel: null,

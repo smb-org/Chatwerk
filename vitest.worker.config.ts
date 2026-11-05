@@ -9,7 +9,11 @@ export default defineConfig({
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
       miniflare: {
-        bindings: { TEST_MIGRATIONS: migrations },
+        bindings: {
+          TEST_MIGRATIONS: migrations,
+          SESSION_KEY: "hype-train-worker-session-key",
+          TWITCH_CLIENT_SECRET: "hype-train-test-client-secret",
+        },
       },
     }),
   ],

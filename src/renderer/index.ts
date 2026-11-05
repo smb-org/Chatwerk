@@ -12,7 +12,7 @@ import { createRoomScopeCoordinator } from "./room-scopes";
 import { createSevenTvEventApi } from "./seventv-events";
 import { createThirdPartyBadgeLookup } from "./third-party-badges";
 import { fetchRecentBacklog } from "./backlog";
-import { runScenario, type ScenarioName } from "./scenarios";
+import { runHypeTrainScenario, runScenario, type ScenarioName } from "./scenarios";
 
 const chat = document.querySelector<HTMLElement>("#chat");
 if (chat) {
@@ -165,6 +165,14 @@ if (chat) {
         showScenario(event.data.scenario);
         return;
       }
+      if (event.data.type === "chatwerk:studio-hype-train-scenario") {
+        stopScenario?.();
+        renderer.clear();
+        renderer.setTheme(currentTheme);
+        runScenario("quiet", (message) => renderer.handle(message), liveLocation.channel ?? "sample");
+        stopScenario = runHypeTrainScenario((message) => renderer.handleHypeTrain(message));
+        return;
+      }
       if (event.data.type === "chatwerk:studio-live" && typeof event.data.enabled === "boolean") {
         stopScenario?.();
         stopScenario = undefined;
@@ -214,6 +222,9 @@ if (chat) {
       if (!liveLocation.channel) startIrc(channel);
     },
     onTestLine: (id, onExpire) => showTestLine(chat, id, onExpire),
+    onMessage: (message) => {
+      if (isHypeTrainMessage(message)) renderer.handleHypeTrain(message);
+    },
     onRevoked: () => {
       stopIrc();
       renderer.dispose();
@@ -240,6 +251,16 @@ function isScenarioName(value: unknown): value is ScenarioName {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isHypeTrainMessage(value: Record<string, unknown>): value is Record<string, unknown> & {
+  type: "hype-train"; id: string; trainId: string; channel: string; phase: "begin" | "progress" | "end"; level: number; expiresAt: string | null;
+} {
+  return value.type === "hype-train" && typeof value.id === "string" && typeof value.trainId === "string" &&
+    value.trainId.length > 0 && value.trainId.length <= 256 && typeof value.channel === "string" &&
+    (value.phase === "begin" || value.phase === "progress" || value.phase === "end") &&
+    typeof value.level === "number" && Number.isSafeInteger(value.level) && value.level > 0 &&
+    (value.expiresAt === null || typeof value.expiresAt === "string");
 }
 
 function normalizeChannels(channels: string[]): string[] {

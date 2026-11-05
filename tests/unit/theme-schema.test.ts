@@ -139,15 +139,17 @@ describe("theme schema", () => {
       reactionResub: true,
       reactionSubgift: true,
       reactionBits: true,
+      reactionHypeTrain: true,
       reactionIntensity: 0.35,
       reactionSoundEnabled: false,
       reactionVolume: 0.4,
     });
     expect(THEME_FIELDS.reactionIntensity.ui).toMatchObject({ group: "Reactions", control: "range" });
+    expect(THEME_FIELDS.reactionHypeTrain.ui).toMatchObject({ group: "Reactions", control: "toggle" });
     expect(THEME_FIELDS.reactionSoundEnabled.ui).toMatchObject({ group: "Reactions", control: "toggle" });
     expect(THEME_FIELDS.reactionVolume.range).toMatchObject({ min: 0, max: 1, step: 0.05 });
     expect(validateTheme({ schemaVersion: 1, reactionBits: false, reactionVolume: 0.75 }))
-      .toMatchObject({ schemaVersion: 1, reactionBits: false, reactionIntensity: 0.35, reactionVolume: 0.75 });
+      .toMatchObject({ schemaVersion: 1, reactionBits: false, reactionHypeTrain: true, reactionIntensity: 0.35, reactionVolume: 0.75 });
     expect(() => validateTheme({ reactionIntensity: 1.01 })).toThrow();
     expect(() => validateTheme({ reactionVolume: -0.1 })).toThrow();
     expect(getShareableThemeKeys()).toContain("reactionSubgift");

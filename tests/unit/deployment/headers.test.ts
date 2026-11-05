@@ -39,6 +39,21 @@ const headerValues = (headers: string[], name: string): string[] => headers.flat
     : [];
 });
 
+const effectiveHeadersForPath = (requestPath: string): string[] => {
+  const headers: string[] = [];
+  for (const rule of rulesMatchingPath(requestPath)) {
+    for (const line of rules.get(rule) ?? []) {
+      if (line.startsWith("! ")) {
+        const detachedName = line.slice(2).toLowerCase();
+        for (let index = headers.length - 1; index >= 0; index -= 1) {
+          if (headers[index]!.slice(0, headers[index]!.indexOf(":")).toLowerCase() === detachedName) headers.splice(index, 1);
+        }
+      } else headers.push(line);
+    }
+  }
+  return headers;
+};
+
 describe("deployment headers", () => {
   it("unions every matching rule like Cloudflare and keeps overlay headers unique", () => {
     expect(rulesMatchingPath("/overlay")).toEqual(["/overlay"]);
@@ -151,6 +166,15 @@ describe("deployment headers", () => {
     for (const path of ["/", "/login", "/studio", "/export.html", "/overlay", "/overlay/x"]) {
       expect(headersForPath(path).join("\n")).not.toContain("Access-Control-Allow-Origin");
     }
+  });
+
+  it("keeps the Hype manifest uncached while allowing cross-origin reads of both Hype assets", () => {
+    const manifestHeaders = effectiveHeadersForPath("/effects/manifest.json");
+    const soundHeaders = effectiveHeadersForPath("/effects/hype.mp3");
+
+    expect(headerValues(manifestHeaders, "Cache-Control")).toEqual(["no-cache"]);
+    expect(headerValues(manifestHeaders, "Access-Control-Allow-Origin")).toEqual(["*"]);
+    expect(headerValues(soundHeaders, "Access-Control-Allow-Origin")).toEqual(["*"]);
   });
 
 
