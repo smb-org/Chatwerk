@@ -24,12 +24,16 @@ import {
   type PreviewSourceSize,
 } from "./preview-sizing";
 
-interface OwnedOverlay {
+interface StudioOverlay {
   id: string;
   name: string;
   channel: string;
   linkToken: string;
   generation: number;
+  role: "owner" | "editor";
+  ownerLogin?: string;
+  editors?: Array<{ userId: string; login: string; since: string }>;
+  invite?: { expiresAt: string } | null;
 }
 
 interface ConfigResponse {
@@ -107,13 +111,16 @@ const channelFieldText = $("#channel-field-text") as HTMLElement;
 const channelFieldCount = $("#channel-field-count") as HTMLElement;
 const channelPopover = $("#channel-popover") as HTMLElement;
 const liveNoChannelMessage = $("#live-no-channel-message") as HTMLElement;
+const liveChatStatus = $("#live-chat-status") as HTMLElement;
 const previewModeSample = $("#preview-mode-sample") as HTMLButtonElement;
 const previewModeLive = $("#preview-mode-live") as HTMLButtonElement;
 
 let language: Language = currentLanguage();
-let overlay: OwnedOverlay | undefined;
-let ownedOverlays: OwnedOverlay[] = [];
+let overlay: StudioOverlay | undefined;
+let overlays: StudioOverlay[] = [];
 let livePreviewEnabled = false;
+let liveChatState: "connecting" | "waiting" | "message" | undefined;
+let liveChatChannel = "";
 let theme: ThemeConfig = DEFAULTS;
 let previewSourceSize: PreviewSourceSize = DEFAULT_PREVIEW_SOURCE_SIZE;
 let revision = 0;
@@ -127,6 +134,8 @@ let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let initializationRetryAttempt = 0;
 let inFlight = false;
+let saveSequence = 0;
+let activeSave: { id: number; overlayId: string; selectionVersion: number } | undefined;
 let activeDeleteInFlight = false;
 let undoInFlight = false;
 let pendingPatch: Partial<ThemeValues> = {};
@@ -146,8 +155,13 @@ let testTimeout: ReturnType<typeof setTimeout> | undefined;
 let earlyTestProgress: { id: string; shown: number; total: number } | undefined;
 let activeDialogOpener: HTMLElement | undefined;
 let publishDialogOpener: HTMLElement | undefined;
+let expandedHelpersFor: string | undefined;
+let accessLossInProgress = false;
+let deferredConfigBroadcast: { revision: number; config: unknown } | undefined;
 let undoOffer: { snapshotId: string; expectedRevision: number; expiresAt: number; lookName: string } | undefined;
 let undoTimer: ReturnType<typeof setTimeout> | undefined;
+let linkRevokedRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+let linkRevokedRefreshAttempt = 0;
 let publishLimitReached = false;
 let currentPlatform = "obs";
 let lastAnnouncedCount: number | undefined;
@@ -165,18 +179,29 @@ async function initialize(): Promise<void> {
     if (response.status === 401) {
       signedOut = true;
       updateWarning();
-      window.location.assign("/login?next=%2Fstudio");
+      redirectToLogin();
       return;
     }
     if (!response.ok) throw new Error("overlay-list");
-    const result = await response.json() as { overlays?: OwnedOverlay[] };
-    ownedOverlays = result.overlays ?? [];
+    const result = await response.json() as { overlays?: StudioOverlay[] };
+    overlays = result.overlays ?? [];
     const requestedOverlayId = new URLSearchParams(window.location.search).get("overlay");
     const storedOverlayId = localStorageValue("chatwerk-overlay-id");
-    overlay = ownedOverlays.find((item) => item.id === requestedOverlayId) ??
-      ownedOverlays.find((item) => item.id === storedOverlayId) ??
-      ownedOverlays.find((item) => item.name === "Main") ?? ownedOverlays[0];
-    if (!overlay) throw new Error("overlay-missing");
+    overlay = overlays.find((item) => item.id === requestedOverlayId) ??
+      overlays.find((item) => item.id === storedOverlayId) ??
+      overlays.find((item) => item.name === "Main") ?? overlays[0];
+    if (!overlay) {
+      if (new URLSearchParams(window.location.search).has("invite")) {
+        updateActiveOverlayLabel();
+        initializationRetrying = false;
+        initializationRetryAttempt = 0;
+        setupFirstRun();
+        processStudioQuery();
+        updateHeaderResponsive();
+        return;
+      }
+      throw new Error("overlay-missing");
+    }
     loadPreviewSourceSize(overlay.id);
     try { localStorage.setItem("chatwerk-overlay-id", overlay.id); } catch { /* The server's first overlay remains selected for this page. */ }
     channel = overlay.channel;
@@ -247,6 +272,7 @@ async function loadConfig(expectedOverlayId?: string, expectedSelectionVersion =
 
 function connectStudioSocket(): void {
   if (!overlay) return;
+  const connectedOverlayId = overlay.id;
   if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
   const url = new URL("/api/overlay/live", window.location.origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -276,7 +302,16 @@ function connectStudioSocket(): void {
       return;
     }
     if (message.type === "config" && Number.isSafeInteger(message.revision) && Number(message.revision) > revision) {
-      clearUndoOffer();
+      const incoming = { revision: Number(message.revision), config: message.config };
+      if (inFlight) {
+        if (saveTimer === undefined && Object.keys(pendingPatch).length === 0 &&
+          (!deferredConfigBroadcast || incoming.revision > deferredConfigBroadcast.revision)) {
+          deferredConfigBroadcast = incoming;
+        }
+        return;
+      }
+      if (saveTimer !== undefined || Object.keys(pendingPatch).length > 0) return;
+      applyIncomingConfig(incoming);
     }
     if (message.type === "test-progress" && typeof message.id === "string" &&
       Number.isSafeInteger(message.shown) && Number.isSafeInteger(message.total)) {
@@ -285,9 +320,17 @@ function connectStudioSocket(): void {
       else earlyTestProgress = progress;
     }
   });
-  nextSocket.addEventListener("close", () => {
+  nextSocket.addEventListener("close", (event) => {
     if (socket !== nextSocket) return;
     socket = undefined;
+    if (event.code === 4001 && event.reason === "overlay_deleted") {
+      void handleOverlayAccessLost();
+      return;
+    }
+    if (event.code === 4001 && event.reason === "link_revoked") {
+      void handleOverlayLinkRevoked(connectedOverlayId);
+      return;
+    }
     connectionLost = true;
     updateConnectionChipUnknown();
     updateWarning();
@@ -306,6 +349,17 @@ function updateClientCount(): void {
     lastAnnouncedCount = total;
     connectionChip.textContent = translate(language, "connectionCount", { count: total });
   }
+}
+
+function applyIncomingConfig(message: { revision: number; config: unknown }): void {
+  if (message.revision <= revision) return;
+  revision = message.revision;
+  const previousChannels = [...theme.channels];
+  theme = hydrateConfig(message.config, channel);
+  syncControls(previousChannels);
+  applyPreviewTheme();
+  clearUndoOffer();
+  setStatus("savedRevision", { revision });
 }
 
 function updateConnectionChipUnknown(): void {
@@ -778,14 +832,21 @@ async function sendQueuedChanges(): Promise<void> {
   const patch = pendingPatch;
   pendingPatch = {};
   const baseRevision = revision;
+  const savedOverlay = overlay;
+  const selectionVersion = overlaySelectionVersion;
+  const save = { id: ++saveSequence, overlayId: savedOverlay.id, selectionVersion };
+  activeSave = save;
+  const isCurrentSave = (): boolean => activeSave?.id === save.id && overlay?.id === save.overlayId &&
+    overlaySelectionVersion === save.selectionVersion;
   inFlight = true;
   try {
-    const response = await fetch(`/api/overlays/${overlay.id}/config`, {
+    const response = await fetch(`/api/overlays/${savedOverlay.id}/config`, {
       method: "PUT",
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ baseRevision, patch }),
     });
+    if (!isCurrentSave()) return;
     if (response.status === 401) {
       pendingPatch = {};
       signedOut = true;
@@ -793,12 +854,18 @@ async function sendQueuedChanges(): Promise<void> {
       updateWarning();
       return;
     }
+    if (response.status === 404) {
+      pendingPatch = {};
+      await handleOverlayAccessLost();
+      return;
+    }
     if (response.status === 409) {
-      await recoverConflict(patch);
+      await recoverConflict(patch, savedOverlay, isCurrentSave);
       return;
     }
     if (!response.ok) throw new Error(`save-${response.status}`);
     const saved = await response.json() as { revision: number; config: unknown };
+    if (!isCurrentSave()) return;
     revision = saved.revision;
     if (Object.keys(pendingPatch).length > 0) {
       const previousChannels = [...theme.channels];
@@ -817,6 +884,7 @@ async function sendQueuedChanges(): Promise<void> {
       errorArea.textContent = "";
     }
   } catch {
+    if (!isCurrentSave()) return;
     pendingPatch = { ...patch, ...pendingPatch };
     if (retryStartedAt === 0) retryStartedAt = Date.now();
     setStatus("saveRetrying");
@@ -829,21 +897,32 @@ async function sendQueuedChanges(): Promise<void> {
       void sendQueuedChanges();
     }, Date.now() - retryStartedAt >= 10_000 ? 10_000 : 1_000);
   } finally {
-    inFlight = false;
-    if (Object.keys(pendingPatch).length > 0 && retryTimer === undefined && saveTimer === undefined) {
-      scheduleSave(Math.max(0, 200 - (Date.now() - lastEditAt)));
+    if (isCurrentSave()) {
+      activeSave = undefined;
+      inFlight = false;
+      const deferred = deferredConfigBroadcast;
+      deferredConfigBroadcast = undefined;
+      if (deferred && saveTimer === undefined && Object.keys(pendingPatch).length === 0) applyIncomingConfig(deferred);
+      if (Object.keys(pendingPatch).length > 0 && retryTimer === undefined && saveTimer === undefined) {
+        scheduleSave(Math.max(0, 200 - (Date.now() - lastEditAt)));
+      }
     }
   }
 }
 
-async function recoverConflict(sentPatch: Partial<ThemeValues>): Promise<void> {
-  if (!overlay) return;
+async function recoverConflict(
+  sentPatch: Partial<ThemeValues>,
+  savedOverlay: StudioOverlay,
+  isCurrentSave: () => boolean,
+): Promise<void> {
+  if (!isCurrentSave()) return;
   pendingPatch = { ...sentPatch, ...pendingPatch };
   const response = await fetch("/api/overlay/config", {
-    headers: { Authorization: `Bearer ${overlay.linkToken}` },
+    headers: { Authorization: `Bearer ${savedOverlay.linkToken}` },
     credentials: "same-origin",
     cache: "no-store",
   });
+  if (!isCurrentSave()) return;
   if (!response.ok) throw new Error("conflict-reread");
   const fresh = await response.json() as ConfigResponse;
   revision = fresh.revision;
@@ -869,7 +948,7 @@ function syncControls(previousChannels: string[]): void {
     const color = document.querySelector<HTMLInputElement>(`#theme-${name}-color`);
     const hex = document.querySelector<HTMLInputElement>(`#theme-${name}-hex`);
     if (color && typeof value === "string") color.value = value.slice(0, 7);
-    if (hex && typeof value === "string") hex.value = value.toUpperCase();
+    if (hex && typeof value === "string" && document.activeElement !== hex) hex.value = value.toUpperCase();
     const select = document.querySelector(`select#theme-${name}`) as HTMLSelectElement | null;
     if (select) select.value = String(value);
     document.querySelectorAll<HTMLInputElement>(`input[name="theme-${name}"]`).forEach((radio) => {
@@ -877,7 +956,7 @@ function syncControls(previousChannels: string[]): void {
       radio.tabIndex = radio.checked ? 0 : -1;
     });
     const list = document.querySelector<HTMLTextAreaElement>(`textarea[data-list-field="${name}"]`);
-    if (list && Array.isArray(value)) list.value = value.join("\n");
+    if (list && Array.isArray(value) && document.activeElement !== list) list.value = value.join("\n");
   }
   if (!sameChannels(previousChannels, theme.channels)) refreshChannelsEditor();
   updateChannelHeader();
@@ -888,6 +967,8 @@ function refreshChannelsEditor(): void {
   if (!current) return;
   const active = document.activeElement;
   const focusKey = active instanceof HTMLElement && current.contains(active) ? active.dataset.channelFocus : undefined;
+  const focusedValue = active instanceof HTMLInputElement && focusKey?.startsWith("channel-") ? active.value : undefined;
+  const focusedChannelIndex = focusKey?.startsWith("channel-") ? Number(focusKey.slice("channel-".length)) : -1;
   const addInput = current.querySelector<HTMLInputElement>("[data-channel-new]");
   const addValue = addInput?.value ?? "";
   const selection = active instanceof HTMLInputElement && focusKey ? [active.selectionStart, active.selectionEnd] as const : undefined;
@@ -902,6 +983,12 @@ function refreshChannelsEditor(): void {
       const removedIndex = Number(focusKey.slice("remove-".length));
       const neighborIndex = Math.min(removedIndex, lastIndex);
       nextFocus = replacement.querySelector<HTMLElement>(`[data-channel-focus="remove-${neighborIndex}"]`);
+    }
+    if (focusedValue !== undefined && nextFocus instanceof HTMLInputElement) {
+      nextFocus.value = focusedValue;
+      if (focusedValue.trim() !== theme.channels[focusedChannelIndex]) {
+        nextFocus.addEventListener("blur", () => nextFocus?.dispatchEvent(new Event("change", { bubbles: true })), { once: true });
+      }
     }
     nextFocus ??= nextAddInput;
     nextFocus?.focus();
@@ -997,6 +1084,13 @@ function setLanguage(next: Language): void {
 function updateHeaderResponsive(): void {
   const button = document.querySelector<HTMLButtonElement>("#copy-link");
   if (button) button.textContent = translate(language, "copy");
+  if (overlay && overlays.length > 1) activeOverlayText.textContent = `${activeOverlayPrefixText()} `;
+  updateSourceSizeHint();
+}
+
+function activeOverlayPrefixText(): string {
+  const narrowDesktop = window.innerWidth >= 1024 && window.innerWidth <= 1279;
+  return translate(language, narrowDesktop ? "activeOverlayCompactPrefix" : "activeOverlayPrefix");
 }
 
 function openChannelPopover(): void {
@@ -1047,6 +1141,9 @@ function setPreviewMode(enabled: boolean): void {
     try { localStorage.setItem(`chatwerk-live-mode:${overlay.id}`, enabled ? "1" : "0"); }
     catch { /* Live mode remains selected for this page. */ }
   }
+  liveChatState = enabled ? "connecting" : undefined;
+  liveChatChannel = channel;
+  updateLiveChatStatus();
   postPreviewMessage({ type: "chatwerk:studio-live", enabled, channels: currentChannels(), channel });
   if (!enabled) $("#rehearse-quiet").setAttribute("aria-pressed", "true");
 }
@@ -1058,9 +1155,29 @@ function updatePreviewModeUi(): void {
     button.disabled = livePreviewEnabled;
   });
   liveNoChannelMessage.hidden = !livePreviewEnabled || currentChannels().length > 0;
+  updateLiveChatStatus();
+}
+
+function updateLiveChatStatus(): void {
+  if (!livePreviewEnabled || currentChannels().length === 0 || !liveChatState || liveChatState === "message") {
+    liveChatStatus.hidden = true;
+    liveChatStatus.textContent = "";
+    return;
+  }
+  liveChatStatus.hidden = false;
+  liveChatStatus.textContent = liveChatState === "connecting"
+    ? translate(language, "livePreviewConnecting")
+    : translate(language, "livePreviewWaiting", { channel: liveChatChannel || channel });
 }
 
 function wireStaticControls(): void {
+  window.addEventListener("message", (event: MessageEvent<unknown>) => {
+    if (event.source !== preview.contentWindow || !isRecord(event.data) || event.data.type !== "chatwerk:studio-chat-state") return;
+    if (event.data.state !== "connecting" && event.data.state !== "waiting" && event.data.state !== "message") return;
+    liveChatState = event.data.state;
+    liveChatChannel = typeof event.data.channel === "string" ? event.data.channel : channel;
+    updateLiveChatStatus();
+  });
   preview.addEventListener("load", () => {
     applyPreviewTheme();
     if (!livePreviewEnabled) postPreviewMessage({ type: "chatwerk:studio-scenario", scenario: "quiet" });
@@ -1090,7 +1207,7 @@ function wireStaticControls(): void {
     closeChannelPopover(true);
   });
   activeOverlaySelect.addEventListener("change", () => {
-    const next = ownedOverlays.find((item) => item.id === activeOverlaySelect.value);
+    const next = overlays.find((item) => item.id === activeOverlaySelect.value);
     if (next) void selectOverlay(next).finally(updateActiveOverlayLabel);
   });
 
@@ -1122,7 +1239,7 @@ function wireStaticControls(): void {
   $("#language-de").addEventListener("click", () => setLanguage("de"));
   $("#open-looks").addEventListener("click", () => void openMyLooksDialog($("#open-looks")));
   $("#share-look").addEventListener("click", () => void openPublishDialog($("#share-look")));
-  $("#open-overlays").addEventListener("click", () => openOverlaysDialog($("#open-overlays")));
+  $("#open-overlays").addEventListener("click", () => void openOverlaysDialog($("#open-overlays")));
   $("#logout").addEventListener("click", () => void logout());
   $("#first-run-done").addEventListener("click", finishFirstRun);
   document.querySelectorAll<HTMLButtonElement>("[data-platform]").forEach((button) => {
@@ -1247,18 +1364,22 @@ function updateActiveOverlayLabel(): void {
     activeOverlaySelect.hidden = true;
     return;
   }
-  if (ownedOverlays.length > 1) {
-    activeOverlayText.textContent = `${translate(language, "activeOverlayPrefix")} `;
-    for (const item of ownedOverlays) {
+  if (overlays.length > 1) {
+    activeOverlayText.textContent = `${activeOverlayPrefixText()} `;
+    for (const item of overlays) {
       const option = document.createElement("option");
       option.value = item.id;
-      option.textContent = item.name;
+      option.textContent = item.role === "editor"
+        ? translate(language, "sharedOverlayOption", { name: item.name, owner: item.ownerLogin ?? "" })
+        : item.name;
       option.selected = item.id === overlay.id;
       activeOverlaySelect.appendChild(option);
     }
     activeOverlaySelect.hidden = false;
   } else {
-    activeOverlayText.textContent = translate(language, "activeOverlayName", { name: overlay.name });
+    activeOverlayText.textContent = overlay.role === "editor"
+      ? translate(language, "activeSharedOverlayName", { name: overlay.name, owner: overlay.ownerLogin ?? "" })
+      : translate(language, "activeOverlayName", { name: overlay.name });
     activeOverlaySelect.hidden = true;
   }
   updateChannelHeader();
@@ -1266,6 +1387,7 @@ function updateActiveOverlayLabel(): void {
 
 function processStudioQuery(): void {
   const params = new URLSearchParams(window.location.search);
+  const inviteToken = params.get("invite");
   const snapshotId = params.get("undo");
   const expectedRevision = Number(params.get("rev"));
   const expiresAt = Number(params.get("until"));
@@ -1275,10 +1397,85 @@ function processStudioQuery(): void {
     expectedRevision === revision && Number.isSafeInteger(expiresAt) && expiresAt > Date.now()) {
     showUndoOffer(snapshotId, expectedRevision, expiresAt, lookName);
   }
-  if (["undo", "rev", "until", "look", "lookName", "overlay", "publish"].some((key) => params.has(key))) {
+  if (["undo", "rev", "until", "look", "lookName", "overlay", "publish", "invite"].some((key) => params.has(key))) {
     window.history.replaceState(window.history.state, "", window.location.pathname);
   }
   if (shouldPublish) void openPublishDialog($("#share-look"));
+  if (inviteToken !== null) openInviteDialog(inviteToken);
+}
+
+function redirectToLogin(nextPath?: string): void {
+  const next = nextPath ?? `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  window.location.assign(`/login?next=${encodeURIComponent(next)}`);
+}
+
+function openInviteDialog(token: string): void {
+  dialogTitle.textContent = translate(language, "acceptInviteTitle");
+  dialogBody.replaceChildren();
+  const status = document.createElement("p");
+  status.className = "manage-status";
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  status.textContent = /^[A-Za-z0-9_-]{43}$/u.test(token)
+    ? translate(language, "acceptInvitePrompt")
+    : translate(language, "inviteInvalid");
+  dialogBody.appendChild(status);
+  const actions = document.createElement("div");
+  actions.className = "invite-actions";
+  const accept = document.createElement("button");
+  accept.type = "button";
+  accept.className = "button button-primary";
+  accept.textContent = translate(language, "acceptInvite");
+  accept.disabled = !/^[A-Za-z0-9_-]{43}$/u.test(token);
+  accept.addEventListener("click", () => void acceptOverlayInvite(token, status, accept));
+  const decline = document.createElement("button");
+  decline.type = "button";
+  decline.className = "button button-quiet";
+  decline.textContent = translate(language, "declineInvite");
+  decline.addEventListener("click", closeDialog);
+  actions.appendChild(accept);
+  actions.appendChild(decline);
+  dialogBody.appendChild(actions);
+  showDialogElement($("#open-overlays"), true);
+  accept.focus();
+}
+
+async function acceptOverlayInvite(token: string, status: HTMLElement, button: HTMLButtonElement): Promise<void> {
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/invites/${token}/accept`, {
+      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    if (response.status === 410) {
+      status.textContent = translate(language, "inviteInvalid");
+      return;
+    }
+    if (response.status === 409) {
+      status.textContent = translate(language, "inviteHelperLimit");
+      return;
+    }
+    if (response.status === 400) {
+      status.textContent = translate(language, "inviteOwnOverlay");
+      return;
+    }
+    if (response.status === 401) {
+      redirectToLogin(`/studio?invite=${encodeURIComponent(token)}`);
+      return;
+    }
+    if (!response.ok) throw new Error("invite-accept");
+    const result = await response.json() as { overlay: StudioOverlay };
+    const listResponse = await fetch("/api/overlays", { credentials: "same-origin", cache: "no-store" });
+    if (!listResponse.ok) throw new Error("overlay-list");
+    const list = await listResponse.json() as { overlays?: StudioOverlay[] };
+    overlays = list.overlays ?? [];
+    const accepted = overlays.find((item) => item.id === result.overlay.id);
+    if (!accepted) throw new Error("accepted-overlay-missing");
+    await selectOverlay(accepted);
+    setStatus("inviteAccepted", { name: accepted.name, owner: accepted.ownerLogin ?? "" }, true);
+  } catch {
+    status.textContent = translate(language, "inviteActionFailed");
+    button.disabled = false;
+  }
 }
 
 function showUndoOffer(snapshotId: string, expectedRevision: number, expiresAt: number, lookName: string): void {
@@ -1317,6 +1514,10 @@ async function undoCopiedLook(): Promise<void> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ snapshotId: offer.snapshotId, expectedRevision: offer.expectedRevision }),
     });
+    if (response.status === 404) {
+      await handleOverlayAccessLost();
+      return;
+    }
     if (!response.ok) throw new Error("undo-expired");
     const restored = await response.json() as ConfigResponse;
     if (activeDeleteInFlight || overlay?.id !== undoOverlayId) return;
@@ -1401,6 +1602,10 @@ async function publishLook(): Promise<void> {
       window.location.assign("/auth/login?next=%2Fstudio");
       return;
     }
+    if (response.status === 404 && overlay) {
+      await handleOverlayAccessLost();
+      return;
+    }
     if (response.status === 409) {
       const result = await response.json() as { error?: string };
       if (result.error === "duplicate-name") setPublishMessage("publishDuplicate");
@@ -1452,20 +1657,54 @@ async function copyText(value: string): Promise<void> {
   }
 }
 
-function openOverlaysDialog(opener: HTMLElement): void {
+async function openOverlaysDialog(opener: HTMLElement): Promise<void> {
   dialogTitle.textContent = translate(language, "overlays");
-  renderOverlayManager();
+  dialogBody.replaceChildren();
+  const loading = document.createElement("p");
+  loading.className = "manage-status";
+  loading.textContent = translate(language, "loading");
+  dialogBody.appendChild(loading);
   showDialogElement(opener);
+  try {
+    await reloadAccessibleOverlays();
+    if (!dialog.open) showDialogElement(opener);
+    renderOverlayManager();
+  } catch {
+    if (!dialog.open) showDialogElement(opener);
+    renderOverlayManager("inviteActionFailed");
+  }
 }
 
-function renderOverlayManager(noticeKey?: TranslationKey): void {
+function renderOverlayManager(noticeKey?: TranslationKey, removedOverlayId?: string): void {
+  const focusedKey = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.managerFocus : undefined;
   dialogBody.replaceChildren();
+  const statusLine = document.createElement("div");
+  statusLine.className = "manage-status-line";
+  statusLine.tabIndex = -1;
   const status = document.createElement("p");
   status.className = "manage-status";
   if (noticeKey) status.textContent = translate(language, noticeKey);
-  dialogBody.appendChild(status);
+  statusLine.appendChild(status);
+  if (noticeKey === "helperRemoved" && removedOverlayId) {
+    const item = overlays.find((entry) => entry.id === removedOverlayId);
+    if (item?.role === "owner") {
+      const newLink = document.createElement("button");
+      newLink.type = "button";
+      newLink.className = "small-button";
+      newLink.textContent = translate(language, "newLink");
+      newLink.dataset.managerFocus = `new-link:${item.id}`;
+      newLink.addEventListener("click", () => void regenerateManagedLink(item));
+      statusLine.appendChild(newLink);
+    }
+  }
+  dialogBody.appendChild(statusLine);
 
-  const atLimit = ownedOverlays.length >= 3;
+  const own = overlays.filter((item) => item.role === "owner");
+  const shared = overlays.filter((item) => item.role === "editor");
+  dialogBody.appendChild(makeOverlaySection("yourOverlays", own));
+  dialogBody.appendChild(makeOverlaySection("sharedWithYou", shared));
+
+  const atLimit = own.length >= 3;
   const form = document.createElement("form");
   form.className = "manage-form";
   const label = document.createElement("label");
@@ -1497,59 +1736,381 @@ function renderOverlayManager(noticeKey?: TranslationKey): void {
     limit.textContent = translate(language, "overlayLimitStatus");
     dialogBody.appendChild(limit);
   }
+  const restoreFocus = focusedKey
+    ? [...dialogBody.querySelectorAll<HTMLElement>("[data-manager-focus]")].find((element) => element.dataset.managerFocus === focusedKey)
+    : undefined;
+  (restoreFocus ?? statusLine).focus();
+}
 
+function makeOverlaySection(titleKey: TranslationKey, items: StudioOverlay[]): HTMLElement {
+  const section = document.createElement("section");
+  section.className = "overlay-manager-section";
+  const title = document.createElement("h3");
+  title.className = "overlay-manager-title";
+  title.textContent = translate(language, titleKey);
+  section.appendChild(title);
   const list = document.createElement("div");
   list.className = "manage-list";
   list.setAttribute("role", "group");
-  list.setAttribute("aria-label", translate(language, "overlays"));
-  if (ownedOverlays.length === 0) {
+  list.setAttribute("aria-label", title.textContent);
+  if (items.length === 0) {
     const empty = document.createElement("p");
-    empty.textContent = translate(language, "noOverlays");
+    empty.className = "manage-empty";
+    empty.textContent = translate(language, titleKey === "sharedWithYou" ? "noSharedOverlays" : "noOverlays");
     list.appendChild(empty);
   }
-  for (const item of ownedOverlays) list.appendChild(makeOverlayRow(item));
-  dialogBody.appendChild(list);
+  for (const item of items) list.appendChild(makeOverlayRow(item));
+  section.appendChild(list);
+  return section;
 }
 
-function makeOverlayRow(item: OwnedOverlay): HTMLElement {
+function makeOverlayRow(item: StudioOverlay): HTMLElement {
+  const itemRoot = document.createElement("div");
+  itemRoot.className = "overlay-manager-item";
   const row = document.createElement("div");
   row.className = "manage-row";
-  const description = document.createElement("span");
-  description.className = "manage-row-name";
-  description.textContent = item.name;
-  const meta = document.createElement("span");
-  meta.className = "manage-row-meta";
-  meta.textContent = item.channel ? `#${item.channel}` : "—";
-  description.appendChild(meta);
-  const actions = document.createElement("span");
-  actions.className = "manage-row-actions";
   const select = document.createElement("button");
   select.type = "button";
-  select.className = "small-button";
-  select.textContent = translate(language, "select");
+  select.className = "manage-row-select";
   select.setAttribute("aria-pressed", String(item.id === overlay?.id));
+  const name = document.createElement("span");
+  name.className = "manage-row-name";
+  name.textContent = item.name;
+  const meta = document.createElement("span");
+  meta.className = "manage-row-meta";
+  meta.textContent = item.role === "editor"
+    ? translate(language, "sharedBy", { owner: item.ownerLogin ?? "" })
+    : item.channel ? `#${item.channel}` : "—";
+  select.appendChild(name);
+  select.appendChild(meta);
   select.addEventListener("click", () => void selectOverlay(item));
-  const rename = document.createElement("button");
-  rename.type = "button";
-  rename.className = "small-button";
-  rename.textContent = translate(language, "renameOverlay");
-  rename.addEventListener("click", () => beginOverlayRename(item, row));
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "small-button";
-  remove.textContent = translate(language, "deleteOverlay");
-  remove.disabled = ownedOverlays.length <= 1;
-  remove.setAttribute("aria-label", `${translate(language, "deleteOverlay")} ${item.name}`);
-  remove.addEventListener("click", () => void deleteManagedOverlay(item));
-  actions.appendChild(select);
-  actions.appendChild(rename);
-  actions.appendChild(remove);
-  row.appendChild(description);
+  const actions = document.createElement("span");
+  actions.className = "manage-row-actions";
+  if (item.role === "owner") {
+    const rename = makeManageButton("renameOverlay", () => beginOverlayRename(item, row), `rename:${item.id}`);
+    const remove = makeManageButton("deleteOverlay", () => void deleteManagedOverlay(item), `delete:${item.id}`);
+    remove.disabled = overlays.filter((entry) => entry.role === "owner").length <= 1;
+    remove.setAttribute("aria-label", `${translate(language, "deleteOverlay")} ${item.name}`);
+    const helpers = makeManageButton("helpers", () => {
+      expandedHelpersFor = expandedHelpersFor === item.id ? undefined : item.id;
+      renderOverlayManager();
+    }, `helpers:${item.id}`);
+    helpers.setAttribute("aria-expanded", String(expandedHelpersFor === item.id));
+    const newLink = makeManageButton("newLink", () => void regenerateManagedLink(item), `new-link:${item.id}`);
+    actions.appendChild(rename);
+    actions.appendChild(remove);
+    actions.appendChild(helpers);
+    actions.appendChild(newLink);
+  } else {
+    const leave = makeManageButton("leaveOverlay", () => void leaveSharedOverlay(item), `leave:${item.id}`);
+    actions.appendChild(leave);
+  }
+  row.appendChild(select);
   row.appendChild(actions);
-  return row;
+  itemRoot.appendChild(row);
+  if (item.role === "owner" && expandedHelpersFor === item.id) itemRoot.appendChild(makeHelpersPanel(item));
+  return itemRoot;
 }
 
-function beginOverlayRename(item: OwnedOverlay, row: HTMLElement): void {
+function makeManageButton(key: TranslationKey, action: () => void, focusKey?: string): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "small-button";
+  button.textContent = translate(language, key);
+  if (focusKey) button.dataset.managerFocus = focusKey;
+  button.addEventListener("click", action);
+  return button;
+}
+
+function makeHelpersPanel(item: StudioOverlay): HTMLElement {
+  const panel = document.createElement("div");
+  panel.className = "helper-panel";
+  const helpers = item.editors ?? [];
+  if (helpers.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "manage-empty";
+    empty.textContent = translate(language, "noHelpers");
+    panel.appendChild(empty);
+  }
+  for (const helper of helpers) {
+    const row = document.createElement("div");
+    row.className = "helper-list-row";
+    const identity = document.createElement("span");
+    identity.className = "helper-identity";
+    const login = document.createElement("strong");
+    login.textContent = helper.login;
+    const hint = document.createElement("small");
+    hint.textContent = translate(language, "lastLoginNameHint");
+    identity.appendChild(login);
+    identity.appendChild(hint);
+    const remove = makeManageButton("removeHelper", () => void removeOverlayHelper(item, helper.userId), `remove-helper:${item.id}:${helper.userId}`);
+    remove.setAttribute("aria-label", `${translate(language, "removeHelper")} ${helper.login}`);
+    row.appendChild(identity);
+    row.appendChild(remove);
+    panel.appendChild(row);
+  }
+
+  const invite = document.createElement("div");
+  invite.className = "helper-invite-row";
+  const inviteUrl = item.invite ? storedInviteUrl(item.id) : undefined;
+  if (item.invite && inviteUrl) {
+    const input = document.createElement("input");
+    input.className = "dialog-input invite-link-input";
+    input.type = "text";
+    input.readOnly = true;
+    input.value = inviteUrl;
+    input.setAttribute("aria-label", translate(language, "inviteLinkLabel"));
+    const copy = makeManageButton("copyInviteLink", () => {
+      void copyText(inviteUrl).then(() => renderOverlayManager("inviteCopied"));
+    }, `copy-invite:${item.id}`);
+    copy.classList.add("button", "invite-copy");
+    const revoke = makeManageButton("revokeInviteLink", () => void revokeManagedInvite(item), `revoke-invite:${item.id}`);
+    revoke.classList.add("invite-revoke");
+    const expiry = makeExpiryText(item.invite.expiresAt);
+    invite.appendChild(input);
+    invite.appendChild(copy);
+    invite.appendChild(expiry);
+    invite.appendChild(revoke);
+  } else {
+    const create = makeManageButton(item.invite ? "replaceInviteLink" : "createInviteLink", () => void createManagedInvite(item), `create-invite:${item.id}`);
+    create.classList.add("button", "button-primary", "invite-create");
+    invite.appendChild(create);
+    if (item.invite) invite.appendChild(makeExpiryText(item.invite.expiresAt));
+    if (item.invite) {
+      const revoke = makeManageButton("revokeInviteLink", () => void revokeManagedInvite(item), `revoke-invite:${item.id}`);
+      revoke.classList.add("invite-revoke");
+      invite.appendChild(revoke);
+    }
+  }
+  panel.appendChild(invite);
+  return panel;
+}
+
+function makeExpiryText(value: string): HTMLElement {
+  const text = document.createElement("p");
+  text.className = "invite-expiry";
+  const locale = language === "de" ? "de-DE" : "en-US";
+  const date = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+  text.textContent = translate(language, "inviteValidUntil", { date });
+  return text;
+}
+
+function storedInviteUrl(overlayId: string): string | undefined {
+  const value = localStorageValue(`chatwerk-invite-url:${overlayId}`);
+  if (!value) return undefined;
+  try { return new URL(value).origin === window.location.origin ? value : undefined; }
+  catch { return undefined; }
+}
+
+async function reloadAccessibleOverlays(): Promise<void> {
+  const response = await fetch("/api/overlays", { credentials: "same-origin", cache: "no-store" });
+  if (response.status === 401) {
+    redirectToLogin();
+    throw new Error("session-expired");
+  }
+  if (!response.ok) throw new Error("overlay-list");
+  const result = await response.json() as { overlays?: StudioOverlay[] };
+  overlays = result.overlays ?? [];
+  if (overlay) {
+    const current = overlays.find((item) => item.id === overlay?.id);
+    if (!current) {
+      await handleOverlayAccessLost();
+      return;
+    }
+    overlay = current;
+  }
+  updateActiveOverlayLabel();
+}
+
+async function handleOverlayAccessLost(): Promise<void> {
+  if (accessLossInProgress) return;
+  accessLossInProgress = true;
+  overlaySelectionVersion += 1;
+  activeSave = undefined;
+  if (linkRevokedRefreshTimer !== undefined) clearTimeout(linkRevokedRefreshTimer);
+  linkRevokedRefreshTimer = undefined;
+  linkRevokedRefreshAttempt = 0;
+  if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
+  reconnectTimer = undefined;
+  if (saveTimer !== undefined) clearTimeout(saveTimer);
+  saveTimer = undefined;
+  if (retryTimer !== undefined) clearTimeout(retryTimer);
+  retryTimer = undefined;
+  if (testTimeout !== undefined) clearTimeout(testTimeout);
+  testTimeout = undefined;
+  pendingPatch = {};
+  deferredConfigBroadcast = undefined;
+  inFlight = false;
+  undoInFlight = false;
+  pendingTestId = undefined;
+  earlyTestProgress = undefined;
+  const staleSocket = socket;
+  socket = undefined;
+  staleSocket?.close();
+  try {
+    const response = await fetch("/api/overlays", { credentials: "same-origin", cache: "no-store" });
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
+    if (!response.ok) throw new Error("overlay-list");
+    const result = await response.json() as { overlays?: StudioOverlay[] };
+    overlays = result.overlays ?? [];
+    const next = overlays[0];
+    if (!next) {
+      overlay = undefined;
+      updateActiveOverlayLabel();
+      setStatus("overlayAccessLostNoAvailable", {}, true);
+      return;
+    }
+    await selectOverlay(next);
+    setStatus("overlayAccessLost", { name: next.name }, true);
+  } catch {
+    setStatus("overlayAccessLostNoAvailable", {}, true);
+  } finally {
+    accessLossInProgress = false;
+  }
+}
+
+async function handleOverlayLinkRevoked(overlayId: string): Promise<void> {
+  if (!overlay || overlay.id !== overlayId) return;
+  try {
+    const response = await fetch("/api/overlays", { credentials: "same-origin", cache: "no-store" });
+    if (response.status === 401) {
+      redirectToLogin();
+      return;
+    }
+    if (!response.ok) throw new Error("overlay-list");
+    const result = await response.json() as { overlays?: StudioOverlay[] };
+    overlays = result.overlays ?? [];
+    linkRevokedRefreshAttempt = 0;
+    const refreshed = overlays.find((item) => item.id === overlayId);
+    if (!refreshed) {
+      await handleOverlayAccessLost();
+      return;
+    }
+    if (overlay?.id !== overlayId) return;
+    overlay = refreshed;
+    channel = refreshed.channel;
+    updateActiveOverlayLabel();
+    $("#overlay-url").setAttribute("value", `${window.location.origin}/overlay#token=${refreshed.linkToken}`);
+    connectStudioSocket();
+    setStatus("savedRevision", { revision }, true);
+  } catch {
+    setStatus("connectionLost", {}, true);
+    if (overlay?.id === overlayId && linkRevokedRefreshAttempt < 5) {
+      const delay = Math.min(30_000, 1_000 * 2 ** linkRevokedRefreshAttempt);
+      linkRevokedRefreshAttempt += 1;
+      linkRevokedRefreshTimer = setTimeout(() => {
+        linkRevokedRefreshTimer = undefined;
+        void handleOverlayLinkRevoked(overlayId);
+      }, delay);
+    }
+  }
+}
+
+async function createManagedInvite(item: StudioOverlay): Promise<void> {
+  try {
+    const response = await fetch(`/api/overlays/${item.id}/invite`, {
+      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    if (response.status === 401) { redirectToLogin(); return; }
+    if (response.status === 404) { await handleOverlayAccessLost(); return; }
+    if (!response.ok) throw new Error("invite-create");
+    const result = await response.json() as { inviteUrl: string; expiresAt: string };
+    const inviteUrl = new URL(result.inviteUrl, window.location.origin);
+    inviteUrl.protocol = window.location.protocol;
+    inviteUrl.host = window.location.host;
+    const shareableUrl = inviteUrl.toString();
+    try { localStorage.setItem(`chatwerk-invite-url:${item.id}`, shareableUrl); }
+    catch { /* The link remains visible in this manager render. */ }
+    overlays = overlays.map((entry) => entry.id === item.id ? { ...entry, invite: { expiresAt: result.expiresAt } } : entry);
+    expandedHelpersFor = item.id;
+    renderOverlayManager("inviteCreated");
+  } catch {
+    renderOverlayManager("inviteActionFailed");
+  }
+}
+
+async function revokeManagedInvite(item: StudioOverlay): Promise<void> {
+  try {
+    const response = await fetch(`/api/overlays/${item.id}/invite`, {
+      method: "DELETE", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    if (response.status === 401) { redirectToLogin(); return; }
+    if (response.status === 404) { await handleOverlayAccessLost(); return; }
+    if (!response.ok) throw new Error("invite-revoke");
+    try { localStorage.removeItem(`chatwerk-invite-url:${item.id}`); } catch { /* The server has revoked the link. */ }
+    overlays = overlays.map((entry) => entry.id === item.id ? { ...entry, invite: null } : entry);
+    expandedHelpersFor = item.id;
+    renderOverlayManager("inviteRevoked");
+  } catch {
+    renderOverlayManager("inviteActionFailed");
+  }
+}
+
+async function removeOverlayHelper(item: StudioOverlay, userId: string): Promise<void> {
+  try {
+    const response = await fetch(`/api/overlays/${item.id}/editors/${encodeURIComponent(userId)}`, {
+      method: "DELETE", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    if (response.status === 401) { redirectToLogin(); return; }
+    if (response.status === 404) { await handleOverlayAccessLost(); return; }
+    if (!response.ok) throw new Error("helper-remove");
+    await reloadAccessibleOverlays();
+    expandedHelpersFor = item.id;
+    renderOverlayManager("helperRemoved", item.id);
+  } catch {
+    renderOverlayManager("inviteActionFailed");
+  }
+}
+
+async function leaveSharedOverlay(item: StudioOverlay): Promise<void> {
+  try {
+    const response = await fetch(`/api/overlays/${item.id}/editors/me`, {
+      method: "DELETE", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    if (response.status === 401) { redirectToLogin(); return; }
+    if (response.status === 404) { await handleOverlayAccessLost(); return; }
+    if (!response.ok) throw new Error("overlay-leave");
+    overlays = overlays.filter((entry) => entry.id !== item.id);
+    if (overlay?.id === item.id) {
+      const next = overlays[0];
+      if (next) {
+        await selectOverlay(next);
+        setStatus("overlayLeft", {}, true);
+      }
+      return;
+    }
+    renderOverlayManager("overlayLeft");
+  } catch {
+    renderOverlayManager("inviteActionFailed");
+  }
+}
+
+async function regenerateManagedLink(item: StudioOverlay): Promise<void> {
+  if (!window.confirm(translate(language, "newLinkConfirm"))) return;
+  try {
+    const response = await fetch(`/api/overlays/${item.id}/rotate-link`, {
+      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    if (response.status === 401) { redirectToLogin(); return; }
+    if (response.status === 404) { await handleOverlayAccessLost(); return; }
+    if (!response.ok) throw new Error("overlay-link-rotate");
+    const result = await response.json() as { linkToken: string; generation: number };
+    const updated = { ...item, linkToken: result.linkToken, generation: result.generation };
+    overlays = overlays.map((entry) => entry.id === item.id ? updated : entry);
+    if (overlay?.id === item.id) {
+      overlay = updated;
+      $("#overlay-url").setAttribute("value", `${window.location.origin}/overlay#token=${updated.linkToken}`);
+    }
+    renderOverlayManager("linkRegenerated");
+  } catch {
+    renderOverlayManager("linkRegenerateFailed");
+  }
+}
+
+function beginOverlayRename(item: StudioOverlay, row: HTMLElement): void {
   row.replaceChildren();
   row.classList.add("manage-form");
   const input = document.createElement("input");
@@ -1597,12 +2158,12 @@ async function createManagedOverlay(rawName: string, status: HTMLElement): Promi
     renderOverlayManager("overlayCreateFailed");
     return;
   }
-  const created = await response.json() as OwnedOverlay;
-  ownedOverlays = [...ownedOverlays, created];
+  const created = await response.json() as StudioOverlay;
+  overlays = [...overlays, created];
   await selectOverlay(created);
 }
 
-async function renameManagedOverlay(item: OwnedOverlay, rawName: string): Promise<void> {
+async function renameManagedOverlay(item: StudioOverlay, rawName: string): Promise<void> {
   const name = rawName.trim();
   if (!name) {
     renderOverlayManager("lookNameInvalid");
@@ -1624,8 +2185,8 @@ async function renameManagedOverlay(item: OwnedOverlay, rawName: string): Promis
     renderOverlayManager("overlayRenameFailed");
     return;
   }
-  const updated = await response.json() as OwnedOverlay;
-  ownedOverlays = ownedOverlays.map((entry) => entry.id === updated.id ? updated : entry);
+  const updated = await response.json() as StudioOverlay;
+  overlays = overlays.map((entry) => entry.id === updated.id ? updated : entry);
   if (overlay?.id === updated.id) {
     overlay = updated;
   }
@@ -1633,9 +2194,9 @@ async function renameManagedOverlay(item: OwnedOverlay, rawName: string): Promis
   renderOverlayManager("overlayRenamed");
 }
 
-async function deleteManagedOverlay(item: OwnedOverlay): Promise<void> {
+async function deleteManagedOverlay(item: StudioOverlay): Promise<void> {
   if (activeDeleteInFlight) return;
-  if (ownedOverlays.length <= 1) {
+  if (overlays.filter((entry) => entry.role === "owner").length <= 1) {
     renderOverlayManager("lastOverlay");
     return;
   }
@@ -1669,10 +2230,11 @@ async function deleteManagedOverlay(item: OwnedOverlay): Promise<void> {
       renderOverlayManager("overlayDeleteFailed");
       return;
     }
-    ownedOverlays = ownedOverlays.filter((entry) => entry.id !== item.id);
+    overlays = overlays.filter((entry) => entry.id !== item.id);
     updateActiveOverlayLabel();
     if (overlay?.id === item.id) {
-      await selectOverlay(ownedOverlays[0]!);
+      const next = overlays[0];
+      if (next) await selectOverlay(next);
       return;
     }
     renderOverlayManager("overlayDeleted");
@@ -1779,7 +2341,7 @@ async function withdrawOwnedLook(look: OwnedLook, looks: OwnedLook[]): Promise<v
   renderMyLooks(looks.map((item) => item.id === look.id ? { ...item, withdrawn: true } : item), "lookWithdrawn");
 }
 
-async function selectOverlay(next: OwnedOverlay): Promise<void> {
+async function selectOverlay(next: StudioOverlay): Promise<void> {
   if (next.id === overlay?.id) {
     closeDialog();
     return;
@@ -1791,6 +2353,10 @@ async function selectOverlay(next: OwnedOverlay): Promise<void> {
   }
 
   const selectionVersion = ++overlaySelectionVersion;
+  deferredConfigBroadcast = undefined;
+  if (linkRevokedRefreshTimer !== undefined) clearTimeout(linkRevokedRefreshTimer);
+  linkRevokedRefreshTimer = undefined;
+  linkRevokedRefreshAttempt = 0;
 
   if (!channelPopover.hidden) closeChannelPopover(false);
   channelPopover.replaceChildren();
@@ -1854,12 +2420,16 @@ function closeAccountMenu(): void {
   if (menu) menu.open = false;
 }
 
-function showDialogElement(opener: HTMLElement): void {
+function showDialogElement(opener: HTMLElement, hideFooter = false): void {
   activeDialogOpener = opener;
   preview.inert = true;
   closeAccountMenu();
+  const footer = $("#dialog-close").parentElement as HTMLElement;
+  footer.hidden = hideFooter;
+  $("#dialog-x").toggleAttribute("hidden", hideFooter);
   dialog.showModal();
-  $("#dialog-close").focus();
+  if (hideFooter) dialogBody.querySelector<HTMLButtonElement>("button")?.focus();
+  else $("#dialog-close").focus();
 }
 
 function closeDialog(): void {
@@ -1888,6 +2458,10 @@ async function runTestLine(): Promise<void> {
       headers: { "Content-Type": "application/json" },
       body: "{}",
     });
+    if (response.status === 404) {
+      await handleOverlayAccessLost();
+      return;
+    }
     if (!response.ok) throw new Error("test-line");
     const payload = await response.json() as { id: string };
     pendingTestId = payload.id;
@@ -2007,7 +2581,8 @@ function updatePreviewSizeControl(): void {
 }
 
 function updateSourceSizeHint(): void {
-  obsSizeHint.textContent = translate(language, "obsSourceSizeHint", {
+  const key = window.innerWidth >= 1024 && window.innerWidth <= 1279 ? "obsSourceSizeCompactHint" : "obsSourceSizeHint";
+  obsSizeHint.textContent = translate(language, key, {
     width: previewSourceSize.width,
     height: previewSourceSize.height,
   });

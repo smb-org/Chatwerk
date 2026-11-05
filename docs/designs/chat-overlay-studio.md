@@ -1113,6 +1113,12 @@ Scores nach Einschätzung von Fable, mit den Korrekturen aus dem Codex-Durchgang
 
 Keine aus diesem Review. Offene Punkte des Docs bleiben: Domain, Konsolentext aus "The Assignment" und der SoundAlerts-Nachweis in T4.
 
+## Rollen, Einladungen und Overlay-Links
+
+Ein Overlay hat genau einen Besitzer und bis zu fünf Helfer. Der Besitzer kann Namen, Overlay, Link und Helfer verwalten; Helfer bearbeiten Theme, Channels und Filter, veröffentlichen Looks unter ihrem eigenen Twitch-Konto und nutzen dessen Limit von zehn Looks. Benutzerdefiniertes CSS bleibt dem Besitzer vorbehalten. Die Zuordnung der Helfer erfolgt über die stabile Twitch-ID; angezeigt wird der Login aus dem letzten Login.
+
+Ein Einladungslink gilt 48 Stunden, kann einmal angenommen werden und pro Overlay ist höchstens ein offener Link aktiv. Beim Annehmen wird das Konto an die Einladung gebunden; eine erneute Einladung ersetzt den bisherigen Link. Helfer können das Overlay einschließlich des Links sehen und kopieren. Nach Entfernen oder Verlassen endet der Schreibzugriff sofort, der Lesezugriff über den Overlay-Link bleibt jedoch bis zur Erneuerung erhalten. Beim Erneuern wird der bisherige Link ungültig; OBS muss dann den neuen Link verwenden.
+
 ## Approved Mockups
 
 | Screen/Section | Mockup Path | Direction | Notes |

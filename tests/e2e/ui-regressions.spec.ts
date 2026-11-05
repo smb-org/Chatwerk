@@ -332,7 +332,7 @@ for (const outcome of ["success", "error"] as const) test(`late undo ${outcome} 
     await undoStarted;
     await page.locator("#account-menu summary").click();
     await page.getByRole("button", { name: "Overlays" }).click();
-    await page.locator(".manage-row").filter({ hasText: "Survivor" }).getByRole("button", { name: "Select" }).click();
+    await page.locator(".manage-row").filter({ hasText: "Survivor" }).locator(".manage-row-select").click();
     await expectActiveOverlay(page, "Survivor");
     await expect(page.locator("#theme-fontSize")).toHaveValue(String(DEFAULTS.fontSize));
     const received = page.waitForResponse((response) => response.url().endsWith(`/api/overlays/${identity.overlayId}/undo`));

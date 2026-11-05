@@ -1,6 +1,7 @@
 const encoder = new TextEncoder();
 const SESSION_COOKIE = "session";
 const NONCE_COOKIE = "oauth_nonce";
+const NEXT_COOKIE = "oauth_next";
 const SESSION_SECONDS = 30 * 24 * 60 * 60;
 const STATE_SECONDS = 10 * 60;
 const AUTHORIZE_URL = "https://id.twitch.tv/oauth2/authorize";
@@ -21,7 +22,6 @@ export interface VerifiedSession {
 
 interface OAuthState {
   nonce: string;
-  next: string;
   expiresAt: number;
 }
 
@@ -94,12 +94,11 @@ function unavailable(): Response {
 
 async function beginLogin(request: Request, env: AuthEnvironment): Promise<Response> {
   const url = new URL(request.url);
-  const next = safeNext(url.searchParams.get("next"), url.origin);
   const stateData: OAuthState = {
     nonce: randomToken(32),
-    next,
     expiresAt: Math.floor(Date.now() / 1000) + STATE_SECONDS,
   };
+  const next = url.searchParams.get("next") ?? "/studio";
   const payload = base64Url(encoder.encode(JSON.stringify(stateData)));
   const state = `${payload}.${await signHmac(payload, env.SESSION_KEY!)}`;
   const authorize = new URL(AUTHORIZE_URL);
@@ -108,14 +107,16 @@ async function beginLogin(request: Request, env: AuthEnvironment): Promise<Respo
   authorize.searchParams.set("response_type", "code");
   authorize.searchParams.set("scope", "");
   authorize.searchParams.set("state", state);
+  const headers = new Headers({
+    Location: authorize.toString(),
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+  });
+  headers.append("Set-Cookie", nonceCookie(stateData.nonce, request.url));
+  headers.append("Set-Cookie", nextCookie(base64Url(encoder.encode(next)), request.url));
   return new Response(null, {
     status: 302,
-    headers: {
-      Location: authorize.toString(),
-      "Set-Cookie": nonceCookie(stateData.nonce, request.url),
-      "Cache-Control": "no-store",
-      "Referrer-Policy": "no-referrer",
-    },
+    headers,
   });
 }
 
@@ -123,9 +124,11 @@ async function completeOAuth(request: Request, env: AuthEnvironment, fetcher: ty
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
-  const nonce = readCookie(request.headers.get("cookie"), NONCE_COOKIE);
+  const cookie = request.headers.get("cookie");
+  const nonce = readCookie(cookie, NONCE_COOKIE);
   const verifiedState = state ? await verifyOAuthState(state, nonce, env.SESSION_KEY!) : null;
-  if (!code || !verifiedState) return loginErrorRedirect(url.origin);
+  if (!code || !verifiedState) return loginErrorRedirect(url.origin, request.url);
+  const next = safeNext(decodeNextCookie(readCookie(cookie, NEXT_COOKIE)), url.origin);
 
   let identity: { id: string; login: string };
   try {
@@ -140,48 +143,56 @@ async function completeOAuth(request: Request, env: AuthEnvironment, fetcher: ty
         redirect_uri: new URL("/auth/callback", url.origin).toString(),
       }),
     });
-    if (!tokenResponse.ok) return loginErrorRedirect(url.origin);
+    if (!tokenResponse.ok) return loginErrorRedirect(url.origin, request.url);
     const token = await tokenResponse.json() as { access_token?: unknown };
     if (typeof token.access_token !== "string" || !token.access_token) {
-      return loginErrorRedirect(url.origin);
+      return loginErrorRedirect(url.origin, request.url);
     }
     const userResponse = await fetcher(USERS_URL, {
       headers: { Authorization: `Bearer ${token.access_token}`, "Client-Id": env.TWITCH_CLIENT_ID! },
     });
-    if (!userResponse.ok) return loginErrorRedirect(url.origin);
+    if (!userResponse.ok) return loginErrorRedirect(url.origin, request.url);
     const userPayload = await userResponse.json() as { data?: unknown };
     const user = Array.isArray(userPayload.data) ? userPayload.data[0] as Record<string, unknown> | undefined : undefined;
     if (!user || typeof user.id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(user.id) ||
       typeof user.login !== "string" || !/^[A-Za-z0-9_]{1,25}$/u.test(user.login)) {
-      return loginErrorRedirect(url.origin);
+      return loginErrorRedirect(url.origin, request.url);
     }
     identity = { id: user.id, login: user.login.toLowerCase() };
   } catch {
-    return loginErrorRedirect(url.origin);
+    return loginErrorRedirect(url.origin, request.url);
   }
 
   try {
     await ensureDefaultOverlay(env.DB, identity.id, identity.login);
   } catch {
-    return loginErrorRedirect(url.origin);
+    return loginErrorRedirect(url.origin, request.url);
   }
 
   const expiresAt = Math.floor(Date.now() / 1000) + SESSION_SECONDS;
   const sessionValue = `${identity.id}.${expiresAt}.${await signHmac(`${identity.id}.${expiresAt}`, env.SESSION_KEY!)}`;
   const headers = new Headers({
-    Location: new URL(verifiedState.next, url.origin).toString(),
+    Location: new URL(next, url.origin).toString(),
     "Cache-Control": "no-store",
     "Referrer-Policy": "no-referrer",
   });
   headers.append("Set-Cookie", sessionCookie(sessionValue, request.url, SESSION_SECONDS));
   headers.append("Set-Cookie", nonceCookie("", request.url, 0));
+  headers.append("Set-Cookie", nextCookie("", request.url, 0));
   return new Response(null, { status: 302, headers });
 }
 
-function loginErrorRedirect(origin: string): Response {
+function loginErrorRedirect(origin: string, requestUrl: string): Response {
+  const headers = new Headers({
+    Location: new URL("/login?error=1", origin).toString(),
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+  });
+  headers.append("Set-Cookie", nonceCookie("", requestUrl, 0));
+  headers.append("Set-Cookie", nextCookie("", requestUrl, 0));
   return new Response(null, {
     status: 302,
-    headers: { Location: new URL("/login?error=1", origin).toString(), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
+    headers,
   });
 }
 
@@ -208,7 +219,7 @@ async function verifyOAuthState(state: string, cookieNonce: string | undefined, 
   try {
     const decoded = JSON.parse(new TextDecoder().decode(fromBase64Url(payload))) as Partial<OAuthState>;
     if (typeof decoded.nonce !== "string" || decoded.nonce !== cookieNonce ||
-      typeof decoded.next !== "string" || typeof decoded.expiresAt !== "number" ||
+      typeof decoded.expiresAt !== "number" ||
       decoded.expiresAt <= Math.floor(Date.now() / 1000)) return null;
     return decoded as OAuthState;
   } catch {
@@ -238,6 +249,16 @@ function sessionCookie(value: string, requestUrl: string, maxAge: number): strin
 
 function nonceCookie(value: string, requestUrl: string, maxAge = STATE_SECONDS): string {
   return `${NONCE_COOKIE}=${value}; Path=/auth/callback; HttpOnly${secureAttribute(requestUrl)}; SameSite=Lax; Max-Age=${maxAge}`;
+}
+
+function nextCookie(value: string, requestUrl: string, maxAge = STATE_SECONDS): string {
+  return `${NEXT_COOKIE}=${value}; Path=/auth/callback; HttpOnly${secureAttribute(requestUrl)}; SameSite=Lax; Max-Age=${maxAge}`;
+}
+
+function decodeNextCookie(value: string | undefined): string | null {
+  if (!value) return null;
+  try { return new TextDecoder().decode(fromBase64Url(value)); }
+  catch { return null; }
 }
 
 function secureAttribute(requestUrl: string): string {

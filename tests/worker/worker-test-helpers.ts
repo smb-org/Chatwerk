@@ -16,9 +16,10 @@ export async function mintSessionCookie(
 
 export function cookieValue(response: Response, name: string): string | undefined {
   const setCookie = response.headers.get("set-cookie");
-  return setCookie?.split(";")[0]?.startsWith(`${name}=`)
-    ? setCookie.split(";")[0]?.slice(name.length + 1)
-    : undefined;
+  const values = (response.headers as Headers & { getSetCookie?: () => string[] }).getSetCookie?.() ?? [setCookie ?? ""];
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const match = values.join(",").match(new RegExp(`(?:^|,\\s*)${escapedName}=([^;,\\s]*)`, "u"));
+  return match?.[1];
 }
 
 export async function seedOverlay(

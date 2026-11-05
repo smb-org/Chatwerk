@@ -5,6 +5,21 @@ export interface OverlayRecord {
   name: string;
   channel: string;
   link_generation: number;
+  owner_login?: string;
+  editors?: Array<{ userId: string; login: string; since: string }>;
+  invite_expires_at?: number | null;
+}
+
+export type OverlayRole = "owner" | "editor";
+
+export interface OverlayAccess {
+  overlay: OverlayRecord;
+  role: OverlayRole;
+}
+
+export interface AccessibleOverlayRecord extends OverlayRecord {
+  role: OverlayRole;
+  owner_login: string;
 }
 
 export interface LookRecord {
@@ -23,10 +38,17 @@ export interface LookRecord {
   parent_withdrawn_at: string | null;
 }
 
-export async function getOwnedOverlay(db: D1Database, id: string, ownerId: string): Promise<OverlayRecord | null> {
-  return db.prepare(
-    "SELECT id, owner_id, link_token, name, channel, link_generation FROM overlays WHERE id = ? AND owner_id = ?",
-  ).bind(id, ownerId).first<OverlayRecord>();
+export async function getOverlayAccess(db: D1Database, id: string, userId: string): Promise<OverlayAccess | null> {
+  const row = await db.prepare(`
+    SELECT overlays.id, overlays.owner_id, overlays.link_token, overlays.name, overlays.channel, overlays.link_generation,
+      owner.login AS owner_login,
+      CASE WHEN overlays.owner_id = ? THEN 'owner' ELSE 'editor' END AS role
+    FROM overlays
+    JOIN users AS owner ON owner.id = overlays.owner_id
+    LEFT JOIN overlay_editors AS editor ON editor.overlay_id = overlays.id AND editor.user_id = ?
+    WHERE overlays.id = ? AND (overlays.owner_id = ? OR editor.user_id IS NOT NULL)
+  `).bind(userId, userId, id, userId).first<AccessibleOverlayRecord>();
+  return row ? { overlay: row, role: row.role } : null;
 }
 
 export async function getOverlayByToken(db: D1Database, token: string): Promise<OverlayRecord | null> {
@@ -35,17 +57,35 @@ export async function getOverlayByToken(db: D1Database, token: string): Promise<
   ).bind(token).first<OverlayRecord>();
 }
 
-export async function getOverlayById(db: D1Database, id: string): Promise<OverlayRecord | null> {
-  return db.prepare(
-    "SELECT id, owner_id, link_token, name, channel, link_generation FROM overlays WHERE id = ?",
-  ).bind(id).first<OverlayRecord>();
+export async function listAccessibleOverlays(db: D1Database, userId: string): Promise<AccessibleOverlayRecord[]> {
+  const result = await db.prepare(`
+    SELECT overlays.id, overlays.owner_id, overlays.link_token, overlays.name, overlays.channel, overlays.link_generation,
+      owner.login AS owner_login,
+      CASE WHEN overlays.owner_id = ? THEN 'owner' ELSE 'editor' END AS role
+    FROM overlays
+    JOIN users AS owner ON owner.id = overlays.owner_id
+    LEFT JOIN overlay_editors AS editor ON editor.overlay_id = overlays.id AND editor.user_id = ?
+    WHERE overlays.owner_id = ? OR editor.user_id IS NOT NULL
+    ORDER BY CASE WHEN overlays.owner_id = ? THEN 0 ELSE 1 END, overlays.created_at, overlays.id
+  `).bind(userId, userId, userId, userId).all<AccessibleOverlayRecord>();
+  return result.results;
 }
 
-export async function listOwnedOverlays(db: D1Database, ownerId: string): Promise<OverlayRecord[]> {
-  const result = await db.prepare(
-    "SELECT id, owner_id, link_token, name, channel, link_generation FROM overlays WHERE owner_id = ? ORDER BY created_at, id",
-  ).bind(ownerId).all<OverlayRecord>();
+export async function listOverlayEditors(db: D1Database, overlayId: string): Promise<Array<{ userId: string; login: string; since: string }>> {
+  const result = await db.prepare(`
+    SELECT editor.user_id AS userId, users.login AS login, editor.created_at AS since
+    FROM overlay_editors AS editor
+    JOIN users ON users.id = editor.user_id
+    WHERE editor.overlay_id = ?
+    ORDER BY editor.created_at, editor.user_id
+  `).bind(overlayId).all<{ userId: string; login: string; since: string }>();
   return result.results;
+}
+
+export async function getOverlayInviteExpiry(db: D1Database, overlayId: string, now = Math.floor(Date.now() / 1000)): Promise<number | null> {
+  const result = await db.prepare("SELECT expires_at FROM overlay_invites WHERE overlay_id = ? AND expires_at > ?")
+    .bind(overlayId, now).first<{ expires_at: number }>();
+  return result?.expires_at ?? null;
 }
 
 export async function rotateOwnedOverlayLink(

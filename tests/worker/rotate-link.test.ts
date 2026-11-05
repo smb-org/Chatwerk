@@ -35,7 +35,9 @@ describe("overlay link rotation and socket limits", () => {
   it("requires an owner session and same-origin JSON for rotation", async () => {
     const overlay = await seedOverlay(env.DB);
     const anonymous = await handleApiRequest(new Request(
-      `https://chatwerk.test/api/overlays/${overlay.overlayId}/rotate-link`, { method: "POST" }), apiEnv());
+      `https://chatwerk.test/api/overlays/${overlay.overlayId}/rotate-link`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      }), apiEnv());
     const crossOrigin = await handleApiRequest(new Request(
       `https://chatwerk.test/api/overlays/${overlay.overlayId}/rotate-link`, {
         method: "POST", headers: { Cookie: await mintSessionCookie(SESSION_KEY, overlay.ownerId), Origin: "https://evil.test", "Content-Type": "application/json" }, body: "{}",
