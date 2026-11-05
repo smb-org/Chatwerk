@@ -47,6 +47,15 @@ describe("Studio translations", () => {
     expect(load("de").fullHeight).toBe("Volle Höhe");
   });
 
+  it("translates every new ChatIS display option in both languages", () => {
+    for (const key of [
+      "fieldTextShadow", "fieldSmallCaps", "fieldNameOnOwnLine", "fieldHideNames", "fieldBadgesHomies", "fieldReadableNames",
+    ]) {
+      expect(load("en")[key], `English translation missing ${key}`).toBeTruthy();
+      expect(load("de")[key], `German translation missing ${key}`).toBeTruthy();
+    }
+  });
+
   it("provides truthful initial-load retry status in both languages", () => {
     expect(load("en").couldNotLoadRetrying).toBe("Could not load. Retrying...");
     expect(load("de").couldNotLoadRetrying).toBe("Laden fehlgeschlagen. Neuer Versuch …");

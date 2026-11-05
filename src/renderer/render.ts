@@ -1,8 +1,10 @@
 import {
   DEFAULTS,
+  ensureReadableNameColor,
   ensureTagColorContrast,
   effectiveOutline,
   isValidColor,
+  LEGIBILITY_OUTLINE_OPACITY_THRESHOLD,
   themeCssVariables,
   themePanelBackground,
   themeRowBackground,
@@ -96,7 +98,12 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   const clearedUserTimestamps = new Map<string, number>();
   const clearedRoomTimestamps = new Map<string, number>();
   let backlogFetches = 0;
-  const reactionEffects = createReactionEffects({ root, theme, emotes: options.emotes });
+  const reactionEffects = createReactionEffects({
+    root,
+    theme,
+    emotes: options.emotes,
+    onLineHighlightChange: (line) => refreshName(line),
+  });
   const unsubscribePaints = options.paints?.subscribe((userId) => {
     refreshPaints(userId);
     refreshBadges(userId);
@@ -141,9 +148,10 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       options.paints?.setEnabled(theme.showPaints);
       options.paints?.setBadgesEnabled(theme.showBadges && theme.badges7tv);
     }
-    for (const provider of ["badgesBttv", "badgesFfz", "badgesChatterino"] as const) {
+    for (const provider of ["badgesBttv", "badgesFfz", "badgesChatterino", "badgesHomies"] as const) {
       options.thirdPartyBadges?.setEnabled(provider, theme.showBadges && theme[provider]);
     }
+    for (const line of lines) applyLineThemeClasses(line.node, theme);
     for (const [name, value] of Object.entries(themeCssVariables(theme))) root.style.setProperty(name, value);
     root.style.setProperty("--t-row-background", themeRowBackground(theme));
     root.style.setProperty("--t-panel-background", themePanelBackground(theme));
@@ -166,8 +174,8 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       }
       watchLineImages(line.node);
       const pronounContainer = line.node.querySelector<HTMLElement>(".chat-pronouns");
-      if (!theme.showPronouns && pronounContainer) pronounContainer.textContent = "";
-      else if (theme.showPronouns && pronounContainer && !pronounContainer.textContent && options.pronouns && line.userLogin) {
+      if ((!theme.showPronouns || theme.hideNames) && pronounContainer) pronounContainer.textContent = "";
+      else if (theme.showPronouns && !theme.hideNames && pronounContainer && !pronounContainer.textContent && options.pronouns && line.userLogin) {
         void options.pronouns.lookup(line.userLogin).then((value) => {
           if (value && pronounContainer.isConnected) pronounContainer.textContent = ` (${value})`;
         });
@@ -175,7 +183,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       const name = line.node.querySelector<HTMLElement>(".chat-name");
       if (name) {
         const paint = theme.showPaints && !providerSettingsDeferred ? options.paints?.resolve(line.userId ?? "") : undefined;
-        applyNamePaint(name, paint, nameColorFor(line.event, theme));
+        applyNamePaint(name, paint, nameColorFor(line.event, theme, isHighlighted(line.node)));
         if (line.userId && !providerSettingsDeferred && (theme.showPaints || (theme.showBadges && theme.badges7tv))) {
           void options.paints?.load(line.userId);
         }
@@ -704,6 +712,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     const gigantified = isGigantified(event);
     if (highlighted) row.classList.add("chat-highlighted");
     if (gigantified) row.classList.add("chat-gigantified");
+    applyLineThemeClasses(row, config);
     row.style.setProperty("font-family", "var(--t-font-family)");
     row.style.setProperty("font-size", "var(--t-font-size)");
     row.style.setProperty("font-weight", "var(--t-font-weight)");
@@ -719,18 +728,19 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     }
     const name = document.createElement("span");
     name.setAttribute("class", "chat-name");
+    name.classList.toggle("chat-sr-only", config.hideNames);
     const displayName = event.displayName?.trim() || event.userLogin || "system";
     name.textContent = displayName;
-    const color = nameColorFor(event, config);
+    const color = nameColorFor(event, config, highlighted);
     name.style.setProperty("color", color);
     const userId = event.tags["user-id"] ?? "";
     const paint = config.showPaints && !providerSettingsDeferred ? options.paints?.resolve(userId) : undefined;
     applyNamePaint(name, paint, color);
     const pronouns = document.createElement("span");
     pronouns.setAttribute("class", "chat-pronouns");
-    if (config.showPronouns && options.pronouns && event.userLogin) {
+    if (config.showPronouns && !config.hideNames && options.pronouns && event.userLogin) {
       void options.pronouns.lookup(event.userLogin).then((value) => {
-        if (value && name.isConnected) pronouns.textContent = ` (${value})`;
+        if (value && name.isConnected && !theme.hideNames) pronouns.textContent = ` (${value})`;
       });
     }
     const message = document.createElement("span");
@@ -793,19 +803,18 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     channelMarker.setAttribute("class", "chat-source-channel");
     channelMarker.textContent = `#${normalizeChannels([event.channel])[0] ?? ""}`;
     if (activeChannels.length <= 1) channelMarker.hidden = true;
+    const metadata = document.createElement("span");
+    metadata.setAttribute("class", "chat-meta");
+    metadata.appendChild(badges);
+    metadata.appendChild(name);
+    metadata.appendChild(pronouns);
+    metadata.appendChild(sourceRoom);
+    metadata.appendChild(channelMarker);
     if (config.lineOrder === "message-first") {
       row.appendChild(message);
-      row.appendChild(badges);
-      row.appendChild(name);
-      row.appendChild(pronouns);
-      row.appendChild(sourceRoom);
-      row.appendChild(channelMarker);
+      row.appendChild(metadata);
     } else {
-      row.appendChild(badges);
-      row.appendChild(name);
-      row.appendChild(pronouns);
-      row.appendChild(sourceRoom);
-      row.appendChild(channelMarker);
+      row.appendChild(metadata);
       row.appendChild(message);
     }
     const record: RenderedLine = {
@@ -833,6 +842,14 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       watchLineImages(line.node);
     }
     scheduleHeightPrune();
+  }
+
+  function refreshName(lineNode: HTMLElement): void {
+    const line = [...lines].find((candidate) => candidate.node === lineNode);
+    const name = lineNode.querySelector<HTMLElement>(".chat-name");
+    if (!line || !name) return;
+    const paint = theme.showPaints && !providerSettingsDeferred ? options.paints?.resolve(line.userId ?? "") : undefined;
+    applyNamePaint(name, paint, nameColorFor(line.event, theme, isHighlighted(lineNode)));
   }
 
   function updateChannelMarker(line: RenderedLine): void {
@@ -867,11 +884,12 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     }
     const badgeCount = badges.querySelectorAll(".chat-badge").length;
     const badgeWidth = badgeCount * config.fontSize + Math.max(0, badgeCount - 1) * config.fontSize * 0.15;
-    const visibleWidths = [messageWidth, measure(displayName)];
+    const visibleWidths = [messageWidth];
+    if (!config.hideNames) visibleWidths.push(measure(displayName));
     if (badgeCount > 0) visibleWidths.push(badgeWidth);
     if (sourceRoom.textContent) visibleWidths.push(measure(sourceRoom.textContent));
     if (!channelMarker.hidden) visibleWidths.push(measure(channelMarker.textContent ?? ""));
-    if (config.showPronouns && event.userLogin) visibleWidths.push(measure(` (${event.userLogin})`));
+    if (config.showPronouns && !config.hideNames && event.userLogin) visibleWidths.push(measure(` (${event.userLogin})`));
     return Math.ceil(visibleWidths.reduce((sum, width) => sum + width, 0) + Math.max(0, visibleWidths.length - 1) * config.spacing);
   }
 
@@ -880,7 +898,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     for (const line of lines) {
       if (userId && line.userId !== userId) continue;
       const name = line.node.querySelector<HTMLElement>(".chat-name");
-      if (name) applyNamePaint(name, options.paints?.resolve(line.userId ?? ""), nameColorFor(line.event, theme));
+      if (name) applyNamePaint(name, options.paints?.resolve(line.userId ?? ""), nameColorFor(line.event, theme, isHighlighted(line.node)));
     }
   }
 }
@@ -921,7 +939,8 @@ function appendBadgeImages(
   }
   for (const badge of thirdPartyBadges?.resolve(userId) ?? []) {
     const host = badge.provider === "badgesBttv" ? "cdn.betterttv.net"
-      : badge.provider === "badgesFfz" ? "cdn.frankerfacez.com" : "fourtf.com";
+      : badge.provider === "badgesFfz" ? "cdn.frankerfacez.com"
+      : badge.provider === "badgesChatterino" ? "fourtf.com" : "cdn.chatterinohomies.com";
     if (isExpectedBadgeHost(badge.url, host)) append(badge.name, badge.url, badge.provider);
   }
 }
@@ -936,6 +955,7 @@ function isExpectedBadgeHost(value: string, hostname: string): boolean {
 }
 
 function applyNamePaint(name: HTMLElement, paint: PaintStyle | undefined, fallbackColor: string): void {
+  name.classList.toggle("chat-name-painted", Boolean(paint));
   name.style.removeProperty("background-image");
   name.style.removeProperty("background-clip");
   name.style.removeProperty("-webkit-background-clip");
@@ -956,10 +976,36 @@ function applyNamePaint(name: HTMLElement, paint: PaintStyle | undefined, fallba
   if (paint.filter) name.style.setProperty("filter", paint.filter);
 }
 
-function nameColorFor(event: CommonMessage, theme: ThemeConfig): string {
-  return theme.nameColorMode === "tag" && isValidColor(event.color)
-    ? ensureTagColorContrast(event.color, theme)
-    : theme.textColor;
+function nameColorFor(event: CommonMessage, theme: ThemeConfig, highlighted = false): string {
+  if (theme.nameColorMode !== "tag") return theme.textColor;
+  if (theme.readableNames) {
+    const color = isValidColor(event.color) ? event.color : theme.textColor;
+    return ensureReadableNameColor(color, readableNameBackground(theme, highlighted));
+  }
+  return isValidColor(event.color) ? ensureTagColorContrast(event.color, theme) : theme.textColor;
+}
+
+function readableNameBackground(theme: ThemeConfig, highlighted: boolean): string {
+  if (highlighted) return theme.highlightBackgroundColor;
+  const colorAlpha = theme.backgroundColor.length === 9
+    ? Number.parseInt(theme.backgroundColor.slice(7, 9), 16) / 255
+    : 1;
+  if (theme.backgroundOpacity * colorAlpha < LEGIBILITY_OUTLINE_OPACITY_THRESHOLD && theme.panelEnabled) {
+    return theme.panelBackgroundColor;
+  }
+  return theme.backgroundColor;
+}
+
+function applyLineThemeClasses(row: HTMLElement, theme: ThemeConfig): void {
+  row.classList.toggle("chat-name-own-line", theme.layout === "stack" && theme.nameOnOwnLine);
+  row.classList.toggle("chat-small-caps", theme.smallCaps);
+  row.classList.toggle("chat-hide-names", theme.hideNames);
+  row.classList.toggle("chat-readable-names", theme.readableNames && theme.nameColorMode === "tag");
+  row.querySelector<HTMLElement>(".chat-name")?.classList.toggle("chat-sr-only", theme.hideNames);
+}
+
+function isHighlighted(row: HTMLElement): boolean {
+  return row.classList.contains("chat-highlighted") || row.classList.contains("chat-reaction-highlight");
 }
 
 function setEmoteImageHeight(image: HTMLImageElement, theme: ThemeConfig, gigantified = false): void {

@@ -80,6 +80,11 @@ export const THEME_FIELDS = {
   fontWeight: field(600, numberIn(300, 900, 100), (value) => String(value),
     { group: "Text", order: 3, label: "Weight", control: "range" },
     { min: 300, max: 900, step: 100, unit: "unitless" }),
+  textShadow: field(0, numberIn(0, 8, 1), (value) => value === 0 ? "none" : `0 1px ${value}px rgba(0, 0, 0, 0.9)`,
+    { group: "Text", order: 4, label: "Text shadow", control: "range" },
+    { min: 0, max: 8, step: 1, unit: "px" }),
+  smallCaps: field(false, (value): value is boolean => typeof value === "boolean", (value) => String(value),
+    { group: "Text", order: 5, label: "Small caps", control: "toggle" }),
   textColor: field("#ffffff", isValidColor, (value) => value,
     { group: "Colors", order: 1, label: "Text color", control: "color" }),
   nameColorMode: field<NameColorMode>("tag", (value): value is NameColorMode => value === "tag" || value === "text",
@@ -149,6 +154,12 @@ export const THEME_FIELDS = {
     { group: "Messages", order: 12, label: "Show badges", control: "toggle" }),
   backlog: field(true, (value): value is boolean => typeof value === "boolean", (value) => String(value),
     { group: "Messages", order: 14, label: "Recent message backlog", control: "toggle" }),
+  nameOnOwnLine: field(false, (value): value is boolean => typeof value === "boolean", (value) => String(value),
+    { group: "Messages", order: 15, label: "Name on own line", control: "toggle" }),
+  hideNames: field(false, (value): value is boolean => typeof value === "boolean", (value) => String(value),
+    { group: "Messages", order: 16, label: "Hide names", control: "toggle" }),
+  readableNames: field(false, (value): value is boolean => typeof value === "boolean", (value) => String(value),
+    { group: "Messages", order: 17, label: "Readable names", control: "toggle" }),
   showPronouns: field(false, (value): value is boolean => typeof value === "boolean", (value) => String(value),
     { group: "Messages", order: 13, label: "Show pronouns", control: "toggle" }),
   emotes7tv: field(true, (value): value is boolean => typeof value === "boolean", (value) => String(value),
@@ -167,6 +178,8 @@ export const THEME_FIELDS = {
     { group: "Emotes & Effects", order: 7, label: "FFZ badges", control: "toggle" }),
   badgesChatterino: field(true, (value): value is boolean => typeof value === "boolean", (value) => String(value),
     { group: "Emotes & Effects", order: 8, label: "Chatterino badges", control: "toggle" }),
+  badgesHomies: field(false, (value): value is boolean => typeof value === "boolean", (value) => String(value),
+    { group: "Emotes & Effects", order: 9, label: "Chatterino Homies badges", control: "toggle" }),
   reactionRaid: field(true, (value): value is boolean => typeof value === "boolean", (value) => String(value),
     { group: "Reactions", order: 1, label: "Raid", control: "toggle" }),
   reactionSub: field(true, (value): value is boolean => typeof value === "boolean", (value) => String(value),
@@ -214,6 +227,8 @@ export const DEFAULTS: ThemeConfig = {
   fontFamily: "Arial",
   fontSize: 18,
   fontWeight: 600,
+  textShadow: 0,
+  smallCaps: false,
   textColor: "#ffffff",
   nameColorMode: "tag",
   backgroundColor: "#000000",
@@ -240,6 +255,9 @@ export const DEFAULTS: ThemeConfig = {
   gigantifiedScale: 2.5,
   showBadges: true,
   backlog: true,
+  nameOnOwnLine: false,
+  hideNames: false,
+  readableNames: false,
   linePadding: 0,
   showPronouns: false,
   emotes7tv: true,
@@ -250,6 +268,7 @@ export const DEFAULTS: ThemeConfig = {
   badgesBttv: true,
   badgesFfz: true,
   badgesChatterino: true,
+  badgesHomies: false,
   reactionRaid: true,
   reactionSub: true,
   reactionResub: true,
@@ -376,6 +395,50 @@ export function ensureTagColorContrast(color: string, theme: ThemeConfig): strin
   return `#${adjusted.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
 }
 
+/** Adjust a valid foreground along its HSL lightness axis until it meets 4.5:1 contrast. */
+export function ensureReadableNameColor(color: string, backgroundColor: string): string {
+  if (!isValidColor(color) || !isValidColor(backgroundColor)) return color;
+
+  const background = colorChannels(backgroundColor).rgb;
+  const foreground = colorChannels(color);
+  if (contrast(composite(foreground.rgb, background, foreground.alpha), background) >= LEGIBILITY_MINIMUM_RATIO) return color;
+
+  const { hue, saturation, lightness } = rgbToHsl(foreground.rgb);
+  const dark = hslToRgb(hue, saturation, 0);
+  const light = hslToRgb(hue, saturation, 1);
+  let alpha = foreground.alpha;
+  let darkContrast = contrast(composite(dark, background, alpha), background);
+  let lightContrast = contrast(composite(light, background, alpha), background);
+  if (Math.max(darkContrast, lightContrast) < LEGIBILITY_MINIMUM_RATIO) {
+    alpha = 1;
+    darkContrast = contrast(dark, background);
+    lightContrast = contrast(light, background);
+  }
+  const lighten = lightContrast >= darkContrast;
+  const target = lighten ? 1 : 0;
+  let low = lighten ? lightness : target;
+  let high = lighten ? target : lightness;
+  let passing = target;
+  for (let iteration = 0; iteration < 32; iteration += 1) {
+    const midpoint = (low + high) / 2;
+    const candidate = hslToRgb(hue, saturation, midpoint);
+    const meets = contrast(composite(candidate, background, alpha), background) >= LEGIBILITY_MINIMUM_RATIO;
+    if (lighten) {
+      if (meets) { high = midpoint; passing = midpoint; }
+      else low = midpoint;
+    } else if (meets) {
+      low = midpoint;
+      passing = midpoint;
+    } else high = midpoint;
+  }
+  const adjusted = hslToRgb(hue, saturation, passing);
+  const rgb = `#${adjusted.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+  const result = alpha < 1
+    ? `${rgb}${Math.round(alpha * 255).toString(16).padStart(2, "0")}`
+    : rgb;
+  return result;
+}
+
 export function effectiveOutline(theme: ThemeConfig): { width: number; color: string } {
   const forced = theme.backgroundOpacity * colorChannels(theme.backgroundColor).alpha < LEGIBILITY_OUTLINE_OPACITY_THRESHOLD;
   return {
@@ -444,6 +507,34 @@ function contrast(first: number[], second: number[]): number {
 
 function luminance(rgb: number[]): number {
   return linear(rgb[0]!) * 0.2126 + linear(rgb[1]!) * 0.7152 + linear(rgb[2]!) * 0.0722;
+}
+
+function rgbToHsl(rgb: number[]): { hue: number; saturation: number; lightness: number } {
+  const [red, green, blue] = rgb.map((channel) => channel / 255) as [number, number, number];
+  const maximum = Math.max(red, green, blue);
+  const minimum = Math.min(red, green, blue);
+  const delta = maximum - minimum;
+  const lightness = (maximum + minimum) / 2;
+  if (delta === 0) return { hue: 0, saturation: 0, lightness };
+  const saturation = delta / (1 - Math.abs(2 * lightness - 1));
+  const hue = maximum === red ? ((green - blue) / delta) % 6
+    : maximum === green ? (blue - red) / delta + 2
+    : (red - green) / delta + 4;
+  return { hue: ((hue * 60) + 360) % 360, saturation, lightness };
+}
+
+function hslToRgb(hue: number, saturation: number, lightness: number): number[] {
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+  const sector = hue / 60;
+  const secondary = chroma * (1 - Math.abs((sector % 2) - 1));
+  const match = lightness - chroma / 2;
+  const channels = sector < 1 ? [chroma, secondary, 0]
+    : sector < 2 ? [secondary, chroma, 0]
+    : sector < 3 ? [0, chroma, secondary]
+    : sector < 4 ? [0, secondary, chroma]
+    : sector < 5 ? [secondary, 0, chroma]
+    : [chroma, 0, secondary];
+  return channels.map((channel) => Math.round((channel + match) * 255));
 }
 
 function linear(channel: number): number {

@@ -1,6 +1,6 @@
 import { isAllowedImageUrl } from "../shared/hosts";
 
-export type ThirdPartyBadgeProvider = "badgesBttv" | "badgesFfz" | "badgesChatterino";
+export type ThirdPartyBadgeProvider = "badgesBttv" | "badgesFfz" | "badgesChatterino" | "badgesHomies";
 
 export interface ThirdPartyBadgeImage {
   provider: ThirdPartyBadgeProvider;
@@ -25,12 +25,14 @@ const SOURCE_URLS: Record<ThirdPartyBadgeProvider, string> = {
   badgesBttv: "https://api.betterttv.net/3/cached/badges/twitch",
   badgesFfz: "https://api.frankerfacez.com/v1/badges/ids",
   badgesChatterino: "https://api.chatterino.com/badges",
+  badgesHomies: "https://chatterinohomies.com/api/badges/list",
 };
 
 const EXPECTED_IMAGE_HOSTS: Record<ThirdPartyBadgeProvider, string> = {
   badgesBttv: "cdn.betterttv.net",
   badgesFfz: "cdn.frankerfacez.com",
   badgesChatterino: "fourtf.com",
+  badgesHomies: "cdn.chatterinohomies.com",
 };
 
 const PROVIDERS = Object.keys(SOURCE_URLS) as ThirdPartyBadgeProvider[];
@@ -39,7 +41,6 @@ const DEFAULT_TIMEOUT_MS = 4_000;
 
 export function createThirdPartyBadgeLookup(options: ThirdPartyBadgeLookupOptions = {}): ThirdPartyBadgeLookup {
   const fetcher = options.fetcher ?? fetch;
-  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const enabled = new Map<ThirdPartyBadgeProvider, boolean>(PROVIDERS.map((provider) => [provider, false]));
   const sourceData = new Map<ThirdPartyBadgeProvider, Map<string, ThirdPartyBadgeImage[]>>();
   const sourceTasks = new Map<ThirdPartyBadgeProvider, Promise<void>>();
@@ -66,7 +67,7 @@ export function createThirdPartyBadgeLookup(options: ThirdPartyBadgeLookupOption
     }
     const controller = new AbortController();
     controllers.set(provider, controller);
-    const timer = setTimeout(() => controller.abort("timeout"), timeoutMs);
+    const timer = setTimeout(() => controller.abort("timeout"), Math.max(1, options.timeoutMs ?? (provider === "badgesHomies" ? 30_000 : DEFAULT_TIMEOUT_MS)));
     const task = (async (): Promise<void> => {
       let parsed = new Map<string, ThirdPartyBadgeImage[]>();
       let succeeded = false;
@@ -154,7 +155,8 @@ export function createThirdPartyBadgeLookup(options: ThirdPartyBadgeLookupOption
 function parseSource(provider: ThirdPartyBadgeProvider, value: unknown): Map<string, ThirdPartyBadgeImage[]> {
   if (provider === "badgesBttv") return parseBttv(value);
   if (provider === "badgesFfz") return parseFfz(value);
-  return parseChatterino(value);
+  if (provider === "badgesChatterino") return parseChatterino(value);
+  return parseHomies(value);
 }
 
 function parseBttv(value: unknown): Map<string, ThirdPartyBadgeImage[]> {
@@ -209,6 +211,23 @@ function parseChatterino(value: unknown): Map<string, ThirdPartyBadgeImage[]> {
         ? String(rawUserId)
         : typeof rawUserId === "string" ? rawUserId : "";
       if (isTwitchId(userId)) addBadge(result, userId, { provider: "badgesChatterino", name, url });
+    }
+  }
+  return result;
+}
+
+function parseHomies(value: unknown): Map<string, ThirdPartyBadgeImage[]> {
+  const result = new Map<string, ThirdPartyBadgeImage[]>();
+  if (!isRecord(value) || !Array.isArray(value.badges)) return result;
+  for (const badge of value.badges) {
+    if (!isRecord(badge)) continue;
+    const rawUserId = typeof badge.userId === "number" && Number.isSafeInteger(badge.userId)
+      ? String(badge.userId)
+      : typeof badge.userId === "string" ? badge.userId : "";
+    const name = nonEmptyString(badge.tooltip) ?? nonEmptyString(badge.username);
+    const url = expectedImageUrl(badge.image3 ?? badge.image2 ?? badge.image1, "badgesHomies");
+    if (name && url && isTwitchId(rawUserId)) {
+      addBadge(result, rawUserId, { provider: "badgesHomies", name, url });
     }
   }
   return result;

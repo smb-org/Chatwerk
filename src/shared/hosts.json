@@ -5,6 +5,7 @@
     "https://api.betterttv.net",
     "https://api.frankerfacez.com",
     "https://api.chatterino.com",
+    "https://chatterinohomies.com",
     "https://recent-messages.robotty.de",
     "https://pronouns.alejo.io"
   ],
@@ -13,6 +14,7 @@
     "cdn.7tv.app",
     "cdn.betterttv.net",
     "cdn.frankerfacez.com",
-    "fourtf.com"
+    "fourtf.com",
+    "cdn.chatterinohomies.com"
   ]
 }

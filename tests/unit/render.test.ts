@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { JSDOM } from "jsdom";
-import { DEFAULTS } from "../../src/shared/theme";
+import { DEFAULTS, ensureReadableNameColor, estimateTextLegibility } from "../../src/shared/theme";
 import { createChatRenderer } from "../../src/renderer/render";
 import { parseIrcLine } from "../../src/renderer/irc-parse";
 import { createEmoteLookup } from "../../src/renderer/emotes";
@@ -53,6 +53,25 @@ describe("text renderer", () => {
     renderer.handle(parseIrcLine("@display-name=Viewer :viewer!viewer@host PRIVMSG #room :<img onerror=x>" )!);
     expect(root.textContent).toContain("<img onerror=x>");
     expect(root.querySelector("img")).toBeNull();
+    renderer.dispose();
+  });
+
+  it("does not restore pronouns when a pending lookup resolves after names are hidden", async () => {
+    let resolvePronouns!: (value: string | null) => void;
+    const pronouns = {
+      lookup: vi.fn(() => new Promise<string | null>((resolve) => { resolvePronouns = resolve; })),
+      dispose: vi.fn(),
+    };
+    const theme = { ...DEFAULTS, showPronouns: true };
+    const renderer = createChatRenderer({ root, theme, pronouns, scheduler: (callback) => callback() });
+    renderer.handle(parseIrcLine("@id=pending-pronouns;display-name=Viewer;login=viewer :viewer!viewer@host PRIVMSG #room :still hidden")!);
+    const pronounNode = root.querySelector<HTMLElement>(".chat-pronouns")!;
+    expect(pronouns.lookup).toHaveBeenCalledWith("viewer");
+
+    renderer.setTheme({ ...theme, hideNames: true });
+    resolvePronouns("They/Them");
+    await Promise.resolve();
+    expect(pronounNode.textContent).toBe("");
     renderer.dispose();
   });
 
@@ -745,11 +764,34 @@ describe("text renderer", () => {
       angle: 90,
       stops: [{ at: 0, color: "#ff0000" }, { at: 1, color: "#0000ff" }],
     });
-    expect(root.querySelector<HTMLElement>(".chat-name")?.style.getPropertyValue("background-image"))
+    const name = root.querySelector<HTMLElement>(".chat-name")!;
+    expect(name.style.getPropertyValue("background-image"))
       .toContain("linear-gradient(90deg");
+    expect(name.classList.contains("chat-name-painted")).toBe(true);
     expect(buildPaintStyle({ function: "URL", image_url: "https://cdn.7tv.app/paint/paint/1x.webp" }))
       .toMatchObject({ type: "image" });
     expect(buildPaintStyle({ function: "URL", image_url: "https://evil.example/paint.png" })).toBeNull();
+    renderer.dispose();
+  });
+
+  it("keeps a 7TV shadow filter on gradient painted names", () => {
+    const paints = createPaintLookup();
+    paints.set("42", {
+      function: "LINEAR_GRADIENT",
+      angle: 90,
+      stops: [{ at: 0, color: "#ff0000" }, { at: 1, color: "#0000ff" }],
+      shadows: [{ x_offset: 1, y_offset: 1, radius: 3, color: "#000000" }],
+    });
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, textShadow: 4 },
+      paints,
+      scheduler: (callback) => callback(),
+    });
+    renderer.handle(parseIrcLine("@user-id=42 :viewer!viewer@host PRIVMSG #room :painted")!);
+    const name = root.querySelector<HTMLElement>(".chat-name")!;
+    expect(name.classList.contains("chat-name-painted")).toBe(true);
+    expect(name.style.getPropertyValue("filter")).toContain("drop-shadow(");
     renderer.dispose();
   });
 
@@ -843,6 +885,7 @@ describe("text renderer", () => {
         { provider: "badgesBttv", name: "BTTV VIP", url: "https://cdn.betterttv.net/badges/vip.png" },
         { provider: "badgesFfz", name: "FFZ VIP", url: "https://cdn.frankerfacez.com/badge/7/2" },
         { provider: "badgesChatterino", name: "Chatterino VIP", url: "https://fourtf.com/chatterino/vip.png" },
+        { provider: "badgesHomies", name: "Homies member", url: "https://cdn.chatterinohomies.com/badges/42/36.webp" },
       ],
       subscribe: () => () => undefined,
       dispose: vi.fn(),
@@ -867,12 +910,13 @@ describe("text renderer", () => {
     renderer.handle(parseIrcLine("@id=badge-order;user-id=42;badges=moderator/1 :viewer!viewer@host PRIVMSG #room :badged")!);
 
     const images = [...root.querySelectorAll<HTMLImageElement>(".chat-badges img")];
-    expect(images.map((image) => image.dataset.badgeSource)).toEqual(["twitch", "7tv", "badgesBttv", "badgesFfz", "badgesChatterino"]);
+    expect(images.map((image) => image.dataset.badgeSource)).toEqual(["twitch", "7tv", "badgesBttv", "badgesFfz", "badgesChatterino", "badgesHomies"]);
     expect(images.slice(1).map((image) => [image.alt, image.title])).toEqual([
       ["7TV Winner", "7TV Winner"],
       ["BTTV VIP", "BTTV VIP"],
       ["FFZ VIP", "FFZ VIP"],
       ["Chatterino VIP", "Chatterino VIP"],
+      ["Homies member", "Homies member"],
     ]);
     renderer.dispose();
   });
@@ -983,5 +1027,181 @@ describe("text renderer", () => {
       expect(lookup.lookup).toHaveBeenCalledWith("viewer");
       expect(root.textContent).toContain("They/Them");
     }).finally(() => renderer.dispose());
+  });
+
+  it("keeps opt-in display settings off without changing the default line appearance", () => {
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, scheduler: (callback) => callback() });
+    renderer.handle(parseIrcLine("@id=default-look;display-name=Viewer :viewer!viewer@host PRIVMSG #room :default look")!);
+    const line = root.querySelector<HTMLElement>(".chat-line")!;
+    expect(DEFAULTS).toMatchObject({ textShadow: 0, smallCaps: false, nameOnOwnLine: false, hideNames: false, readableNames: false });
+    expect(line.classList.contains("chat-name-own-line")).toBe(false);
+    expect(line.classList.contains("chat-small-caps")).toBe(false);
+    expect(line.classList.contains("chat-hide-names")).toBe(false);
+    expect(line.classList.contains("chat-readable-names")).toBe(false);
+    expect(root.style.getPropertyValue("--t-text-shadow")).toBe("none");
+    expect(line.querySelector(".chat-name")?.classList.contains("chat-sr-only")).toBe(false);
+    expect(line.textContent).toContain("Viewer");
+    expect(line.textContent).toContain("default look");
+    renderer.dispose();
+  });
+
+  it.each(["name-first", "message-first"] as const)("keeps badges and names together above the message in %s order", (lineOrder) => {
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, nameOnOwnLine: true, lineOrder },
+      scheduler: (callback) => callback(),
+    });
+    renderer.handle(parseIrcLine("@id=own-line;display-name=Viewer;badges=subscriber/1;emotes=25:0-4 :viewer!viewer@host PRIVMSG #room :Kappa hello")!);
+    const line = root.querySelector<HTMLElement>(".chat-line")!;
+    const meta = line.querySelector<HTMLElement>(".chat-meta")!;
+    const message = line.querySelector<HTMLElement>(".chat-message")!;
+    expect(line.classList.contains("chat-name-own-line")).toBe(true);
+    expect(meta.querySelector(".chat-badges")).not.toBeNull();
+    expect(meta.querySelector(".chat-name")?.textContent).toBe("Viewer");
+    expect(message.querySelector(".chat-emote")).not.toBeNull();
+    expect([...line.children].map((child) => child.className)).toEqual(lineOrder === "name-first"
+      ? ["chat-meta", "chat-message"]
+      : ["chat-message", "chat-meta"]);
+    renderer.dispose();
+  });
+
+  it("hides names visually while keeping accessible names, badges, highlights, and system messages", () => {
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, hideNames: true },
+      scheduler: (callback) => callback(),
+    });
+    renderer.handle(parseIrcLine("@id=hidden-highlight;display-name=Viewer;msg-id=highlighted-message :viewer!viewer@host PRIVMSG #room :highlight still reads")!);
+    renderer.handle(parseIrcLine("@id=hidden-system;display-name=System :tmi.twitch.tv USERNOTICE #room :System message remains")!);
+    const lines = [...root.querySelectorAll<HTMLElement>(".chat-line")];
+    expect(lines).toHaveLength(2);
+    expect(lines[0]?.classList.contains("chat-highlighted")).toBe(true);
+    expect(lines.every((line) => line.classList.contains("chat-hide-names"))).toBe(true);
+    expect(lines.every((line) => line.querySelector(".chat-name")?.classList.contains("chat-sr-only"))).toBe(true);
+    expect(lines[0]?.querySelector(".chat-name")?.textContent).toBe("Viewer");
+    expect(lines[0]?.querySelector(".chat-badges")).not.toBeNull();
+    expect(lines[0]?.querySelector(".chat-message")?.textContent).toContain("highlight still reads");
+    expect(lines[1]?.querySelector(".chat-message")?.textContent).toContain("System message remains");
+    renderer.dispose();
+  });
+
+  it("adds an independent dark text shadow and readable tag colors while preserving text colors and paints", () => {
+    const darkTheme = {
+      ...DEFAULTS,
+      textShadow: 4,
+      outline: 2,
+      backgroundColor: "#090515",
+      backgroundOpacity: 1,
+      readableNames: true,
+    };
+    const paints = {
+      resolve: () => ({ type: "solid" as const, value: "#123456" }),
+      resolveBadge: () => undefined,
+      load: vi.fn(async () => undefined),
+      setChannelId: vi.fn(),
+      setEnabled: vi.fn(),
+      setBadgesEnabled: vi.fn(),
+      set: vi.fn(),
+      subscribe: () => () => undefined,
+      dispose: vi.fn(),
+    };
+    const renderer = createChatRenderer({ root, theme: darkTheme, paints, scheduler: (callback) => callback() });
+    renderer.handle(parseIrcLine("@id=readable;display-name=Viewer;color=#21133e;user-id=42 :viewer!viewer@host PRIVMSG #room :readable")!);
+    const line = root.querySelector<HTMLElement>(".chat-line")!;
+    const name = line.querySelector<HTMLElement>(".chat-name")!;
+    expect(root.style.getPropertyValue("--t-text-shadow")).toContain("4px");
+    expect(root.style.getPropertyValue("--t-outline")).toBe("2px");
+    expect(line.classList.contains("chat-readable-names")).toBe(true);
+    expect(name.style.color).toBe("rgb(18, 52, 86)");
+    renderer.dispose();
+
+    root.replaceChildren();
+    const tagRenderer = createChatRenderer({ root, theme: darkTheme, scheduler: (callback) => callback() });
+    tagRenderer.handle(parseIrcLine("@id=readable-tag;display-name=Viewer;color=#21133e :viewer!viewer@host PRIVMSG #room :readable")!);
+    const adjusted = root.querySelector<HTMLElement>(".chat-name")?.style.color ?? "";
+    const expectedStyle = dom.window.document.createElement("span");
+    expectedStyle.style.color = ensureReadableNameColor("#21133e", "#090515");
+    expect(adjusted).toBe(expectedStyle.style.color);
+    expect(estimateTextLegibility(ensureReadableNameColor("#21133e", "#090515"), "#090515", 1).contrastOnBlack).toBeGreaterThanOrEqual(4.5);
+    tagRenderer.setTheme({ ...darkTheme, nameColorMode: "text" });
+    expectedStyle.style.color = darkTheme.textColor;
+    expect(root.querySelector<HTMLElement>(".chat-name")?.style.color).toBe(expectedStyle.style.color);
+    tagRenderer.dispose();
+  });
+
+  it("uses the highlight color and the enabled panel color as readable-name backgrounds", () => {
+    const highlightBackground = "#ffffff";
+    const highlightedRenderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, readableNames: true, highlightBackgroundColor: highlightBackground },
+      scheduler: (callback) => callback(),
+    });
+    highlightedRenderer.handle(parseIrcLine("@id=readable-highlight;display-name=Viewer;color=#21133e;msg-id=highlighted-message :viewer!viewer@host PRIVMSG #room :highlight")!);
+    const highlightedName = root.querySelector<HTMLElement>(".chat-name")!;
+    const expectedStyle = dom.window.document.createElement("span");
+    expectedStyle.style.color = ensureReadableNameColor("#21133e", highlightBackground);
+    expect(highlightedName.style.color).toBe(expectedStyle.style.color);
+    highlightedRenderer.dispose();
+
+    root.replaceChildren();
+    const panelBackground = "#ffffff";
+    const panelRenderer = createChatRenderer({
+      root,
+      theme: {
+        ...DEFAULTS,
+        readableNames: true,
+        backgroundOpacity: 0.2,
+        panelEnabled: true,
+        panelBackgroundColor: panelBackground,
+      },
+      scheduler: (callback) => callback(),
+    });
+    panelRenderer.handle(parseIrcLine("@id=readable-panel;display-name=Viewer;color=#21133e :viewer!viewer@host PRIVMSG #room :panel")!);
+    expectedStyle.style.color = ensureReadableNameColor("#21133e", panelBackground);
+    expect(root.querySelector<HTMLElement>(".chat-name")?.style.color).toBe(expectedStyle.style.color);
+    panelRenderer.dispose();
+  });
+
+  it("recalculates readable names when a reaction highlights a line", () => {
+    const highlightBackground = "#ffffff";
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, readableNames: true, highlightBackgroundColor: highlightBackground },
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=readable-raid;display-name=Viewer;color=#000000;msg-id=raid;msg-param-viewerCount=4 :tmi.twitch.tv USERNOTICE #room :Raid")!);
+    const line = root.querySelector<HTMLElement>(".chat-line")!;
+    const name = line.querySelector<HTMLElement>(".chat-name")!;
+    const expectedStyle = dom.window.document.createElement("span");
+    expectedStyle.style.color = ensureReadableNameColor("#000000", highlightBackground);
+    expect(line.classList.contains("chat-reaction-highlight")).toBe(true);
+    expect(name.style.color).toBe(expectedStyle.style.color);
+    renderer.dispose();
+  });
+
+  it.each([
+    ["nameOnOwnLine", "chat-name-own-line"],
+    ["smallCaps", "chat-small-caps"],
+    ["hideNames", "chat-hide-names"],
+  ] as const)("still prunes to the height limit when %s changes line metrics", (option, className) => {
+    const originalGetBoundingClientRect = dom.window.HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(dom.window.HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === root) return rect(0, 120, 400);
+      if (!this.classList.contains("chat-line")) return originalGetBoundingClientRect.call(this);
+      const height = this.classList.contains(className) ? 90 : 40;
+      return rect(0, height, 400);
+    });
+    const optionValue = { [option]: true };
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, maxChatHeight: 120, ...optionValue },
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    for (let index = 0; index < 3; index += 1) {
+      renderer.handle(parseIrcLine(`@id=metric-${option}-${index} :viewer!viewer@host PRIVMSG #room :line ${index}`)!);
+    }
+    expect(root.querySelectorAll(".chat-line")).toHaveLength(1);
+    expect(root.textContent).toContain("line 2");
+    renderer.dispose();
   });
 });

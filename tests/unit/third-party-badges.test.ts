@@ -5,6 +5,7 @@ const providerUrls: Record<ThirdPartyBadgeProvider, string> = {
   badgesBttv: "https://api.betterttv.net/3/cached/badges/twitch",
   badgesFfz: "https://api.frankerfacez.com/v1/badges/ids",
   badgesChatterino: "https://api.chatterino.com/badges",
+  badgesHomies: "https://chatterinohomies.com/api/badges/list",
 };
 
 const fixtures: Record<ThirdPartyBadgeProvider, unknown> = {
@@ -18,6 +19,16 @@ const fixtures: Record<ThirdPartyBadgeProvider, unknown> = {
   },
   badgesChatterino: {
     badges: [{ tooltip: "Chatterino donor", users: ["42"], image3: "https://fourtf.com/chatterino/badges/topd3x.png" }],
+  },
+  badgesHomies: {
+    badges: [{
+      userId: "42",
+      username: "viewer",
+      tooltip: "Homies member",
+      image1: "https://cdn.chatterinohomies.com/badges/42/18.webp",
+      image2: "https://cdn.chatterinohomies.com/badges/42/36.webp",
+      image3: "https://cdn.chatterinohomies.com/badges/42/72.webp",
+    }],
   },
 };
 
@@ -46,12 +57,13 @@ describe("third-party badge lookup", () => {
     const lookup = enabledLookup(fetcher);
     await Promise.all([lookup.load("42"), lookup.load("42")]);
 
-    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(fetcher).toHaveBeenCalledTimes(4);
     expect(new Set(fetcher.mock.calls.map(([url]) => String(url)))).toEqual(new Set(Object.values(providerUrls)));
     expect(lookup.resolve("42")).toEqual([
       expect.objectContaining({ provider: "badgesBttv", name: "Night" }),
       expect.objectContaining({ provider: "badgesFfz", name: "vip" }),
       expect.objectContaining({ provider: "badgesChatterino", name: "Chatterino donor" }),
+      expect.objectContaining({ provider: "badgesHomies", name: "Homies member", url: "https://cdn.chatterinohomies.com/badges/42/72.webp" }),
     ]);
     lookup.dispose();
   });
@@ -66,11 +78,25 @@ describe("third-party badge lookup", () => {
     lookup.dispose();
   });
 
+  it("fetches the Homies list only while enabled and only once", async () => {
+    const fetcher = vi.fn(async () => response(fixtures.badgesHomies));
+    const lookup = createThirdPartyBadgeLookup({ fetcher });
+    await lookup.load("42");
+    expect(fetcher).not.toHaveBeenCalled();
+    lookup.setEnabled("badgesHomies", true);
+    await lookup.load("42");
+    await lookup.load("43");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledWith(providerUrls.badgesHomies, expect.objectContaining({ mode: "cors" }));
+    lookup.dispose();
+  });
+
   it("drops images outside each provider's expected HTTPS host", async () => {
     const hostile: Record<ThirdPartyBadgeProvider, unknown> = {
       badgesBttv: [{ providerId: "42", name: "bad", badge: { description: "Bad", svg: "https://cdn.7tv.app/badge.png" } }],
       badgesFfz: { badges: [{ id: 1, name: "bad", title: "Bad", urls: { "2": "https://evil.example/badge.png" } }], users: { "42": [1] } },
       badgesChatterino: { badges: [{ tooltip: "Bad", users: ["42"], image3: "http://fourtf.com/badge.png" }] },
+      badgesHomies: { badges: [{ userId: "42", tooltip: "Bad", image3: "https://evil.example/badge.webp" }] },
     };
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const provider = (Object.keys(providerUrls) as ThirdPartyBadgeProvider[])
@@ -94,7 +120,7 @@ describe("third-party badge lookup", () => {
     });
     const lookup = enabledLookup(fetcher);
     await expect(lookup.load("42")).resolves.toBeUndefined();
-    expect(lookup.resolve("42").map((badge) => badge.provider)).toEqual(["badgesBttv", "badgesChatterino"]);
+    expect(lookup.resolve("42").map((badge) => badge.provider)).toEqual(["badgesBttv", "badgesChatterino", "badgesHomies"]);
     expect(errors).not.toHaveBeenCalled();
     expect(warnings).not.toHaveBeenCalled();
     lookup.dispose();
@@ -121,6 +147,45 @@ describe("third-party badge lookup", () => {
 
     expect(fetcher).toHaveBeenCalledTimes(2);
     lookup.dispose();
+  });
+
+  it("allows 30 seconds for Homies, keeps four seconds for other sources, and honors a custom timeout", async () => {
+    vi.useFakeTimers();
+    const signals = new Map<string, AbortSignal>();
+    const fetcher = vi.fn((input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      const url = String(input);
+      if (init?.signal) signals.set(url, init.signal);
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    }));
+    const lookup = createThirdPartyBadgeLookup({ fetcher });
+    lookup.setEnabled("badgesBttv", true);
+    lookup.setEnabled("badgesHomies", true);
+    const pending = lookup.load("42");
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(signals.get(providerUrls.badgesBttv)?.aborted).toBe(true);
+    expect(signals.get(providerUrls.badgesHomies)?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(26_000);
+    await pending;
+    expect(signals.get(providerUrls.badgesHomies)?.aborted).toBe(true);
+    lookup.dispose();
+
+    const customSignal = vi.fn();
+    const customFetcher = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        customSignal();
+        reject(new DOMException("aborted", "AbortError"));
+      }, { once: true });
+    }));
+    const customLookup = createThirdPartyBadgeLookup({ fetcher: customFetcher, timeoutMs: 250 });
+    customLookup.setEnabled("badgesHomies", true);
+    const customPending = customLookup.load("42");
+    await vi.advanceTimersByTimeAsync(249);
+    expect(customSignal).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await customPending;
+    expect(customSignal).toHaveBeenCalledOnce();
+    customLookup.dispose();
   });
 
   it("reloads an aborted source when the user turns it off and back on", async () => {
