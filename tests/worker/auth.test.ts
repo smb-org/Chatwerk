@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { describe, expect, it, vi } from "vitest";
 import { handleAuthRequest, verifySessionCookie, type AuthEnvironment } from "../../src/worker/auth";
-import { cookieValue, mintSessionCookie } from "./worker-test-helpers";
+import { cookieValue, mintSessionCookie, seedOverlay } from "./worker-test-helpers";
 
 const sessionKey = "test-session-key-with-enough-entropy";
 const clientId = "test-client-id";
@@ -183,6 +183,23 @@ describe("Twitch login and session cookie", () => {
     ].sort((left, right) => left.id.localeCompare(right.id)));
     expect(overlays.results).toHaveLength(2);
     expect(foreignKeyErrors.results).toEqual([]);
+  });
+
+  it("does not add another Main at login when three overlays exist and Main was renamed", async () => {
+    const userId = `auth-renamed-${crypto.randomUUID()}`;
+    const login = `viewer_${crypto.randomUUID().slice(0, 8)}`;
+    await completeLogin(userId, login);
+    await env.DB.prepare("UPDATE overlays SET name = 'Renamed' WHERE owner_id = ? AND name = 'Main'").bind(userId).run();
+    await seedOverlay(env.DB, { ownerId: userId, name: "Stream" });
+    await seedOverlay(env.DB, { ownerId: userId, name: "Vertical" });
+    const before = await env.DB.prepare("SELECT id, name FROM overlays WHERE owner_id = ? ORDER BY id").bind(userId).all();
+
+    const { response } = await completeLogin(userId, login);
+    const after = await env.DB.prepare("SELECT id, name FROM overlays WHERE owner_id = ? ORDER BY id").bind(userId).all();
+
+    expect(response?.status).toBe(302);
+    expect(after.results).toHaveLength(3);
+    expect(after.results).toEqual(before.results);
   });
 
   it("accepts a session minted with the shared worker test helper", async () => {

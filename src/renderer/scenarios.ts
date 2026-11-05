@@ -68,7 +68,11 @@ export function runScenario(
 ): () => void {
   const timers = new Set<ReturnType<typeof setTimeout>>();
   createScenarioMessages(name, channel).forEach((message, index) => {
-    const interval = name === "quiet" ? 280 : name === "raid" ? 110 : 54;
+    if (name === "quiet") {
+      emit(message);
+      return;
+    }
+    const interval = name === "raid" ? 110 : 54;
     const timer = setTimeout(() => {
       timers.delete(timer);
       emit(message);

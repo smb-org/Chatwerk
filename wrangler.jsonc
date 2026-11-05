@@ -13,7 +13,7 @@
     "binding": "ASSETS",
     "directory": "./dist/client",
     "html_handling": "none",
-    "run_worker_first": ["/", "/api/*", "/auth/*", "/health", "/login*", "/overlay*", "/studio*", "/export*"]
+    "run_worker_first": ["/", "/api/*", "/auth/*", "/health", "/login*", "/overlay", "/overlay/*", "/overlay.html", "/studio*", "/export*", "/themes*", "/t/*", "/gallery.html", "/theme.html"]
   },
   "durable_objects": {
     "bindings": [{ "name": "OVERLAY", "class_name": "OverlayObject" }]
@@ -28,6 +28,6 @@
     }
   ],
   "dev": {
-    "port": 17473
+    "port": 17173
   }
 }

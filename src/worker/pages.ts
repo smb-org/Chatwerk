@@ -22,6 +22,21 @@ export async function handlePageRequest(request: Request, env: PageEnvironment):
     return asset(request, env, "/login.html");
   }
 
+  if (url.pathname === "/theme.html") return asset(request, env, "/theme.html");
+  if (/^\/t\/[a-z0-9-]{1,100}$/u.test(url.pathname)) return asset(request, env, "/theme.html");
+  if (url.pathname.startsWith("/t/")) return Response.json({ error: "Not found" }, { status: 404 });
+
+  const galleryPage = ["/themes", "/themes/", "/themes.html", "/gallery.html"].includes(url.pathname);
+  if (galleryPage) {
+    const session = await sessionForRequest(request, env.SESSION_KEY);
+    if (!session) {
+      const login = new URL("/login", url.origin);
+      login.searchParams.set("next", "/themes");
+      return new Response(null, { status: 302, headers: { Location: login.toString(), "Cache-Control": "no-store" } });
+    }
+    return asset(request, env, "/gallery.html");
+  }
+
   const exportPage = url.pathname === "/export.html" || url.pathname === "/studio/export" ||
     url.pathname === "/studio/export.html";
 

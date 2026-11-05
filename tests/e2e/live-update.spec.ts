@@ -8,7 +8,7 @@ import { TEST_SESSION_KEY } from "./test-session";
 import { seedStudioSession } from "./studio-session";
 
 const port = Number(process.env.PLAYWRIGHT_PORT ?? 17474);
-const localOrigin = `http://127.0.0.1:${port}`;
+const localOrigin = `https://127.0.0.1:${port}`;
 
 function seedLocalOverlay(ownerId: string, login: string, overlayId: string, token: string): void {
   const sql = `INSERT INTO users (id, login) VALUES ('${ownerId}', '${login}'); INSERT INTO overlays (id, owner_id, link_token, name, channel, link_generation) VALUES ('${overlayId}', '${ownerId}', '${token}', 'Main', '${login}', 1);`;
@@ -64,7 +64,7 @@ test("sandbox overlay receives an owner config update and acknowledged test line
 
   const frame = pageA.frameLocator("#chatwerk-widget");
   await expect(frame.locator("#chat")).toBeVisible();
-  await expect.poll(() => socketUrls.some((url) => url.startsWith(`ws://${new URL(localOrigin).host}/api/overlay/live`)), { timeout: 5_000 }).toBe(true);
+  await expect.poll(() => socketUrls.some((url) => url.startsWith(`wss://${new URL(localOrigin).host}/api/overlay/live`)), { timeout: 5_000 }).toBe(true);
   await expect.poll(async () => frame.locator("#chat").evaluate((root) => getComputedStyle(root).getPropertyValue("--t-font-size").trim()), { timeout: 5_000 }).toBe("18px");
   await pageA.evaluate((linkToken) => {
     const studioSocket = new WebSocket(

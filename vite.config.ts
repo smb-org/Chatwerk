@@ -13,6 +13,8 @@ export default defineConfig({
         login: resolve(import.meta.dirname, "src/studio/login.html"),
         studio: resolve(import.meta.dirname, "src/studio/studio.html"),
         export: resolve(import.meta.dirname, "src/studio/export.html"),
+        gallery: resolve(import.meta.dirname, "src/studio/gallery.html"),
+        theme: resolve(import.meta.dirname, "src/studio/theme.html"),
         overlay: resolve(import.meta.dirname, "src/studio/overlay.html"),
       },
     },

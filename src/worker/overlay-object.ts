@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { DEFAULTS, SCHEMA_VERSION, ThemeValidationError, validateTheme, type ThemeConfig } from "../shared/theme";
+import { DEFAULTS, SCHEMA_VERSION, ThemeValidationError, validateShareableTheme, validateTheme, type ThemeConfig } from "../shared/theme";
 
 const SOCKET_TAG = "overlay";
 const MAX_SOCKETS = 16;
@@ -8,6 +8,7 @@ const MAX_ATTACHMENT_BYTES = 2 * 1024;
 const NO_REVISION_FRAME_LIMIT = 60;
 const MESSAGE_BYTE_LIMIT = 1024 * 1024;
 const MESSAGE_WINDOW_MS = 60_000;
+const UNDO_WINDOW_MS = 10_000;
 const frameEncoder = new TextEncoder();
 type ClientType = "browser" | "obs" | "widget" | "studio";
 type ChatStatus = "connected" | "reconnecting" | "idle";
@@ -25,8 +26,23 @@ interface SocketAttachment {
 
 interface Snapshot {
   revision: number;
-  config: ThemeConfig;
+  config: OverlayConfig;
+  themeFrom: string | null;
 }
+
+interface OverlayConfig extends ThemeConfig {
+  customCss?: string;
+  customCssEnabled?: boolean;
+}
+
+interface UndoSnapshotRow {
+  [key: string]: string | number | null;
+  config_json: string;
+  theme_from: string | null;
+  applied_revision: number | null;
+}
+
+type CopyResult = Snapshot & { snapshotId: string; undoExpiresAt: number };
 
 export function closeDeadSockets(sockets: Iterable<WebSocket>): void {
   for (const socket of sockets) {
@@ -40,6 +56,8 @@ export function closeDeadSockets(sockets: Iterable<WebSocket>): void {
 }
 
 export class OverlayObject extends DurableObject<Env> {
+  private storageReady = false;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
@@ -54,25 +72,102 @@ export class OverlayObject extends DurableObject<Env> {
     patch: Record<string, unknown>,
     baseRevision: number,
     generation: number,
-  ): Promise<Snapshot | { conflict: true; revision: number; config: ThemeConfig } | { invalid: true; field: string }> {
+  ): Promise<Snapshot | { conflict: true; revision: number; config: OverlayConfig; themeFrom: string | null } | { invalid: true; field: string }> {
     this.prepareGeneration(generation);
     const current = this.readSnapshot();
-    if (baseRevision !== current.revision) return { conflict: true, revision: current.revision, config: current.config };
+    if (baseRevision !== current.revision) {
+      return { conflict: true, revision: current.revision, config: current.config, themeFrom: current.themeFrom };
+    }
     if (!isRecord(patch)) return { invalid: true, field: "theme" };
-    let config: ThemeConfig;
+    let config: OverlayConfig;
     try {
-      config = validateTheme({ ...current.config, ...patch, schemaVersion: SCHEMA_VERSION });
+      config = validateOverlayConfig({ ...current.config, ...patch, schemaVersion: SCHEMA_VERSION });
     } catch (error) {
       if (error instanceof ThemeValidationError) return { invalid: true, field: error.fieldName };
       throw error;
     }
     const revision = current.revision + 1;
-    this.ctx.storage.sql.exec(
-      "UPDATE overlay_config SET config_json = ?, revision = ? WHERE singleton = 1",
-      JSON.stringify(config), revision,
-    );
-    this.broadcast({ type: "config", schemaVersion: SCHEMA_VERSION, revision, config });
-    return { revision, config };
+    this.writeSnapshot(revision, config, current.themeFrom);
+    this.broadcast({ type: "config", schemaVersion: SCHEMA_VERSION, revision, config, themeFrom: current.themeFrom });
+    return { revision, config, themeFrom: current.themeFrom };
+  }
+
+  async applyLook(values: unknown, themeId: string, generation: number, idempotencyKey = crypto.randomUUID()): Promise<CopyResult> {
+    this.prepareGeneration(generation);
+    const now = Date.now();
+    this.ctx.storage.sql.exec("DELETE FROM overlay_undo_snapshots WHERE created_at < ?", now - UNDO_WINDOW_MS);
+    const replay = this.ctx.storage.sql.exec<{ result_json: string }>(
+      "SELECT result_json FROM overlay_undo_snapshots WHERE idempotency_key = ?", idempotencyKey,
+    ).toArray()[0];
+    if (replay) {
+      const result = JSON.parse(replay.result_json) as CopyResult;
+      if (result.themeFrom !== themeId) throw new TypeError("Copy key was already used for another look");
+      return result;
+    }
+    const current = this.readSnapshot();
+    const theme = validateShareableTheme(values);
+    const snapshotId = crypto.randomUUID();
+    const config: OverlayConfig = {
+      ...current.config,
+      ...theme,
+      ...(current.config.customCss === undefined ? {} : { customCss: current.config.customCss }),
+      ...(current.config.customCss === undefined ? {} : { customCssEnabled: false }),
+    };
+    const revision = current.revision + 1;
+    const result = { revision, config, themeFrom: themeId, snapshotId, undoExpiresAt: now + UNDO_WINDOW_MS };
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec(`
+        INSERT INTO overlay_undo_snapshots
+          (snapshot_id, config_json, theme_from, created_at, applied_revision, idempotency_key, result_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, snapshotId, JSON.stringify(current.config), current.themeFrom, now, revision, idempotencyKey, JSON.stringify(result));
+      this.writeSnapshot(revision, config, themeId);
+    });
+    this.broadcast({ type: "config", schemaVersion: SCHEMA_VERSION, revision, config, themeFrom: themeId });
+    return result;
+  }
+
+  async undoLook(
+    snapshotId: string,
+    expectedRevision: number,
+    generation: number,
+  ): Promise<Snapshot | { conflict: true; revision: number; config: OverlayConfig; themeFrom: string | null } | { expired: true }> {
+    this.prepareGeneration(generation);
+    const current = this.readSnapshot();
+    if (expectedRevision !== current.revision) {
+      return { conflict: true, revision: current.revision, config: current.config, themeFrom: current.themeFrom };
+    }
+    const row = this.ctx.storage.sql.exec<UndoSnapshotRow>(
+      "SELECT config_json, theme_from, applied_revision FROM overlay_undo_snapshots WHERE snapshot_id = ? AND created_at >= ?",
+      snapshotId, Date.now() - UNDO_WINDOW_MS,
+    ).toArray()[0];
+    if (!row) return { expired: true };
+    if (row.applied_revision !== expectedRevision) {
+      return { conflict: true, revision: current.revision, config: current.config, themeFrom: current.themeFrom };
+    }
+    const before = JSON.parse(row.config_json) as unknown;
+    const config = validateOverlayConfig(before);
+    const themeFrom = row.theme_from;
+    const revision = current.revision + 1;
+    this.writeSnapshot(revision, config, themeFrom);
+    this.broadcast({ type: "config", schemaVersion: SCHEMA_VERSION, revision, config, themeFrom });
+    return { revision, config, themeFrom };
+  }
+
+  async resetForDelete(): Promise<void> {
+    this.ensureStorage();
+    this.assertActive();
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec("DELETE FROM overlay_config");
+      this.ctx.storage.sql.exec("DELETE FROM overlay_link_state");
+      this.ctx.storage.sql.exec("DELETE FROM overlay_test_line_targets");
+      this.ctx.storage.sql.exec("DELETE FROM overlay_test_lines");
+      this.ctx.storage.sql.exec("DELETE FROM overlay_undo_snapshots");
+      this.ctx.storage.sql.exec("INSERT INTO overlay_tombstone(singleton) VALUES (1)");
+    });
+    for (const socket of this.ctx.getWebSockets(SOCKET_TAG)) {
+      try { socket.close(4001, "overlay_deleted"); } catch { /* Socket is already closed. */ }
+    }
   }
 
   async testLine(generation: number): Promise<string> {
@@ -112,6 +207,8 @@ export class OverlayObject extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
+    this.ensureStorage();
+    if (this.isDeleted()) return Response.json({ error: "overlay-deleted" }, { status: 410 });
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") return new Response(null, { status: 426 });
     const requestedGeneration = Number(request.headers.get("x-link-generation"));
     if (!Number.isSafeInteger(requestedGeneration) || requestedGeneration < 1) {
@@ -143,6 +240,11 @@ export class OverlayObject extends DurableObject<Env> {
   }
 
   webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
+    this.ensureStorage();
+    if (this.isDeleted()) {
+      try { socket.close(4001, "overlay_deleted"); } catch { /* Socket is already closed. */ }
+      return;
+    }
     const attachment = readAttachment(socket);
     const now = Date.now();
     if (now - attachment.windowStartedAt >= MESSAGE_WINDOW_MS) {
@@ -200,6 +302,7 @@ export class OverlayObject extends DurableObject<Env> {
   }
 
   private ensureStorage(): void {
+    if (this.storageReady) return;
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS overlay_config (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -228,10 +331,30 @@ export class OverlayObject extends DurableObject<Env> {
         PRIMARY KEY (test_id, socket_id)
       )
     `);
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS overlay_undo_snapshots (
+        snapshot_id TEXT PRIMARY KEY,
+        config_json TEXT NOT NULL,
+        theme_from TEXT,
+        created_at INTEGER NOT NULL,
+        applied_revision INTEGER,
+        idempotency_key TEXT,
+        result_json TEXT
+      )
+    `);
+    const snapshotColumns = new Set(this.ctx.storage.sql.exec<{ name: string }>("PRAGMA table_info(overlay_undo_snapshots)")
+      .toArray().map((column) => column.name));
+    for (const [name, type] of [["applied_revision", "INTEGER"], ["idempotency_key", "TEXT"], ["result_json", "TEXT"]] as const) {
+      if (!snapshotColumns.has(name)) this.ctx.storage.sql.exec(`ALTER TABLE overlay_undo_snapshots ADD COLUMN ${name} ${type}`);
+    }
+    this.ctx.storage.sql.exec("CREATE UNIQUE INDEX IF NOT EXISTS overlay_undo_idempotency ON overlay_undo_snapshots(idempotency_key) WHERE idempotency_key IS NOT NULL");
+    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS overlay_tombstone (singleton INTEGER PRIMARY KEY CHECK (singleton = 1))");
+    this.storageReady = true;
   }
 
   private prepareGeneration(generation: number): void {
     this.ensureStorage();
+    this.assertActive();
     if (!Number.isSafeInteger(generation) || generation < 1) {
       throw new RangeError("Link generation must be a positive safe integer");
     }
@@ -246,6 +369,14 @@ export class OverlayObject extends DurableObject<Env> {
     this.storeGeneration(generation);
     if (current !== null) this.closeSocketsForRevocation();
     this.ensureConfig();
+  }
+
+  private isDeleted(): boolean {
+    return this.ctx.storage.sql.exec("SELECT singleton FROM overlay_tombstone WHERE singleton = 1").toArray().length !== 0;
+  }
+
+  private assertActive(): void {
+    if (this.isDeleted()) throw new Error("Overlay was deleted");
   }
 
   private ensureConfig(): void {
@@ -266,8 +397,17 @@ export class OverlayObject extends DurableObject<Env> {
       "SELECT config_json, revision FROM overlay_config WHERE singleton = 1",
     ).toArray()[0];
     if (!row) throw new Error("Overlay config storage is unavailable");
-    const config = validateTheme(JSON.parse(row.config_json) as unknown);
-    return { revision: row.revision, config };
+    const stored = JSON.parse(row.config_json) as unknown;
+    const config = validateOverlayConfig(stored);
+    const themeFrom = isRecord(stored) && typeof stored.themeFrom === "string" ? stored.themeFrom : null;
+    return { revision: row.revision, config, themeFrom };
+  }
+
+  private writeSnapshot(revision: number, config: OverlayConfig, themeFrom: string | null): void {
+    this.ctx.storage.sql.exec(
+      "UPDATE overlay_config SET config_json = ?, revision = ? WHERE singleton = 1",
+      JSON.stringify({ ...config, themeFrom }), revision,
+    );
   }
 
   private readGeneration(): number | null {
@@ -368,6 +508,37 @@ function emptyAttachment(channel: string | null = null): SocketAttachment {
     noRevisionFrameCount: 0,
     messageByteCount: 0,
   };
+}
+
+function validateOverlayConfig(input: unknown): OverlayConfig {
+  if (!isRecord(input)) throw new ThemeValidationError("theme", "expected an object");
+  const theme = validateTheme(input);
+  const config: OverlayConfig = { ...theme };
+  if (input.filters !== undefined) {
+    if (!isJsonValue(input.filters)) throw new ThemeValidationError("filters", "must be valid JSON data");
+    (config as unknown as Record<string, unknown>).filters = input.filters;
+  }
+  if (input.customCss !== undefined) {
+    if (typeof input.customCss !== "string" || new TextEncoder().encode(input.customCss).byteLength > 10_000) {
+      throw new ThemeValidationError("customCss", "must be text no larger than 10 KB");
+    }
+    config.customCss = input.customCss;
+  }
+  if (input.customCssEnabled !== undefined) {
+    if (typeof input.customCssEnabled !== "boolean") {
+      throw new ThemeValidationError("customCssEnabled", "must be boolean");
+    }
+    config.customCssEnabled = input.customCssEnabled;
+  }
+  return config;
+}
+
+function isJsonValue(value: unknown): boolean {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (!isRecord(value)) return false;
+  return Object.values(value).every(isJsonValue);
 }
 
 function readAttachment(socket: WebSocket): SocketAttachment {

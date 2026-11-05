@@ -30,6 +30,16 @@ interface ConfigResponse {
   revision: number;
   config: unknown;
   channel?: string;
+  themeFrom?: string | null;
+}
+
+interface OwnedLook {
+  id: string;
+  slug: string;
+  name: string;
+  author: string;
+  parent: { removed: boolean; name?: string; author?: string; slug?: string } | null;
+  withdrawn: boolean;
 }
 
 interface ClientCounts {
@@ -68,6 +78,15 @@ const toastText = $("#toast-text") as HTMLElement;
 const dialog = $("#account-dialog") as HTMLDialogElement;
 const dialogTitle = $("#dialog-title") as HTMLElement;
 const dialogBody = $("#dialog-body") as HTMLElement;
+const publishDialog = $("#publish-dialog") as HTMLDialogElement;
+const publishForm = $("#publish-form") as HTMLFormElement;
+const publishInput = $("#publish-name") as HTMLInputElement;
+const publishStatus = $("#publish-status") as HTMLElement;
+const publishSubmit = $("#publish-submit") as HTMLButtonElement;
+const publishOpen = $("#publish-open") as HTMLAnchorElement;
+const publishLimit = $("#publish-limit") as HTMLElement;
+const undoButton = $("#undo-look") as HTMLButtonElement;
+const activeOverlayName = $("#active-overlay-name") as HTMLElement;
 
 let language: Language = currentLanguage();
 let overlay: OwnedOverlay | undefined;
@@ -84,6 +103,8 @@ let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let initializationRetryAttempt = 0;
 let inFlight = false;
+let activeDeleteInFlight = false;
+let undoInFlight = false;
 let pendingPatch: Partial<ThemeValues> = {};
 let lastEditAt = 0;
 let retryStartedAt = 0;
@@ -100,6 +121,10 @@ let pendingTestId: string | undefined;
 let testTimeout: ReturnType<typeof setTimeout> | undefined;
 let earlyTestProgress: { id: string; shown: number; total: number } | undefined;
 let activeDialogOpener: HTMLElement | undefined;
+let publishDialogOpener: HTMLElement | undefined;
+let undoOffer: { snapshotId: string; expectedRevision: number; expiresAt: number; lookName: string } | undefined;
+let undoTimer: ReturnType<typeof setTimeout> | undefined;
+let publishLimitReached = false;
 let currentPlatform = "obs";
 let lastAnnouncedCount: number | undefined;
 
@@ -121,12 +146,15 @@ async function initialize(): Promise<void> {
     if (!response.ok) throw new Error("overlay-list");
     const result = await response.json() as { overlays?: OwnedOverlay[] };
     ownedOverlays = result.overlays ?? [];
+    const requestedOverlayId = new URLSearchParams(window.location.search).get("overlay");
     const storedOverlayId = localStorageValue("chatwerk-overlay-id");
-    overlay = ownedOverlays.find((item) => item.id === storedOverlayId) ??
+    overlay = ownedOverlays.find((item) => item.id === requestedOverlayId) ??
+      ownedOverlays.find((item) => item.id === storedOverlayId) ??
       ownedOverlays.find((item) => item.name === "Main") ?? ownedOverlays[0];
     if (!overlay) throw new Error("overlay-missing");
     try { localStorage.setItem("chatwerk-overlay-id", overlay.id); } catch { /* The server's first overlay remains selected for this page. */ }
     channel = overlay.channel;
+    updateActiveOverlayLabel();
     const link = `${window.location.origin}/overlay#token=${overlay.linkToken}`;
     $("#overlay-url").setAttribute("value", link);
     $("#overlay-url").setAttribute("aria-label", translate(language, "overlayLink"));
@@ -143,6 +171,7 @@ async function initialize(): Promise<void> {
     errorArea.textContent = "";
     setStatus("savedRevision", { revision });
     setupFirstRun();
+    processStudioQuery();
     updateTestButton();
     updateHeaderResponsive();
   } catch {
@@ -208,6 +237,9 @@ function connectStudioSocket(): void {
       updateTestButton();
       if (connectedOutputs > 0) finishFirstRun();
       return;
+    }
+    if (message.type === "config" && Number.isSafeInteger(message.revision) && Number(message.revision) > revision) {
+      clearUndoOffer();
     }
     if (message.type === "test-progress" && typeof message.id === "string" &&
       Number.isSafeInteger(message.shown) && Number.isSafeInteger(message.total)) {
@@ -667,12 +699,14 @@ function formattedRange(name: ThemeFieldName, value: number, unit: string): stri
 }
 
 function setThemeField<K extends ThemeFieldName>(name: K, value: ThemeValues[K]): boolean {
+  if (activeDeleteInFlight) return false;
   try {
     theme = validateTheme({ ...theme, [name]: value });
   } catch {
     return false;
   }
   pendingPatch = { ...pendingPatch, [name]: value };
+  clearUndoOffer();
   lastEditAt = Date.now();
   conflictNotice = false;
   errorArea.textContent = "";
@@ -925,8 +959,8 @@ function wireStaticControls(): void {
   $("#copy-link").addEventListener("click", () => void copyOverlayLink());
   $("#language-en").addEventListener("click", () => setLanguage("en"));
   $("#language-de").addEventListener("click", () => setLanguage("de"));
-  $("#open-looks").addEventListener("click", () => openPlaceholderDialog("myLooks", "looksPlaceholder", $("#open-looks")));
-  $("#share-look").addEventListener("click", () => openPlaceholderDialog("myLooks", "looksPlaceholder", $("#share-look")));
+  $("#open-looks").addEventListener("click", () => void openMyLooksDialog($("#open-looks")));
+  $("#share-look").addEventListener("click", () => void openPublishDialog($("#share-look")));
   $("#open-overlays").addEventListener("click", () => openOverlaysDialog($("#open-overlays")));
   $("#logout").addEventListener("click", () => void logout());
   $("#first-run-done").addEventListener("click", finishFirstRun);
@@ -991,6 +1025,24 @@ function wireStaticControls(): void {
     activeDialogOpener?.focus();
     activeDialogOpener = undefined;
   });
+  publishDialog.addEventListener("close", () => {
+    preview.inert = false;
+    publishDialogOpener?.focus();
+    publishDialogOpener = undefined;
+  });
+  for (const selector of ["#publish-cancel", "#publish-x"]) {
+    $(selector).addEventListener("click", closePublishDialog);
+  }
+  publishInput.addEventListener("input", updatePublishSubmit);
+  publishForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void publishLook();
+  });
+  $("#publish-manage-looks").addEventListener("click", () => {
+    closePublishDialog();
+    void openMyLooksDialog($("#open-looks"));
+  });
+  undoButton.addEventListener("click", () => void undoCopiedLook());
 }
 
 async function copyOverlayLink(): Promise<void> {
@@ -1030,34 +1082,522 @@ function finishFirstRun(): void {
   $("#rehearse-tools").removeAttribute("hidden");
 }
 
-function openPlaceholderDialog(titleKey: TranslationKey, bodyKey: TranslationKey, opener: HTMLElement): void {
-  showDialog(titleKey, translate(language, bodyKey), opener);
+function updateActiveOverlayLabel(): void {
+  activeOverlayName.textContent = overlay ? translate(language, "activeOverlayName", { name: overlay.name }) : "";
+}
+
+function processStudioQuery(): void {
+  const params = new URLSearchParams(window.location.search);
+  const snapshotId = params.get("undo");
+  const expectedRevision = Number(params.get("rev"));
+  const expiresAt = Number(params.get("until"));
+  const lookName = params.get("lookName") ?? "";
+  const shouldPublish = params.get("publish") === "1";
+  if (snapshotId && /^[0-9a-f-]{36}$/iu.test(snapshotId) && Number.isSafeInteger(expectedRevision) &&
+    expectedRevision === revision && Number.isSafeInteger(expiresAt) && expiresAt > Date.now()) {
+    showUndoOffer(snapshotId, expectedRevision, expiresAt, lookName);
+  }
+  if (["undo", "rev", "until", "look", "lookName", "overlay", "publish"].some((key) => params.has(key))) {
+    window.history.replaceState(window.history.state, "", window.location.pathname);
+  }
+  if (shouldPublish) void openPublishDialog($("#share-look"));
+}
+
+function showUndoOffer(snapshotId: string, expectedRevision: number, expiresAt: number, lookName: string): void {
+  undoOffer = { snapshotId, expectedRevision, expiresAt, lookName };
+  statusVisible.textContent = translate(language, "undoLookNotice", { name: lookName });
+  statusAnnouncer.textContent = statusVisible.textContent;
+  undoButton.hidden = false;
+  updateUndoButtonDisabled();
+  if (undoTimer !== undefined) clearTimeout(undoTimer);
+  undoTimer = setTimeout(() => clearUndoOffer(), Math.max(0, expiresAt - Date.now()));
+}
+
+function clearUndoOffer(): void {
+  if (undoTimer !== undefined) clearTimeout(undoTimer);
+  undoTimer = undefined;
+  undoOffer = undefined;
+  undoButton.hidden = true;
+  updateUndoButtonDisabled();
+  if (overlay) setStatus("savedRevision", { revision });
+}
+
+async function undoCopiedLook(): Promise<void> {
+  if (activeDeleteInFlight || undoInFlight) return;
+  if (!overlay || !undoOffer || undoOffer.expectedRevision !== revision) {
+    clearUndoOffer();
+    return;
+  }
+  const offer = undoOffer;
+  const undoOverlayId = overlay.id;
+  undoInFlight = true;
+  updateUndoButtonDisabled();
+  try {
+    const response = await fetch(`/api/overlays/${undoOverlayId}/undo`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ snapshotId: offer.snapshotId, expectedRevision: offer.expectedRevision }),
+    });
+    if (!response.ok) throw new Error("undo-expired");
+    const restored = await response.json() as ConfigResponse;
+    if (activeDeleteInFlight || overlay?.id !== undoOverlayId) return;
+    revision = restored.revision;
+    const previousChannels = [...theme.channels];
+    theme = validateTheme(restored.config);
+    syncControls(previousChannels);
+    applyPreviewTheme();
+    updateWarning();
+    clearUndoOffer();
+    setStatus("lookUndoDone", {}, true);
+  } catch {
+    if (activeDeleteInFlight || overlay?.id !== undoOverlayId) return;
+    clearUndoOffer();
+    setStatus("undoExpired", {}, true);
+  } finally {
+    undoInFlight = false;
+    updateUndoButtonDisabled();
+  }
+}
+
+function updateUndoButtonDisabled(): void {
+  undoButton.disabled = activeDeleteInFlight || undoInFlight;
+}
+
+async function openPublishDialog(opener: HTMLElement): Promise<void> {
+  publishDialogOpener = opener;
+  preview.inert = true;
+  publishInput.value = "";
+  publishStatus.textContent = "";
+  publishStatus.removeAttribute("data-kind");
+  publishOpen.hidden = true;
+  publishLimit.hidden = true;
+  publishLimitReached = false;
+  closeAccountMenu();
+  publishDialog.showModal();
+  publishInput.focus();
+  updatePublishSubmit();
+  try {
+    const response = await fetch("/api/looks/mine", { credentials: "same-origin", cache: "no-store" });
+    if (response.status === 401) {
+      window.location.assign("/auth/login?next=%2Fstudio");
+      return;
+    }
+    if (!response.ok) throw new Error("my-looks");
+    const result = await response.json() as { looks?: OwnedLook[] };
+    publishLimitReached = (result.looks ?? []).filter((look) => !look.withdrawn).length >= 10;
+    publishLimit.hidden = !publishLimitReached;
+    updatePublishSubmit();
+  } catch {
+    setPublishMessage("publishError");
+  }
+}
+
+function closePublishDialog(): void {
+  if (publishDialog.open) publishDialog.close();
+}
+
+function updatePublishSubmit(): void {
+  publishSubmit.disabled = publishLimitReached || publishInput.value.trim().length === 0;
+}
+
+function setPublishMessage(key: TranslationKey, values: Record<string, string | number> = {}, success = false): void {
+  publishStatus.textContent = translate(language, key, values);
+  publishStatus.dataset.kind = success ? "success" : "error";
+}
+
+async function publishLook(): Promise<void> {
+  if (!overlay || !publishInput.value.trim() || publishLimitReached) return;
+  publishSubmit.disabled = true;
+  publishSubmit.textContent = translate(language, "publishing");
+  publishStatus.textContent = "";
+  publishOpen.hidden = true;
+  try {
+    const response = await fetch("/api/looks", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ overlayId: overlay.id, name: publishInput.value.trim() }),
+    });
+    if (response.status === 401) {
+      window.location.assign("/auth/login?next=%2Fstudio");
+      return;
+    }
+    if (response.status === 409) {
+      const result = await response.json() as { error?: string };
+      if (result.error === "duplicate-name") setPublishMessage("publishDuplicate");
+      else if (result.error === "look-limit") {
+        publishLimitReached = true;
+        publishLimit.hidden = false;
+        setPublishMessage("lookLimitStatus");
+      } else setPublishMessage("publishError");
+      updatePublishSubmit();
+      return;
+    }
+    if (!response.ok) throw new Error("publish-look");
+    const look = await response.json() as { slug: string };
+    const link = `${window.location.origin}/t/${encodeURIComponent(look.slug)}`;
+    publishOpen.href = link;
+    publishOpen.textContent = translate(language, "open");
+    publishOpen.hidden = false;
+    try {
+      await copyText(link);
+      setPublishMessage("published", {}, true);
+    } catch {
+      setPublishMessage("publishedLinkNotCopied", {}, true);
+    }
+  } catch {
+    setPublishMessage("publishError");
+    updatePublishSubmit();
+  } finally {
+    publishSubmit.textContent = translate(language, "publishSubmit");
+    if (!publishLimitReached && publishStatus.dataset.kind !== "success") updatePublishSubmit();
+  }
+}
+
+async function copyText(value: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    const temporary = document.createElement("textarea");
+    temporary.value = value;
+    temporary.setAttribute("readonly", "true");
+    temporary.style.position = "fixed";
+    temporary.style.opacity = "0";
+    document.body.appendChild(temporary);
+    temporary.select();
+    try {
+      if (!document.execCommand("copy")) throw new Error("clipboard-unavailable");
+    } finally {
+      temporary.remove();
+    }
+  }
 }
 
 function openOverlaysDialog(opener: HTMLElement): void {
   dialogTitle.textContent = translate(language, "overlays");
+  renderOverlayManager();
+  showDialogElement(opener);
+}
+
+function renderOverlayManager(noticeKey?: TranslationKey): void {
   dialogBody.replaceChildren();
+  const status = document.createElement("p");
+  status.className = "manage-status";
+  if (noticeKey) status.textContent = translate(language, noticeKey);
+  dialogBody.appendChild(status);
+
+  const atLimit = ownedOverlays.length >= 3;
+  const form = document.createElement("form");
+  form.className = "manage-form";
+  const label = document.createElement("label");
+  label.className = "control-label";
+  label.htmlFor = "new-overlay-name";
+  label.textContent = translate(language, "overlayName");
+  const name = document.createElement("input");
+  name.className = "dialog-input";
+  name.id = "new-overlay-name";
+  name.maxLength = 40;
+  name.autocomplete = "off";
+  name.setAttribute("aria-label", translate(language, "overlayName"));
+  const create = document.createElement("button");
+  create.className = "button button-primary";
+  create.type = "submit";
+  create.textContent = translate(language, "createOverlay");
+  create.disabled = atLimit;
+  form.appendChild(label);
+  form.appendChild(name);
+  form.appendChild(create);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void createManagedOverlay(name.value, status);
+  });
+  dialogBody.appendChild(form);
+  if (atLimit) {
+    const limit = document.createElement("p");
+    limit.className = "limit-copy";
+    limit.textContent = translate(language, "overlayLimitStatus");
+    dialogBody.appendChild(limit);
+  }
+
+  const list = document.createElement("div");
+  list.className = "manage-list";
+  list.setAttribute("role", "group");
+  list.setAttribute("aria-label", translate(language, "overlays"));
   if (ownedOverlays.length === 0) {
     const empty = document.createElement("p");
     empty.textContent = translate(language, "noOverlays");
-    dialogBody.appendChild(empty);
-  } else {
-    const list = document.createElement("div");
-    list.className = "overlay-list";
-    list.setAttribute("role", "group");
-    list.setAttribute("aria-label", translate(language, "overlays"));
-    for (const item of ownedOverlays) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "overlay-list-item";
-      button.textContent = `${item.name} · ${item.channel}`;
-      button.setAttribute("aria-pressed", String(item.id === overlay?.id));
-      button.addEventListener("click", () => void selectOverlay(item));
-      list.appendChild(button);
-    }
-    dialogBody.appendChild(list);
+    list.appendChild(empty);
   }
+  for (const item of ownedOverlays) list.appendChild(makeOverlayRow(item));
+  dialogBody.appendChild(list);
+}
+
+function makeOverlayRow(item: OwnedOverlay): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "manage-row";
+  const description = document.createElement("span");
+  description.className = "manage-row-name";
+  description.textContent = item.name;
+  const meta = document.createElement("span");
+  meta.className = "manage-row-meta";
+  meta.textContent = item.channel ? `#${item.channel}` : "—";
+  description.appendChild(meta);
+  const actions = document.createElement("span");
+  actions.className = "manage-row-actions";
+  const select = document.createElement("button");
+  select.type = "button";
+  select.className = "small-button";
+  select.textContent = translate(language, "select");
+  select.setAttribute("aria-pressed", String(item.id === overlay?.id));
+  select.addEventListener("click", () => void selectOverlay(item));
+  const rename = document.createElement("button");
+  rename.type = "button";
+  rename.className = "small-button";
+  rename.textContent = translate(language, "renameOverlay");
+  rename.addEventListener("click", () => beginOverlayRename(item, row));
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "small-button";
+  remove.textContent = translate(language, "deleteOverlay");
+  remove.disabled = ownedOverlays.length <= 1;
+  remove.setAttribute("aria-label", `${translate(language, "deleteOverlay")} ${item.name}`);
+  remove.addEventListener("click", () => void deleteManagedOverlay(item));
+  actions.appendChild(select);
+  actions.appendChild(rename);
+  actions.appendChild(remove);
+  row.appendChild(description);
+  row.appendChild(actions);
+  return row;
+}
+
+function beginOverlayRename(item: OwnedOverlay, row: HTMLElement): void {
+  row.replaceChildren();
+  row.classList.add("manage-form");
+  const input = document.createElement("input");
+  input.className = "dialog-input";
+  input.maxLength = 40;
+  input.value = item.name;
+  input.setAttribute("aria-label", translate(language, "overlayName"));
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "button";
+  save.textContent = translate(language, "renameOverlay");
+  save.addEventListener("click", () => void renameManagedOverlay(item, input.value));
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "small-button";
+  cancel.textContent = translate(language, "dialogClose");
+  cancel.addEventListener("click", () => renderOverlayManager());
+  row.appendChild(input);
+  row.appendChild(save);
+  row.appendChild(cancel);
+  input.focus();
+  input.select();
+}
+
+async function createManagedOverlay(rawName: string, status: HTMLElement): Promise<void> {
+  const name = rawName.trim();
+  if (!name) {
+    status.textContent = translate(language, "lookNameInvalid");
+    return;
+  }
+  const response = await fetch("/api/overlays", {
+    method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (response.status === 401) {
+    window.location.assign("/auth/login?next=%2Fstudio");
+    return;
+  }
+  if (response.status === 409) {
+    const result = await response.json() as { error?: string };
+    renderOverlayManager(result.error === "overlay-name" ? "overlayNameTaken" : "overlayLimitStatus");
+    return;
+  }
+  if (!response.ok) {
+    renderOverlayManager("overlayCreateFailed");
+    return;
+  }
+  const created = await response.json() as OwnedOverlay;
+  ownedOverlays = [...ownedOverlays, created];
+  await selectOverlay(created);
+}
+
+async function renameManagedOverlay(item: OwnedOverlay, rawName: string): Promise<void> {
+  const name = rawName.trim();
+  if (!name) {
+    renderOverlayManager("lookNameInvalid");
+    return;
+  }
+  const response = await fetch(`/api/overlays/${item.id}`, {
+    method: "PATCH", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (response.status === 401) {
+    window.location.assign("/auth/login?next=%2Fstudio");
+    return;
+  }
+  if (response.status === 409) {
+    renderOverlayManager("overlayNameTaken");
+    return;
+  }
+  if (!response.ok) {
+    renderOverlayManager("overlayRenameFailed");
+    return;
+  }
+  const updated = await response.json() as OwnedOverlay;
+  ownedOverlays = ownedOverlays.map((entry) => entry.id === updated.id ? updated : entry);
+  if (overlay?.id === updated.id) {
+    overlay = updated;
+    updateActiveOverlayLabel();
+  }
+  renderOverlayManager("overlayRenamed");
+}
+
+async function deleteManagedOverlay(item: OwnedOverlay): Promise<void> {
+  if (activeDeleteInFlight) return;
+  if (ownedOverlays.length <= 1) {
+    renderOverlayManager("lastOverlay");
+    return;
+  }
+  if (item.id === overlay?.id && undoInFlight) {
+    renderOverlayManager("finishUndoBeforeDelete");
+    return;
+  }
+  if (item.id === overlay?.id && hasPendingSave()) {
+    renderOverlayManager("finishSavingBeforeSwitch");
+    return;
+  }
+  const deletingActive = item.id === overlay?.id;
+  if (deletingActive) {
+    activeDeleteInFlight = true;
+    controlsRoot.inert = true;
+    updateUndoButtonDisabled();
+  }
+  try {
+    const response = await fetch(`/api/overlays/${item.id}`, {
+      method: "DELETE", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    if (response.status === 401) {
+      window.location.assign("/auth/login?next=%2Fstudio");
+      return;
+    }
+    if (response.status === 409) {
+      renderOverlayManager("lastOverlay");
+      return;
+    }
+    if (!response.ok) {
+      renderOverlayManager("overlayDeleteFailed");
+      return;
+    }
+    ownedOverlays = ownedOverlays.filter((entry) => entry.id !== item.id);
+    if (overlay?.id === item.id) {
+      await selectOverlay(ownedOverlays[0]!);
+      return;
+    }
+    renderOverlayManager("overlayDeleted");
+  } catch {
+    if (dialog.open) renderOverlayManager("overlayDeleteFailed");
+    else showToast("overlayDeleteFailed", true);
+  } finally {
+    if (deletingActive) {
+      activeDeleteInFlight = false;
+      controlsRoot.inert = false;
+      updateUndoButtonDisabled();
+    }
+  }
+}
+
+async function openMyLooksDialog(opener: HTMLElement): Promise<void> {
+  dialogTitle.textContent = translate(language, "myLooks");
+  dialogBody.replaceChildren();
+  const loading = document.createElement("p");
+  loading.textContent = translate(language, "loading");
+  dialogBody.appendChild(loading);
   showDialogElement(opener);
+  try {
+    const response = await fetch("/api/looks/mine", { credentials: "same-origin", cache: "no-store" });
+    if (response.status === 401) {
+      window.location.assign("/auth/login?next=%2Fstudio");
+      return;
+    }
+    if (!response.ok) throw new Error("my-looks");
+    const result = await response.json() as { looks?: OwnedLook[] };
+    renderMyLooks(result.looks ?? []);
+  } catch {
+    dialogBody.replaceChildren();
+    const error = document.createElement("p");
+    error.className = "manage-status";
+    error.textContent = translate(language, "lookWithdrawFailed");
+    dialogBody.appendChild(error);
+  }
+}
+
+function renderMyLooks(looks: OwnedLook[], noticeKey?: TranslationKey): void {
+  dialogBody.replaceChildren();
+  const notice = document.createElement("p");
+  notice.className = "manage-status";
+  if (noticeKey) notice.textContent = translate(language, noticeKey);
+  dialogBody.appendChild(notice);
+  if (looks.length === 0) {
+    const empty = document.createElement("p");
+    empty.textContent = translate(language, "noMyLooks");
+    dialogBody.appendChild(empty);
+    return;
+  }
+  const list = document.createElement("div");
+  list.className = "manage-list";
+  list.setAttribute("role", "list");
+  for (const look of looks) {
+    const row = document.createElement("div");
+    row.className = "manage-row";
+    row.setAttribute("role", "listitem");
+    const description = document.createElement("span");
+    description.className = "manage-row-name";
+    description.textContent = look.name;
+    const meta = document.createElement("span");
+    meta.className = "manage-row-meta";
+    meta.textContent = look.parent?.removed ? translate(language, "basedOnRemoved")
+      : look.parent?.name ? translate(language, "basedOn", { name: look.parent.name, author: look.parent.author ?? "" }) :
+        translate(language, "lookByAuthor", { author: look.author });
+    description.appendChild(meta);
+    const view = document.createElement("a");
+    view.className = "small-button";
+    view.href = `/t/${encodeURIComponent(look.slug)}`;
+    view.textContent = translate(language, look.withdrawn ? "lookWithdrawnTag" : "viewLook");
+    if (look.withdrawn) view.removeAttribute("href");
+    const actions = document.createElement("span");
+    actions.className = "manage-row-actions";
+    actions.appendChild(view);
+    if (!look.withdrawn) {
+      const withdraw = document.createElement("button");
+      withdraw.type = "button";
+      withdraw.className = "small-button";
+      withdraw.textContent = translate(language, "withdrawLook");
+      withdraw.addEventListener("click", () => void withdrawOwnedLook(look, looks));
+      actions.appendChild(withdraw);
+    }
+    row.appendChild(description);
+    row.appendChild(actions);
+    list.appendChild(row);
+  }
+  dialogBody.appendChild(list);
+}
+
+async function withdrawOwnedLook(look: OwnedLook, looks: OwnedLook[]): Promise<void> {
+  const response = await fetch(`/api/looks/${encodeURIComponent(look.slug)}/withdraw`, {
+    method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: "{}",
+  });
+  if (response.status === 401) {
+    window.location.assign("/auth/login?next=%2Fstudio");
+    return;
+  }
+  if (!response.ok) {
+    renderMyLooks(looks, "lookWithdrawFailed");
+    return;
+  }
+  renderMyLooks(looks.map((item) => item.id === look.id ? { ...item, withdrawn: true } : item), "lookWithdrawn");
 }
 
 async function selectOverlay(next: OwnedOverlay): Promise<void> {
@@ -1065,7 +1605,7 @@ async function selectOverlay(next: OwnedOverlay): Promise<void> {
     closeDialog();
     return;
   }
-  if (inFlight || saveTimer !== undefined || Object.keys(pendingPatch).length > 0) {
+  if (hasPendingSave()) {
     showToast("finishSavingBeforeSwitch", true);
     return;
   }
@@ -1081,6 +1621,8 @@ async function selectOverlay(next: OwnedOverlay): Promise<void> {
   updateClientCount();
   overlay = next;
   channel = next.channel;
+  clearUndoOffer();
+  updateActiveOverlayLabel();
   revision = 0;
   theme = DEFAULTS;
   if (testTimeout !== undefined) clearTimeout(testTimeout);
@@ -1110,18 +1652,19 @@ async function selectOverlay(next: OwnedOverlay): Promise<void> {
   }
 }
 
-function showDialog(titleKey: TranslationKey, text: string, opener: HTMLElement): void {
-  dialogTitle.textContent = translate(language, titleKey);
-  dialogBody.replaceChildren();
-  const paragraph = document.createElement("p");
-  paragraph.textContent = text;
-  dialogBody.appendChild(paragraph);
-  showDialogElement(opener);
+function hasPendingSave(): boolean {
+  return inFlight || saveTimer !== undefined || Object.keys(pendingPatch).length > 0;
+}
+
+function closeAccountMenu(): void {
+  const menu = document.querySelector<HTMLDetailsElement>("#account-menu");
+  if (menu) menu.open = false;
 }
 
 function showDialogElement(opener: HTMLElement): void {
   activeDialogOpener = opener;
   preview.inert = true;
+  closeAccountMenu();
   dialog.showModal();
   $("#dialog-close").focus();
 }

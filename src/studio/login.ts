@@ -13,10 +13,8 @@ if (params.has("error") && errorLine) errorLine.textContent = translate(language
 const form = document.querySelector<HTMLFormElement>("#login-form");
 const loginButton = document.querySelector<HTMLButtonElement>("#login-button");
 if (form && loginButton) {
-  const next = params.get("next");
-  const loginUrl = new URL("/auth/login", window.location.origin);
-  if (next) loginUrl.searchParams.set("next", next);
-  form.action = loginUrl.toString();
+  const next = document.querySelector<HTMLInputElement>("#login-next");
+  if (next) next.value = params.get("next") ?? "";
   form.addEventListener("submit", () => {
     loginButton.disabled = true;
     loginButton.textContent = translate(language, "loginOpening");

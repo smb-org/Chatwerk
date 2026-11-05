@@ -231,6 +231,17 @@ export function getShareableThemeKeys(): ThemeFieldName[] {
   return (Object.keys(THEME_FIELDS) as ThemeFieldName[]).filter((key) => !PRIVATE_THEME_FIELDS.has(key));
 }
 
+/** Validate a look while retaining only values that can be shared with another overlay. */
+export function validateShareableTheme(input: unknown): Partial<ThemeConfig> {
+  if (!isRecord(input)) throw new ThemeValidationError("theme", "expected an object");
+  const values: Record<string, unknown> = Object.fromEntries(
+    getShareableThemeKeys().filter((key) => key in input).map((key) => [key, input[key]]),
+  );
+  if ("schemaVersion" in input) values.schemaVersion = input.schemaVersion;
+  const validated = validateTheme(values);
+  return Object.fromEntries(getShareableThemeKeys().map((key) => [key, validated[key]])) as Partial<ThemeConfig>;
+}
+
 export function themeRowBackground(theme: ThemeConfig): string {
   const { rgb, alpha } = colorChannels(theme.backgroundColor);
   return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${theme.backgroundOpacity * alpha})`;

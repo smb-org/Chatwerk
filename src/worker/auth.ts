@@ -191,8 +191,11 @@ async function ensureDefaultOverlay(db: D1Database, userId: string, login: strin
   await db.batch([
     db.prepare("INSERT INTO users (id, login) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET login = excluded.login")
       .bind(userId, login),
-    db.prepare("INSERT OR IGNORE INTO overlays (id, owner_id, link_token, name, channel) VALUES (?, ?, ?, 'Main', ?)")
-      .bind(overlayId, userId, token, login),
+    db.prepare(`
+      INSERT INTO overlays (id, owner_id, link_token, name, channel)
+      SELECT ?, ?, ?, 'Main', ?
+      WHERE NOT EXISTS (SELECT 1 FROM overlays WHERE owner_id = ?)
+    `).bind(overlayId, userId, token, login, userId),
     db.prepare("UPDATE overlays SET channel = ? WHERE owner_id = ? AND name = 'Main' AND channel = ''")
       .bind(login, userId),
   ]);
