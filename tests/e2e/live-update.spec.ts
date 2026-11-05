@@ -5,8 +5,9 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { mintSessionCookie } from "../worker/worker-test-helpers";
 import { TEST_SESSION_KEY } from "./test-session";
+import { seedStudioSession } from "./studio-session";
 
-const port = Number(process.env.PLAYWRIGHT_PORT ?? 17274);
+const port = Number(process.env.PLAYWRIGHT_PORT ?? 17474);
 const localOrigin = `http://127.0.0.1:${port}`;
 
 function seedLocalOverlay(ownerId: string, login: string, overlayId: string, token: string): void {
@@ -120,4 +121,93 @@ test("sandbox overlay receives an owner config update and acknowledged test line
 
   await contextA.close();
   await contextB.close();
+});
+
+test("a real Studio slider drag updates a second overlay page within one second without navigation", async ({ page }) => {
+  const { token } = await seedStudioSession(page);
+  await page.goto("/studio");
+  const overlay = await page.context().newPage();
+  overlay.routeWebSocket("wss://irc-ws.chat.twitch.tv/**", (socket) => {
+    socket.onMessage((message) => {
+      if (String(message).includes("JOIN #")) socket.send(":tmi.twitch.tv ROOMSTATE #sample");
+    });
+  });
+  await overlay.goto(`/overlay#token=${token}&client=obs`);
+  await expect.poll(() => overlay.locator("#chat").evaluate((root) =>
+    getComputedStyle(root).getPropertyValue("--t-font-size").trim()), { timeout: 5_000 }).toBe("18px");
+  const studioUrl = page.url();
+  const overlayUrl = overlay.url();
+  const slider = page.locator("#theme-fontSize");
+  const bounds = await slider.boundingBox();
+  expect(bounds).not.toBeNull();
+  const startX = bounds!.x + bounds!.width * 0.08;
+  const endX = bounds!.x + bounds!.width * 0.5;
+  const centerY = bounds!.y + bounds!.height / 2;
+  await page.mouse.move(startX, centerY);
+  await page.mouse.down();
+  await page.mouse.move(endX, centerY, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(() => overlay.locator("#chat").evaluate((root) =>
+    getComputedStyle(root).getPropertyValue("--t-font-size").trim()), { timeout: 1_000 }).toBe("43px");
+  expect(page.url()).toBe(studioUrl);
+  expect(overlay.url()).toBe(overlayUrl);
+  await overlay.close();
+});
+
+test("only the tokenless Studio preview accepts parent messages", async ({ page }) => {
+  const { token } = await seedStudioSession(page);
+  const ircConnections: string[] = [];
+  await page.routeWebSocket("wss://irc-ws.chat.twitch.tv/**", (socket) => {
+    ircConnections.push(socket.url());
+  });
+  await page.goto("/studio");
+  await expect(page.locator("#status-visible")).toHaveText("Saved, rev 0");
+
+  await page.evaluate((linkToken) => {
+    for (const client of ["widget", "studio"]) {
+      const frame = document.createElement("iframe");
+      frame.id = `hostile-${client}`;
+      frame.setAttribute("sandbox", "allow-scripts");
+      frame.src = `/overlay#token=${linkToken}&client=${client}`;
+      document.body.appendChild(frame);
+    }
+  }, token);
+
+  const widget = page.frameLocator("#hostile-widget").locator("#chat");
+  const tokenedStudio = page.frameLocator("#hostile-studio").locator("#chat");
+  await expect(widget).toBeVisible();
+  await expect(tokenedStudio).toBeVisible();
+  await expect.poll(() => widget.evaluate((root) => getComputedStyle(root).getPropertyValue("--t-font-size").trim()))
+    .toBe("18px");
+  await expect.poll(() => tokenedStudio.evaluate((root) => getComputedStyle(root).getPropertyValue("--t-font-size").trim()))
+    .toBe("18px");
+  await expect.poll(() => ircConnections.length).toBe(2);
+  const expectedIrcConnections = ircConnections.length;
+
+  const preview = page.frameLocator("#studio-preview").locator("#chat");
+  await page.evaluate(() => {
+    document.querySelector<HTMLIFrameElement>("#studio-preview")?.contentWindow?.postMessage({
+      type: "chatwerk:studio-theme", theme: { fontSize: 34 },
+    }, "*");
+  });
+  await expect.poll(() => preview.evaluate((root) => getComputedStyle(root).getPropertyValue("--t-font-size").trim()))
+    .toBe("34px");
+
+  await page.evaluate(() => {
+    const hostileMessages = [
+      { type: "chatwerk:studio-theme", theme: { fontSize: 58 } },
+      { type: "chatwerk:studio-scenario", scenario: "flood" },
+      { type: "chatwerk:studio-live", enabled: true, channel: "hostile_channel" },
+    ];
+    for (const frameId of ["hostile-widget", "hostile-studio"]) {
+      const child = document.getElementById(frameId) as HTMLIFrameElement | null;
+      for (const message of hostileMessages) child?.contentWindow?.postMessage(message, "*");
+    }
+  });
+
+  await expect.poll(() => widget.evaluate((root) => getComputedStyle(root).getPropertyValue("--t-font-size").trim()))
+    .toBe("18px");
+  await expect.poll(() => tokenedStudio.evaluate((root) => getComputedStyle(root).getPropertyValue("--t-font-size").trim()))
+    .toBe("18px");
+  expect(ircConnections).toHaveLength(expectedIrcConnections);
 });

@@ -5,6 +5,9 @@ import { publicOriginFor, renderHeaders } from "../../../scripts/lib/headers.mjs
 import { ALLOWED_CONNECT_ORIGINS, ALLOWED_IMAGE_HOSTS } from "../../../src/shared/hosts";
 
 const source = readFileSync(path.join(process.cwd(), "public/_headers"), "utf8");
+const wrangler = JSON.parse(readFileSync(path.join(process.cwd(), "wrangler.jsonc"), "utf8")) as {
+  assets: { run_worker_first: string[] };
+};
 
 const parseRules = (contents: string): Map<string, string[]> => {
   const rules = new Map<string, string[]>();
@@ -39,12 +42,13 @@ const headerValues = (headers: string[], name: string): string[] => headers.flat
 describe("deployment headers", () => {
   it("unions every matching rule like Cloudflare and keeps overlay headers unique", () => {
     expect(rulesMatchingPath("/overlay")).toEqual(["/overlay"]);
+    expect(rulesMatchingPath("/overlay.html")).toEqual(["/overlay.html"]);
     expect(rulesMatchingPath("/overlay/x")).toEqual(["/overlay/*"]);
     expect(rulesMatchingPath("/studio")).toEqual(["/studio*"]);
     expect(rulesMatchingPath("/login")).toEqual(["/login*"]);
     expect(rulesMatchingPath("/assets/a.js")).toEqual(["/assets/*"]);
 
-    for (const path of ["/overlay", "/overlay/x"]) {
+    for (const path of ["/overlay", "/overlay.html", "/overlay/x"]) {
       const headers = headersForPath(path);
       const policies = headerValues(headers, "Content-Security-Policy");
       expect(policies).toHaveLength(1);
@@ -59,12 +63,23 @@ describe("deployment headers", () => {
   });
 
   it("keeps framing protection on protected HTML routes after matching-rule union", () => {
-    for (const path of ["/login", "/studio"]) {
+    for (const path of ["/login", "/login.html", "/studio", "/studio.html"]) {
       const headers = headersForPath(path);
       expect(headerValues(headers, "X-Frame-Options")).toEqual(["SAMEORIGIN"]);
       expect(headerValues(headers, "Content-Security-Policy").join("\n")).toContain("frame-ancestors __PUBLIC_ORIGIN__");
     }
-    for (const path of ["/login", "/studio"]) {
+    expect(headerValues(headersForPath("/studio/export"), "X-Frame-Options")).toEqual(["SAMEORIGIN"]);
+    for (const path of ["/studio/export", "/studio/export.html", "/export.html"]) {
+      const headers = headersForPath(path);
+      expect(headerValues(headers, "X-Frame-Options"), path).toEqual(["SAMEORIGIN"]);
+      expect(headerValues(headers, "Content-Security-Policy").join("\n"), path)
+        .toContain("frame-ancestors __PUBLIC_ORIGIN__");
+      expect(headerValues(headers, "Cache-Control"), path).toEqual(["no-cache"]);
+    }
+    expect(wrangler.assets.run_worker_first).toContain("/export*");
+    expect(headerValues(headersForPath("/studio"), "Content-Security-Policy").join("\n"))
+      .toContain("frame-src __PUBLIC_ORIGIN__");
+    for (const path of ["/login", "/login.html", "/studio", "/studio.html"]) {
       expect(headerValues(headersForPath(path), "Content-Security-Policy")).toHaveLength(1);
     }
     const assetHeaders = headersForPath("/assets/a.js");
@@ -82,7 +97,7 @@ describe("deployment headers", () => {
         expect(csp, `rule ${rule}`).toContain("__PUBLIC_ORIGIN__");
       }
     }
-    for (const rule of ["/overlay", "/overlay/*"]) {
+    for (const rule of ["/overlay", "/overlay.html", "/overlay/*"]) {
       expect(rules.get(rule)?.join("\n")).toContain("wss://irc-ws.chat.twitch.tv");
       expect(rules.get(rule)?.join("\n")).toContain("__PUBLIC_WSS__");
     }
@@ -93,7 +108,7 @@ describe("deployment headers", () => {
       connectOrigins: ALLOWED_CONNECT_ORIGINS,
       imageHosts: ALLOWED_IMAGE_HOSTS,
     }));
-    for (const rule of ["/overlay", "/overlay/*"]) {
+    for (const rule of ["/overlay", "/overlay.html", "/overlay/*"]) {
       const policy = builtRules.get(rule)?.find((line) => line.startsWith("Content-Security-Policy:")) ?? "";
       const connect = policy.split("connect-src ")[1]?.split(";")[0] ?? "";
       const images = policy.split("img-src ")[1]?.split(";")[0] ?? "";
@@ -112,7 +127,7 @@ describe("deployment headers", () => {
     for (const rule of ["/assets/*", "/fonts/*"]) {
       expect(rules.get(rule)).toContain("Access-Control-Allow-Origin: *");
     }
-    for (const path of ["/", "/login", "/studio", "/overlay", "/overlay/x"]) {
+    for (const path of ["/", "/login", "/studio", "/export.html", "/overlay", "/overlay/x"]) {
       expect(headersForPath(path).join("\n")).not.toContain("Access-Control-Allow-Origin");
     }
   });
@@ -145,9 +160,21 @@ describe("deployment headers", () => {
   it("allows the local overlay socket from an opaque-origin iframe", () => {
     const rendered = renderHeaders(source, publicOriginFor("local", undefined));
     const overlayRules = rendered.split("/overlay\n")[1]?.split("\n/overlay/*")[0] ?? "";
+    const builtRules = parseRules(rendered);
+    const studioPolicy = builtRules.get("/studio*")?.find((line) => line.startsWith("Content-Security-Policy:")) ?? "";
 
     expect(overlayRules).toContain("ws://localhost:*");
     expect(overlayRules).toContain("ws://127.0.0.1:*");
     expect(overlayRules).not.toContain("frame-ancestors");
+    expect(studioPolicy).toContain("frame-src http://localhost:* http://127.0.0.1:*");
+    expect([...builtRules.keys()]).not.toContain("/*");
+  });
+
+  it("uses the configured production origin in Studio's local overlay frame policy", () => {
+    const rendered = renderHeaders(source, publicOriginFor("production", "https://chat.example.com"));
+    const studioPolicy = parseRules(rendered).get("/studio*")?.find((line) => line.startsWith("Content-Security-Policy:")) ?? "";
+
+    expect(studioPolicy).toContain("frame-src https://chat.example.com;");
+    expect(studioPolicy).not.toContain("127.0.0.1");
   });
 });

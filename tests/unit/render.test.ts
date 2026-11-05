@@ -193,6 +193,23 @@ describe("text renderer", () => {
     emotes.dispose();
   });
 
+  it("clears rehearsal messages without disposing the shared emote pipeline", () => {
+    const emotes = createEmoteLookup({ providers: [] });
+    emotes.add([{ name: "Kappa", url: "https://cdn.7tv.app/emote/kappa/2x.webp", provider: "test" }]);
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, emotes, scheduler: (callback) => callback() });
+    const message = () => parseIrcLine(":viewer!viewer@host PRIVMSG #room :Kappa")!;
+
+    renderer.handle(message());
+    expect(root.querySelector("img.chat-emote")?.getAttribute("alt")).toBe("Kappa");
+    renderer.clear();
+    expect(root.children).toHaveLength(0);
+    renderer.handle(message());
+    expect(root.querySelector("img.chat-emote")?.getAttribute("alt")).toBe("Kappa");
+
+    renderer.dispose();
+    emotes.dispose();
+  });
+
   it("renders adjacent zero-width emotes as absolute overlays on their base emote", () => {
     const emotes = createEmoteLookup({ providers: [] });
     emotes.add([

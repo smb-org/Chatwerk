@@ -1,6 +1,7 @@
 import { handleApiRequest } from "./api";
 import { handleAuthRequest } from "./auth";
 import { handleBadgeRequest, type BadgeEnvironment } from "./badges";
+import { handlePageRequest } from "./pages";
 
 export { OverlayObject } from "./overlay-object";
 
@@ -12,6 +13,8 @@ const worker = {
     if (badgeResponse) return badgeResponse;
     const apiResponse = await handleApiRequest(request, env);
     if (apiResponse) return apiResponse;
+    const pageResponse = await handlePageRequest(request, env);
+    if (pageResponse) return pageResponse;
 
     const url = new URL(request.url);
     switch (`${request.method} ${url.pathname}`) {

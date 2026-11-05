@@ -90,7 +90,7 @@ describe("Twitch login and session cookie", () => {
     expect(response?.headers.get("set-cookie")).not.toContain("Secure");
   });
 
-  it("rejects a callback without the matching nonce cookie before exchanging the code", async () => {
+  it("returns to login with the fixed error state when the callback nonce is invalid", async () => {
     const fetcher = vi.fn<typeof fetch>();
     const response = await handleAuthRequest(
       new Request("https://chatwerk.test/auth/callback?code=auth-code&state=invalid.invalid"),
@@ -98,7 +98,8 @@ describe("Twitch login and session cookie", () => {
       fetcher,
     );
 
-    expect(response?.status).toBe(400);
+    expect(response?.status).toBe(302);
+    expect(response?.headers.get("location")).toBe("https://chatwerk.test/login?error=1");
     expect(fetcher).not.toHaveBeenCalled();
   });
 

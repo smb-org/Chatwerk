@@ -1,4 +1,6 @@
 export const SCHEMA_VERSION = 1;
+export const LEGIBILITY_MINIMUM_RATIO = 4.5;
+export const LEGIBILITY_OUTLINE_OPACITY_THRESHOLD = 0.35;
 
 export const THEME_UI_GROUPS = [
   "Text",
@@ -209,7 +211,7 @@ export function ensureTagColorContrast(color: string, theme: ThemeConfig): strin
 }
 
 export function effectiveOutline(theme: ThemeConfig): { width: number; color: string } {
-  const forced = theme.backgroundOpacity * colorChannels(theme.backgroundColor).alpha < 0.35;
+  const forced = theme.backgroundOpacity * colorChannels(theme.backgroundColor).alpha < LEGIBILITY_OUTLINE_OPACITY_THRESHOLD;
   return {
     width: forced ? Math.max(1, theme.outline) : theme.outline,
     color: counterpartColor(theme.textColor),
@@ -229,7 +231,7 @@ export function estimateTextLegibility(
   textColor: string,
   backgroundColor: string,
   backgroundOpacity: number,
-  minimumRatio = 4.5,
+  minimumRatio = LEGIBILITY_MINIMUM_RATIO,
 ): TextLegibilityEstimate {
   if (!isValidColor(textColor) || !isValidColor(backgroundColor) || !numberIn(0, 1)(backgroundOpacity)) {
     throw new ThemeValidationError("legibility", "invalid color or opacity");

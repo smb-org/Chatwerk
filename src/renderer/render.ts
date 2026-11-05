@@ -46,6 +46,7 @@ interface RenderedLine {
 export interface ChatRenderer {
   handle(event: IrcEvent): void;
   setTheme(theme: ThemeConfig): void;
+  clear(): void;
   dispose(): void;
 }
 
@@ -206,6 +207,17 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     }, lifetime);
   };
 
+  const clear = (): void => {
+    if (scheduled && scheduleHandle !== undefined) cancel(scheduleHandle);
+    scheduled = false;
+    scheduleHandle = undefined;
+    pending = [];
+    for (const line of [...lines]) removeLine(line);
+    root.replaceChildren();
+    linesById.clear();
+    linesBySourceId.clear();
+  };
+
   applyTheme();
   return {
     handle,
@@ -213,14 +225,9 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       theme = nextTheme;
       applyTheme();
     },
+    clear,
     dispose() {
-      if (scheduled && scheduleHandle !== undefined) cancel(scheduleHandle);
-      scheduled = false;
-      pending = [];
-      for (const line of [...lines]) removeLine(line);
-      root.replaceChildren();
-      linesById.clear();
-      linesBySourceId.clear();
+      clear();
       unsubscribePaints?.();
       options.emotes?.dispose();
       options.badges?.dispose();

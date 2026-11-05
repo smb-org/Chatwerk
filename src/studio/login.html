@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#17181B" />
+    <title>Chatwerk</title>
+  </head>
+  <body>
+    <main class="login-shell">
+      <section class="login-content" aria-labelledby="login-heading">
+        <p class="login-wordmark" data-i18n="brand">Chatwerk</p>
+        <h1 class="login-title" id="login-heading" data-i18n="brand">Chatwerk</h1>
+        <p class="login-copy" id="login-product" data-i18n="loginProduct"></p>
+        <p class="login-copy" id="login-storage" data-i18n="loginStorage"></p>
+        <p class="login-error" id="login-error" role="alert" aria-live="assertive"></p>
+        <form id="login-form" method="get" action="/auth/login">
+          <button class="button button-primary" id="login-button" type="submit" data-i18n="loginButton"></button>
+        </form>
+      </section>
+    </main>
+    <script type="module" src="./login.ts"></script>
+  </body>
+</html>

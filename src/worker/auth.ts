@@ -70,6 +70,10 @@ export async function verifySessionCookie(
   return valid ? { userId: userId!, expiresAt } : null;
 }
 
+export async function sessionForRequest(request: Request, sessionKey: string | undefined): Promise<VerifiedSession | null> {
+  return verifySessionCookie(readCookie(request.headers.get("cookie"), SESSION_COOKIE), sessionKey);
+}
+
 export function isSameOriginMutation(request: Request): boolean {
   const origin = request.headers.get("origin");
   if (!origin) return false;
@@ -121,7 +125,7 @@ async function completeOAuth(request: Request, env: AuthEnvironment, fetcher: ty
   const state = url.searchParams.get("state");
   const nonce = readCookie(request.headers.get("cookie"), NONCE_COOKIE);
   const verifiedState = state ? await verifyOAuthState(state, nonce, env.SESSION_KEY!) : null;
-  if (!code || !verifiedState) return Response.json({ error: "Invalid OAuth callback" }, { status: 400 });
+  if (!code || !verifiedState) return loginErrorRedirect(url.origin);
 
   let identity: { id: string; login: string };
   try {
@@ -136,30 +140,30 @@ async function completeOAuth(request: Request, env: AuthEnvironment, fetcher: ty
         redirect_uri: new URL("/auth/callback", url.origin).toString(),
       }),
     });
-    if (!tokenResponse.ok) return Response.json({ error: "Twitch login failed" }, { status: 502 });
+    if (!tokenResponse.ok) return loginErrorRedirect(url.origin);
     const token = await tokenResponse.json() as { access_token?: unknown };
     if (typeof token.access_token !== "string" || !token.access_token) {
-      return Response.json({ error: "Twitch login failed" }, { status: 502 });
+      return loginErrorRedirect(url.origin);
     }
     const userResponse = await fetcher(USERS_URL, {
       headers: { Authorization: `Bearer ${token.access_token}`, "Client-Id": env.TWITCH_CLIENT_ID! },
     });
-    if (!userResponse.ok) return Response.json({ error: "Twitch identity lookup failed" }, { status: 502 });
+    if (!userResponse.ok) return loginErrorRedirect(url.origin);
     const userPayload = await userResponse.json() as { data?: unknown };
     const user = Array.isArray(userPayload.data) ? userPayload.data[0] as Record<string, unknown> | undefined : undefined;
     if (!user || typeof user.id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(user.id) ||
       typeof user.login !== "string" || !/^[A-Za-z0-9_]{1,25}$/u.test(user.login)) {
-      return Response.json({ error: "Twitch identity lookup failed" }, { status: 502 });
+      return loginErrorRedirect(url.origin);
     }
     identity = { id: user.id, login: user.login.toLowerCase() };
   } catch {
-    return Response.json({ error: "Twitch login is unavailable" }, { status: 502 });
+    return loginErrorRedirect(url.origin);
   }
 
   try {
     await ensureDefaultOverlay(env.DB, identity.id, identity.login);
   } catch {
-    return Response.json({ error: "Could not create your overlay" }, { status: 500 });
+    return loginErrorRedirect(url.origin);
   }
 
   const expiresAt = Math.floor(Date.now() / 1000) + SESSION_SECONDS;
@@ -172,6 +176,13 @@ async function completeOAuth(request: Request, env: AuthEnvironment, fetcher: ty
   headers.append("Set-Cookie", sessionCookie(sessionValue, request.url, SESSION_SECONDS));
   headers.append("Set-Cookie", nonceCookie("", request.url, 0));
   return new Response(null, { status: 302, headers });
+}
+
+function loginErrorRedirect(origin: string): Response {
+  return new Response(null, {
+    status: 302,
+    headers: { Location: new URL("/login?error=1", origin).toString(), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" },
+  });
 }
 
 async function ensureDefaultOverlay(db: D1Database, userId: string, login: string): Promise<void> {
