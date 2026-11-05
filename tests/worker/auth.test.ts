@@ -67,20 +67,21 @@ describe("Twitch login and session cookie", () => {
     );
     const authorizeUrl = new URL(response!.headers.get("location")!);
     const state = authorizeUrl.searchParams.get("state")!;
-    const [payload, signature] = state.split(".");
+    const [nonce, signature] = state.split(".");
+    const [cookieNonce, rawExpiresAt, expiresSignature] = getCookie(response!, "oauth_nonce").split(".");
 
     expect(response?.status).toBe(302);
     expect(authorizeUrl.origin + authorizeUrl.pathname).toBe("https://id.twitch.tv/oauth2/authorize");
     expect(authorizeUrl.searchParams.get("scope")).toBe("");
     expect(authorizeUrl.searchParams.get("client_id")).toBe(clientId);
+    expect(nonce).toMatch(/^[A-Za-z0-9_-]{40,}$/u);
     expect(signature).toMatch(/^[A-Za-z0-9_-]+$/u);
-    expect(JSON.parse(atob(payload!.replace(/-/gu, "+").replace(/_/gu, "/")))).toMatchObject({
-      nonce: expect.any(String),
-      expiresAt: expect.any(Number),
-    });
+    expect(cookieNonce).toBe(nonce);
+    expect(Number(rawExpiresAt)).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    expect(expiresSignature).toMatch(/^[A-Za-z0-9_-]+$/u);
     expect(authorizeUrl.searchParams.has("next")).toBe(false);
     expect(authorizeUrl.href).not.toContain("tab=look");
-    expect(getCookie(response!, "oauth_nonce")).toMatch(/^[A-Za-z0-9_-]{40,}$/u);
+    expect(getCookie(response!, "oauth_nonce")).toMatch(/^[A-Za-z0-9_-]{40,}\.[0-9]+\.[A-Za-z0-9_-]+$/u);
     expect(decodeCookieValue(getCookie(response!, "oauth_next"))).toBe("/studio?tab=look");
     expect(response?.headers.get("set-cookie")).toContain("HttpOnly");
     expect(response?.headers.get("set-cookie")).toContain("SameSite=Lax");
@@ -165,6 +166,24 @@ describe("Twitch login and session cookie", () => {
     } finally {
       clock.mockRestore();
     }
+  });
+
+  it("rejects a modified expiry suffix on the nonce cookie", async () => {
+    const loginResponse = await handleAuthRequest(new Request("https://chatwerk.test/auth/login?next=%2Fstudio"), authEnv());
+    const authorizeUrl = new URL(loginResponse!.headers.get("location")!);
+    const [nonce, expiry, signature] = getCookie(loginResponse!, "oauth_nonce").split(".");
+    const tamperedCookie = `${nonce}.${Number(expiry) + 86_400}.${signature}`;
+    const fetcher = vi.fn<typeof fetch>();
+    const response = await handleAuthRequest(
+      new Request(`https://chatwerk.test/auth/callback?code=auth-code&state=${encodeURIComponent(authorizeUrl.searchParams.get("state")!)}`, {
+        headers: { cookie: `oauth_nonce=${tamperedCookie}` },
+      }),
+      authEnv(),
+      fetcher,
+    );
+
+    expect(response?.headers.get("location")).toBe("https://chatwerk.test/login?error=1");
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   it("exchanges identity and issues a signed stateless session cookie", async () => {

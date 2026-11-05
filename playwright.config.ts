@@ -10,7 +10,12 @@ export default defineConfig({
     ignoreHTTPSErrors: true,
     launchOptions: {
       // The generated opaque sandbox frame needs to connect to Wrangler's loopback HTTPS origin.
-      args: ["--ignore-certificate-errors", "--disable-features=LocalNetworkAccessChecks"],
+      args: [
+        "--ignore-certificate-errors",
+        "--disable-features=LocalNetworkAccessChecks",
+        // Any unmocked Twitch IRC connection resolves to loopback and cannot reach Twitch.
+        "--host-resolver-rules=MAP irc-ws.chat.twitch.tv 127.0.0.1",
+      ],
     },
   },
   webServer: {

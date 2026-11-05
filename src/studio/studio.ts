@@ -166,6 +166,7 @@ let publishLimitReached = false;
 let currentPlatform = "obs";
 let lastAnnouncedCount: number | undefined;
 let overlaySelectionVersion = 0;
+let hypeConsentRequest = 0;
 
 applyPageLanguage();
 renderThemeControls();
@@ -228,6 +229,7 @@ async function initialize(): Promise<void> {
     setStatus("savedRevision", { revision });
     setupFirstRun();
     processStudioQuery();
+    void refreshHypeTrainConsent();
     updateTestButton();
     updateHeaderResponsive();
   } catch {
@@ -395,6 +397,7 @@ function renderThemeControls(): void {
     controlsRoot.appendChild(groupRoot);
   }
   syncControlAvailability();
+  void refreshHypeTrainConsent();
 }
 
 function makeThemeControl(name: ThemeFieldName, definition: ThemeFieldDefinition): HTMLElement {
@@ -541,6 +544,7 @@ function makeThemeControl(name: ThemeFieldName, definition: ThemeFieldDefinition
       hint.textContent = translate(language, "backlogStackOnlyHint");
       control.appendChild(hint);
     }
+    if (name === "reactionHypeTrain") appendHypeTrainConsent(control);
     return control;
   }
 
@@ -575,6 +579,130 @@ function makeThemeControl(name: ThemeFieldName, definition: ThemeFieldDefinition
   radios.appendChild(row);
   control.appendChild(radios);
   return control;
+}
+
+function appendHypeTrainConsent(control: HTMLElement): void {
+  const box = document.createElement("div");
+  box.className = "hype-consent";
+  box.id = "hype-train-consent";
+  box.dataset.state = "loading";
+  const status = document.createElement("p");
+  status.className = "hype-consent-status";
+  status.setAttribute("role", "status");
+  status.textContent = translate(language, "hypeTrainLoading");
+  const copy = document.createElement("p");
+  copy.className = "hype-consent-copy";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "small-button hype-consent-action";
+  button.hidden = true;
+  box.appendChild(status);
+  box.appendChild(copy);
+  box.appendChild(button);
+  control.appendChild(box);
+}
+
+function translateHypeTrainConsent(): void {
+  const box = document.querySelector<HTMLElement>("#hype-train-consent");
+  const status = box?.querySelector<HTMLElement>(".hype-consent-status");
+  const copy = box?.querySelector<HTMLElement>(".hype-consent-copy");
+  const button = box?.querySelector<HTMLButtonElement>(".hype-consent-action");
+  if (!box || !status || !copy || !button) return;
+  copy.textContent = "";
+  button.hidden = true;
+  if (box.dataset.state === "connected") {
+    status.textContent = translate(language, "hypeTrainConnected");
+    button.hidden = false;
+    button.textContent = translate(language, "hypeTrainDisconnect");
+    if (overlay) button.onclick = () => void disconnectHypeTrain(overlay!.id, button);
+  } else if (box.dataset.state === "disconnected") {
+    status.textContent = translate(language, "hypeTrainNotConnected");
+    copy.textContent = translate(language, "hypeTrainPermissionExplanation");
+    button.hidden = false;
+    button.textContent = translate(language, "hypeTrainConnect");
+    if (overlay) button.onclick = () => window.location.assign(`/auth/hype-train?overlayId=${encodeURIComponent(overlay!.id)}`);
+  } else if (box.dataset.state === "helper") {
+    status.textContent = translate(language, "hypeTrainHelper");
+  } else if (box.dataset.state === "loading") {
+    status.textContent = translate(language, "hypeTrainLoading");
+  } else {
+    status.textContent = translate(language, "hypeTrainStatusUnavailable");
+  }
+}
+
+async function refreshHypeTrainConsent(): Promise<void> {
+  const box = document.querySelector<HTMLElement>("#hype-train-consent");
+  if (!box) return;
+  const status = box.querySelector<HTMLElement>(".hype-consent-status");
+  const copy = box.querySelector<HTMLElement>(".hype-consent-copy");
+  const button = box.querySelector<HTMLButtonElement>(".hype-consent-action");
+  if (!status || !copy || !button) return;
+  const requestId = ++hypeConsentRequest;
+  const selectedOverlay = overlay;
+  const selectionVersion = overlaySelectionVersion;
+  if (!selectedOverlay) {
+    status.textContent = translate(language, "hypeTrainStatusUnavailable");
+    copy.textContent = "";
+    button.hidden = true;
+    return;
+  }
+  status.textContent = translate(language, "hypeTrainLoading");
+  copy.textContent = "";
+  button.hidden = true;
+  try {
+    const response = await fetch(`/api/hype-train?overlayId=${encodeURIComponent(selectedOverlay.id)}`, {
+      credentials: "same-origin", cache: "no-store",
+    });
+    if (requestId !== hypeConsentRequest || overlay?.id !== selectedOverlay.id || selectionVersion !== overlaySelectionVersion) return;
+    if (!response.ok) throw new Error("hype-status");
+    const result = await response.json() as { role?: unknown; connected?: unknown };
+    if (result.role === "editor") {
+      box.dataset.state = "helper";
+      status.textContent = translate(language, "hypeTrainHelper");
+      copy.textContent = "";
+      button.hidden = true;
+      return;
+    }
+    if (result.role !== "owner" || typeof result.connected !== "boolean") throw new Error("hype-status");
+    if (result.connected) {
+      box.dataset.state = "connected";
+      status.textContent = translate(language, "hypeTrainConnected");
+      copy.textContent = "";
+      button.hidden = false;
+      button.textContent = translate(language, "hypeTrainDisconnect");
+      button.onclick = () => void disconnectHypeTrain(selectedOverlay.id, button);
+    } else {
+      box.dataset.state = "disconnected";
+      status.textContent = translate(language, "hypeTrainNotConnected");
+      copy.textContent = translate(language, "hypeTrainPermissionExplanation");
+      button.hidden = false;
+      button.textContent = translate(language, "hypeTrainConnect");
+      button.onclick = () => window.location.assign(`/auth/hype-train?overlayId=${encodeURIComponent(selectedOverlay.id)}`);
+    }
+  } catch {
+    if (requestId !== hypeConsentRequest || overlay?.id !== selectedOverlay.id) return;
+    box.dataset.state = "unavailable";
+    status.textContent = translate(language, "hypeTrainStatusUnavailable");
+    copy.textContent = "";
+    button.hidden = true;
+  }
+}
+
+async function disconnectHypeTrain(overlayId: string, button: HTMLButtonElement): Promise<void> {
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/hype-train/disconnect", {
+      method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ overlayId }),
+    });
+    if (!response.ok) throw new Error("hype-disconnect");
+    await refreshHypeTrainConsent();
+    showToast("hypeTrainDisconnected", false);
+  } catch {
+    showToast("hypeTrainDisconnectFailed", true);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function makeListEditor(name: ThemeFieldName, labelText: string): HTMLElement {
@@ -1096,6 +1224,7 @@ function applyPageLanguage(): void {
   updateActiveOverlayLabel();
   updateChannelHeader();
   updatePreviewModeUi();
+  translateHypeTrainConsent();
   if (initializationRetrying) {
     setStatus("couldNotLoadRetrying");
     errorArea.textContent = translate(language, "couldNotLoadRetrying");
@@ -1289,6 +1418,14 @@ function wireStaticControls(): void {
   document.querySelectorAll<HTMLButtonElement>(".scenario-button").forEach((button) => {
     button.addEventListener("click", () => {
       if (livePreviewEnabled || document.querySelector<HTMLInputElement>("#live-chat")?.checked) return;
+      if (button.id === "rehearse-hype-train") {
+        document.querySelectorAll<HTMLButtonElement>(".scenario-button").forEach((item) => {
+          item.setAttribute("aria-pressed", String(item === button));
+        });
+        try { postPreviewMessage({ type: "chatwerk:studio-hype-train-scenario" }); }
+        catch { showToast("scenarioFailed", true); }
+        return;
+      }
       const scenario = button.dataset.scenario ?? (button.id === "rehearse-flood" ? "flood"
         : button.id === "rehearse-raid" ? "raid" : "quiet");
       document.querySelectorAll<HTMLButtonElement>(".scenario-button").forEach((item) => {
@@ -1428,13 +1565,21 @@ function processStudioQuery(): void {
   const expiresAt = Number(params.get("until"));
   const lookName = params.get("lookName") ?? "";
   const shouldPublish = params.get("publish") === "1";
+  const hypeTrainStatus = params.get("hypeTrain");
   if (snapshotId && /^[0-9a-f-]{36}$/iu.test(snapshotId) && Number.isSafeInteger(expectedRevision) &&
     expectedRevision === revision && Number.isSafeInteger(expiresAt) && expiresAt > Date.now()) {
     showUndoOffer(snapshotId, expectedRevision, expiresAt, lookName);
   }
-  if (["undo", "rev", "until", "look", "lookName", "overlay", "publish", "invite"].some((key) => params.has(key))) {
+  if (["undo", "rev", "until", "look", "lookName", "overlay", "publish", "invite", "hypeTrain"].some((key) => params.has(key))) {
     window.history.replaceState(window.history.state, "", window.location.pathname);
   }
+  const statusKeys: Partial<Record<string, TranslationKey>> = {
+    connected: "hypeTrainConnectSuccess", denied: "hypeTrainDenied", "scope-missing": "hypeTrainScopeMissing",
+    "user-mismatch": "hypeTrainUserMismatch", failed: "hypeTrainConnectFailed", error: "hypeTrainConnectFailed",
+    "session-expired": "hypeTrainSessionExpired",
+  };
+  const statusKey = hypeTrainStatus ? statusKeys[hypeTrainStatus] : undefined;
+  if (statusKey) showToast(statusKey, hypeTrainStatus !== "connected");
   if (shouldPublish) void openPublishDialog($("#share-look"));
   if (inviteToken !== null) openInviteDialog(inviteToken);
 }

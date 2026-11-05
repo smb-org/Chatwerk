@@ -1,27 +1,30 @@
+import {
+  createHypeTrainSubscriptions,
+  deleteHypeTrainSubscriptionsForUser,
+  deriveEventSubSecret,
+  getAppAccessToken,
+  type TwitchEventSubEnvironment,
+} from "./twitch-eventsub";
+
 const encoder = new TextEncoder();
 const SESSION_COOKIE = "session";
 const NONCE_COOKIE = "oauth_nonce";
 const NEXT_COOKIE = "oauth_next";
+const PURPOSE_COOKIE = "oauth_purpose";
 const SESSION_SECONDS = 30 * 24 * 60 * 60;
 const STATE_SECONDS = 10 * 60;
 const AUTHORIZE_URL = "https://id.twitch.tv/oauth2/authorize";
 const TOKEN_URL = "https://id.twitch.tv/oauth2/token";
 const USERS_URL = "https://api.twitch.tv/helix/users";
 
-export interface AuthEnvironment {
+export interface AuthEnvironment extends TwitchEventSubEnvironment {
   DB: D1Database;
   SESSION_KEY?: string;
-  TWITCH_CLIENT_ID?: string;
-  TWITCH_CLIENT_SECRET?: string;
+  PUBLIC_ORIGIN?: string;
 }
 
 export interface VerifiedSession {
   userId: string;
-  expiresAt: number;
-}
-
-interface OAuthState {
-  nonce: string;
   expiresAt: number;
 }
 
@@ -38,8 +41,15 @@ export async function handleAuthRequest(
     if (!hasSecrets(env)) return unavailable();
     return beginLogin(request, env);
   }
+  if (request.method === "GET" && url.pathname === "/auth/hype-train") {
+    if (!hasSecrets(env)) return unavailable();
+    return beginHypeTrainConsent(request, env);
+  }
   if (request.method === "GET" && url.pathname === "/auth/callback") {
     if (!hasSecrets(env)) return unavailable();
+    if (readCookie(request.headers.get("cookie"), PURPOSE_COOKIE) === "hype-train") {
+      return completeHypeTrainConsent(request, env, fetcher);
+    }
     return completeOAuth(request, env, fetcher);
   }
   if (request.method === "POST" && url.pathname === "/auth/logout") {
@@ -94,13 +104,10 @@ function unavailable(): Response {
 
 async function beginLogin(request: Request, env: AuthEnvironment): Promise<Response> {
   const url = new URL(request.url);
-  const stateData: OAuthState = {
-    nonce: randomToken(32),
-    expiresAt: Math.floor(Date.now() / 1000) + STATE_SECONDS,
-  };
+  const nonce = randomToken(32);
+  const expiresAt = Math.floor(Date.now() / 1000) + STATE_SECONDS;
   const next = url.searchParams.get("next") ?? "/studio";
-  const payload = base64Url(encoder.encode(JSON.stringify(stateData)));
-  const state = `${payload}.${await signHmac(payload, env.SESSION_KEY!)}`;
+  const state = `${nonce}.${await signHmac(nonce, env.SESSION_KEY!)}`;
   const authorize = new URL(AUTHORIZE_URL);
   authorize.searchParams.set("client_id", env.TWITCH_CLIENT_ID!);
   authorize.searchParams.set("redirect_uri", new URL("/auth/callback", url.origin).toString());
@@ -112,12 +119,51 @@ async function beginLogin(request: Request, env: AuthEnvironment): Promise<Respo
     "Cache-Control": "no-store",
     "Referrer-Policy": "no-referrer",
   });
-  headers.append("Set-Cookie", nonceCookie(stateData.nonce, request.url));
+  headers.append("Set-Cookie", nonceCookie(`${nonce}.${expiresAt}.${await signHmac(`${nonce}.${expiresAt}`, env.SESSION_KEY!)}`, request.url));
   headers.append("Set-Cookie", nextCookie(base64Url(encoder.encode(next)), request.url));
+  headers.append("Set-Cookie", purposeCookie("", request.url, 0));
   return new Response(null, {
     status: 302,
     headers,
   });
+}
+
+async function beginHypeTrainConsent(request: Request, env: AuthEnvironment): Promise<Response> {
+  const url = new URL(request.url);
+  const session = await sessionForRequest(request, env.SESSION_KEY);
+  const overlayId = url.searchParams.get("overlayId");
+  if (!session) {
+    const next = overlayId ? `/studio?overlay=${encodeURIComponent(overlayId)}` : "/studio";
+    return new Response(null, {
+      status: 302,
+      headers: { Location: new URL(`/login?next=${encodeURIComponent(next)}`, url.origin).toString(), "Cache-Control": "no-store" },
+    });
+  }
+
+  const ownedOverlay = overlayId
+    ? await env.DB.prepare("SELECT id FROM overlays WHERE id = ? AND owner_id = ?").bind(overlayId, session.userId).first<{ id: string }>()
+    : await env.DB.prepare("SELECT id FROM overlays WHERE owner_id = ? ORDER BY created_at, id LIMIT 1").bind(session.userId).first<{ id: string }>();
+  if (!ownedOverlay) return Response.json({ error: "owner-only" }, { status: 403 });
+
+  const next = `/studio?overlay=${encodeURIComponent(ownedOverlay.id)}`;
+  const nonce = randomToken(32);
+  const expiresAt = Math.floor(Date.now() / 1000) + STATE_SECONDS;
+  const state = `${nonce}.${await signHmac(nonce, env.SESSION_KEY!)}`;
+  const authorize = new URL(AUTHORIZE_URL);
+  authorize.searchParams.set("client_id", env.TWITCH_CLIENT_ID!);
+  authorize.searchParams.set("redirect_uri", callbackUrl(request.url, env.PUBLIC_ORIGIN));
+  authorize.searchParams.set("response_type", "code");
+  authorize.searchParams.set("scope", "channel:read:hype_train");
+  authorize.searchParams.set("state", state);
+  const headers = new Headers({
+    Location: authorize.toString(),
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+  });
+  headers.append("Set-Cookie", nonceCookie(`${nonce}.${expiresAt}.${await signHmac(`${nonce}.${expiresAt}`, env.SESSION_KEY!)}`, request.url));
+  headers.append("Set-Cookie", nextCookie(base64Url(encoder.encode(next)), request.url));
+  headers.append("Set-Cookie", purposeCookie("hype-train", request.url));
+  return new Response(null, { status: 302, headers });
 }
 
 async function completeOAuth(request: Request, env: AuthEnvironment, fetcher: typeof fetch): Promise<Response> {
@@ -126,7 +172,7 @@ async function completeOAuth(request: Request, env: AuthEnvironment, fetcher: ty
   const state = url.searchParams.get("state");
   const cookie = request.headers.get("cookie");
   const nonce = readCookie(cookie, NONCE_COOKIE);
-  const verifiedState = state ? await verifyOAuthState(state, nonce, env.SESSION_KEY!) : null;
+  const verifiedState = state ? await verifyOAuthState(state, nonce, env.SESSION_KEY!) : false;
   if (!code || !verifiedState) return loginErrorRedirect(url.origin, request.url);
   const next = safeNext(decodeNextCookie(readCookie(cookie, NEXT_COOKIE)), url.origin);
 
@@ -182,6 +228,75 @@ async function completeOAuth(request: Request, env: AuthEnvironment, fetcher: ty
   return new Response(null, { status: 302, headers });
 }
 
+async function completeHypeTrainConsent(request: Request, env: AuthEnvironment, fetcher: typeof fetch): Promise<Response> {
+  const url = new URL(request.url);
+  const cookie = request.headers.get("cookie");
+  const nonce = readCookie(cookie, NONCE_COOKIE);
+  const state = url.searchParams.get("state");
+  const returnTo = safeNext(decodeNextCookie(readCookie(cookie, NEXT_COOKIE)), url.origin);
+  const finish = (status: string): Response => hypeTrainStatusRedirect(url.origin, request.url, returnTo, status);
+  if (!state || !await verifyOAuthState(state, nonce, env.SESSION_KEY!)) return finish("error");
+  if (url.searchParams.has("error")) return finish("denied");
+
+  const session = await sessionForRequest(request, env.SESSION_KEY);
+  if (!session) return finish("session-expired");
+  const code = url.searchParams.get("code");
+  if (!code) return finish("error");
+
+  try {
+    const tokenResponse = await fetcher(TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: env.TWITCH_CLIENT_ID!,
+        client_secret: env.TWITCH_CLIENT_SECRET!,
+        code,
+        grant_type: "authorization_code",
+        redirect_uri: callbackUrl(request.url, env.PUBLIC_ORIGIN),
+      }),
+    });
+    if (!tokenResponse.ok) return finish("error");
+    const tokenPayload = await tokenResponse.json() as { access_token?: unknown; scope?: unknown };
+    if (typeof tokenPayload.access_token !== "string" || !tokenPayload.access_token) return finish("error");
+    if (!Array.isArray(tokenPayload.scope) || !tokenPayload.scope.includes("channel:read:hype_train")) {
+      return finish("scope-missing");
+    }
+    const userResponse = await fetcher(USERS_URL, {
+      headers: { Authorization: `Bearer ${tokenPayload.access_token}`, "Client-Id": env.TWITCH_CLIENT_ID! },
+    });
+    if (!userResponse.ok) return finish("error");
+    const userPayload = await userResponse.json() as { data?: unknown };
+    const user = Array.isArray(userPayload.data) ? userPayload.data[0] as Record<string, unknown> | undefined : undefined;
+    if (!user || typeof user.id !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(user.id) ||
+      typeof user.login !== "string" || !/^[A-Za-z0-9_]{1,25}$/u.test(user.login)) return finish("error");
+    if (user.id !== session.userId) return finish("user-mismatch");
+
+    const sessionKey = env.SESSION_KEY!;
+    const appToken = await getAppAccessToken(env, fetcher);
+    await deleteHypeTrainSubscriptionsForUser({ env, fetcher, appToken, userId: session.userId }).catch(() => undefined);
+    await env.DB.prepare(`
+      INSERT INTO hype_train_consents (user_id, login) VALUES (?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET login = excluded.login
+    `).bind(session.userId, user.login.toLowerCase()).run();
+    try {
+      await createHypeTrainSubscriptions({
+        env,
+        fetcher,
+        appToken,
+        broadcasterUserId: session.userId,
+        callback: `${(env.PUBLIC_ORIGIN ? new URL(env.PUBLIC_ORIGIN).origin : url.origin)}/webhooks/twitch`,
+        secret: await deriveEventSubSecret(sessionKey),
+      });
+    } catch {
+      await env.DB.prepare("DELETE FROM hype_train_consents WHERE user_id = ?").bind(session.userId).run();
+      return finish("failed");
+    }
+    return finish("connected");
+  } catch {
+    return finish("failed");
+  }
+}
+
 function loginErrorRedirect(origin: string, requestUrl: string): Response {
   const headers = new Headers({
     Location: new URL("/login?error=1", origin).toString(),
@@ -190,6 +305,7 @@ function loginErrorRedirect(origin: string, requestUrl: string): Response {
   });
   headers.append("Set-Cookie", nonceCookie("", requestUrl, 0));
   headers.append("Set-Cookie", nextCookie("", requestUrl, 0));
+  headers.append("Set-Cookie", purposeCookie("", requestUrl, 0));
   return new Response(null, {
     status: 302,
     headers,
@@ -212,19 +328,14 @@ async function ensureDefaultOverlay(db: D1Database, userId: string, login: strin
   ]);
 }
 
-async function verifyOAuthState(state: string, cookieNonce: string | undefined, sessionKey: string): Promise<OAuthState | null> {
-  const [payload, signature, extra] = state.split(".");
-  if (!payload || !signature || extra !== undefined || !cookieNonce) return null;
-  if (!await verifyHmac(payload, signature, sessionKey)) return null;
-  try {
-    const decoded = JSON.parse(new TextDecoder().decode(fromBase64Url(payload))) as Partial<OAuthState>;
-    if (typeof decoded.nonce !== "string" || decoded.nonce !== cookieNonce ||
-      typeof decoded.expiresAt !== "number" ||
-      decoded.expiresAt <= Math.floor(Date.now() / 1000)) return null;
-    return decoded as OAuthState;
-  } catch {
-    return null;
-  }
+async function verifyOAuthState(state: string, cookieNonce: string | undefined, sessionKey: string): Promise<boolean> {
+  const [nonce, signature, extra] = state.split(".");
+  const [cookieValue, rawExpiresAt, expiresSignature, cookieExtra] = cookieNonce?.split(".") ?? [];
+  const expiresAt = Number(rawExpiresAt);
+  if (!nonce || !signature || extra !== undefined || cookieExtra !== undefined || !expiresSignature || nonce !== cookieValue ||
+    !Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)) return false;
+  return await verifyHmac(nonce, signature, sessionKey) &&
+    await verifyHmac(`${cookieValue}.${rawExpiresAt}`, expiresSignature, sessionKey);
 }
 
 function safeNext(value: string | null, origin: string): string {
@@ -251,8 +362,27 @@ function nonceCookie(value: string, requestUrl: string, maxAge = STATE_SECONDS):
   return `${NONCE_COOKIE}=${value}; Path=/auth/callback; HttpOnly${secureAttribute(requestUrl)}; SameSite=Lax; Max-Age=${maxAge}`;
 }
 
+function purposeCookie(value: string, requestUrl: string, maxAge = STATE_SECONDS): string {
+  return `${PURPOSE_COOKIE}=${value}; Path=/auth/callback; HttpOnly${secureAttribute(requestUrl)}; SameSite=Lax; Max-Age=${maxAge}`;
+}
+
 function nextCookie(value: string, requestUrl: string, maxAge = STATE_SECONDS): string {
   return `${NEXT_COOKIE}=${value}; Path=/auth/callback; HttpOnly${secureAttribute(requestUrl)}; SameSite=Lax; Max-Age=${maxAge}`;
+}
+
+function callbackUrl(requestUrl: string, publicOrigin?: string): string {
+  const origin = publicOrigin ? new URL(publicOrigin).origin : new URL(requestUrl).origin;
+  return new URL("/auth/callback", origin).toString();
+}
+
+function hypeTrainStatusRedirect(origin: string, requestUrl: string, returnTo: string, status: string): Response {
+  const target = new URL(returnTo, origin);
+  target.searchParams.set("hypeTrain", status);
+  const headers = new Headers({ Location: target.toString(), "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
+  headers.append("Set-Cookie", nonceCookie("", requestUrl, 0));
+  headers.append("Set-Cookie", nextCookie("", requestUrl, 0));
+  headers.append("Set-Cookie", purposeCookie("", requestUrl, 0));
+  return new Response(null, { status: 302, headers });
 }
 
 function decodeNextCookie(value: string | undefined): string | null {

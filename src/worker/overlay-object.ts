@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { DEFAULTS, SCHEMA_VERSION, ThemeValidationError, validateShareableTheme, validateTheme, type ThemeConfig } from "../shared/theme";
+import type { HypeTrainSocketMessage } from "./hype-train";
 
 const SOCKET_TAG = "overlay";
 const MAX_SOCKETS = 16;
@@ -197,6 +198,22 @@ export class OverlayObject extends DurableObject<Env> {
     }
     this.sendTestProgress(id, 0, outputs.length);
     return id;
+  }
+
+  async hypeTrain(message: HypeTrainSocketMessage): Promise<void> {
+    this.ensureStorage();
+    if (this.isDeleted()) return;
+    const generation = this.readGeneration() ?? 1;
+    this.prepareGeneration(generation);
+    const config = this.readSnapshot().config;
+    const configuredChannels = new Set(config.channels.map((channel) => channel.toLowerCase().replace(/^#/u, "")));
+    if (!configuredChannels.has(message.channel.toLowerCase())) return;
+    for (const socket of this.ctx.getWebSockets(SOCKET_TAG)) {
+      if (socket.readyState !== WebSocket.OPEN) continue;
+      const client = readAttachment(socket).client;
+      if (client === null || client === "studio") continue;
+      send(socket, message);
+    }
   }
 
   async revoke(nextGeneration?: number): Promise<void> {

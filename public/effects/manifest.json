@@ -1,5 +1,6 @@
 {
   "raid": { "image": "/effects/raid.svg", "sound": "/effects/raid.mp3" },
   "sub": { "image": "/effects/sub.svg", "sound": "/effects/sub.mp3" },
-  "bits": { "image": "/effects/bits.svg", "sound": "/effects/bits.mp3" }
+  "bits": { "image": "/effects/bits.svg", "sound": "/effects/bits.mp3" },
+  "hype": { "image": "/effects/hype.svg", "sound": "/effects/hype.mp3" }
 }

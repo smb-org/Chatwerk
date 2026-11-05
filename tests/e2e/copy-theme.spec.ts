@@ -253,9 +253,8 @@ test("copies a public look to a second account and updates an already connected 
   });
   const liveOverlay = await page.context().newPage();
   const ircFrames: string[] = [];
-  liveOverlay.on("websocket", (socket) => {
-    if (!socket.url().includes("irc-ws.chat.twitch.tv")) return;
-    socket.on("framesent", (frame) => ircFrames.push(String(frame.payload)));
+  await page.context().routeWebSocket("wss://irc-ws.chat.twitch.tv/**", (socket) => {
+    socket.onMessage((frame) => ircFrames.push(String(frame)));
   });
   await liveOverlay.goto(`/overlay#token=${target.token}&client=browser`);
   await expect(liveOverlay.locator("#chat")).toBeVisible();

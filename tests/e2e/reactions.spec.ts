@@ -128,11 +128,11 @@ test("Live disables all rehearsal buttons while public previews remain sample-on
   await page.goto("/studio");
   await page.locator("#first-run-done").click();
   await page.locator("#preview-mode-live").click();
-  for (const scenario of ["quiet", "flood", "raid", "sub", "bits"]) {
+  for (const scenario of ["quiet", "flood", "raid", "sub", "bits", "hype-train"]) {
     await expect(page.locator(`#rehearse-${scenario}`)).toBeDisabled();
   }
   await page.locator("#preview-mode-sample").click();
-  for (const scenario of ["quiet", "flood", "raid", "sub", "bits"]) {
+  for (const scenario of ["quiet", "flood", "raid", "sub", "bits", "hype-train"]) {
     await expect(page.locator(`#rehearse-${scenario}`)).toBeEnabled();
   }
 
@@ -166,7 +166,7 @@ test("Studio footer fits at desktop widths with all rehearsal and share actions 
     await expect(footer).toBeVisible();
     await expect(page.locator("#test-in-obs")).toBeInViewport();
     await expect(page.locator("#share-look")).toBeInViewport();
-    for (const scenario of ["quiet", "flood", "raid", "sub", "bits"]) {
+    for (const scenario of ["quiet", "flood", "raid", "sub", "bits", "hype-train"]) {
       await expect(page.locator(`#rehearse-${scenario}`)).toBeInViewport();
     }
     const geometry = await page.evaluate(() => {

@@ -1,6 +1,29 @@
 import type { CommonMessage } from "./irc-parse";
+import type { HypeTrainReactionMessage } from "./reactions";
 
 export type ScenarioName = "quiet" | "flood" | "raid" | "sub" | "bits";
+
+export function runHypeTrainScenario(emit: (message: HypeTrainReactionMessage) => void): () => void {
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const startedAt = Date.now();
+  const events: Array<[number, HypeTrainReactionMessage["phase"], number]> = [
+    [0, "begin", 1], [3_000, "progress", 2], [6_000, "progress", 3], [9_800, "end", 3],
+  ];
+  for (const [delay, phase, level] of events) {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      emit({
+        type: "hype-train", id: `studio-hype-${startedAt}-${phase}-${level}`, trainId: `studio-hype-${startedAt}`, channel: "sample", phase, level,
+        expiresAt: phase === "end" ? null : new Date(startedAt + 9_900).toISOString(),
+      });
+    }, delay);
+    timers.add(timer);
+  }
+  return () => {
+    for (const timer of timers) clearTimeout(timer);
+    timers.clear();
+  };
+}
 
 const quietLines = [
   ["pixelfox", "Evening everyone!", "#E9A23B"],
