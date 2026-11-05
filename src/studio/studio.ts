@@ -1136,8 +1136,9 @@ function wireStaticControls(): void {
   });
   document.querySelectorAll<HTMLButtonElement>(".scenario-button").forEach((button) => {
     button.addEventListener("click", () => {
-      if (livePreviewEnabled) return;
-      const scenario = button.id === "rehearse-flood" ? "flood" : button.id === "rehearse-raid" ? "raid" : "quiet";
+      if (livePreviewEnabled || document.querySelector<HTMLInputElement>("#live-chat")?.checked) return;
+      const scenario = button.dataset.scenario ?? (button.id === "rehearse-flood" ? "flood"
+        : button.id === "rehearse-raid" ? "raid" : "quiet");
       document.querySelectorAll<HTMLButtonElement>(".scenario-button").forEach((item) => {
         item.setAttribute("aria-pressed", String(item === button));
       });

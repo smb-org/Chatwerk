@@ -129,9 +129,11 @@
         <section class="rehearse-tools" id="rehearse-tools" data-i18n-aria-label="rehearseControls">
           <span class="footer-title" data-i18n="rehearse"></span>
           <div class="scenario-buttons" role="group" data-i18n-aria-label="rehearsalScenarios">
-            <button class="scenario-button" id="rehearse-quiet" type="button" aria-pressed="true" data-i18n="quietChat"></button>
-            <button class="scenario-button" id="rehearse-flood" type="button" aria-pressed="false" data-i18n="messageFlood"></button>
-            <button class="scenario-button" id="rehearse-raid" type="button" aria-pressed="false" data-i18n="raid"></button>
+            <button class="scenario-button" id="rehearse-quiet" type="button" data-scenario="quiet" aria-pressed="true" data-i18n="quietChat"></button>
+            <button class="scenario-button" id="rehearse-flood" type="button" data-scenario="flood" aria-pressed="false" data-i18n="messageFlood"></button>
+            <button class="scenario-button" id="rehearse-raid" type="button" data-scenario="raid" aria-pressed="false" data-i18n="raid"></button>
+            <button class="scenario-button" id="rehearse-sub" type="button" data-scenario="sub" aria-pressed="false" data-i18n="sub"></button>
+            <button class="scenario-button" id="rehearse-bits" type="button" data-scenario="bits" aria-pressed="false" data-i18n="bits"></button>
           </div>
           <span class="footer-spacer"></span>
           <span class="value-readout" id="test-output-hint"></span>

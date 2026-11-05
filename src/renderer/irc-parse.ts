@@ -31,6 +31,13 @@ export interface CommonMessage {
   tags: Record<string, string>;
 }
 
+export type ReactionType = "raid" | "sub" | "resub" | "subgift" | "bits";
+
+export interface ParsedReactionEvent {
+  type: ReactionType;
+  amount: number | null;
+}
+
 export type IrcEvent =
   | CommonMessage
   | { type: "CLEARCHAT"; channel: string; target: string | null; targetUserId: string | null; tags: Record<string, string> }
@@ -118,14 +125,39 @@ export function parseIrcLine(input: string): IrcEvent | null {
   return null;
 }
 
+/** Read only the event tags Twitch defines for anonymous IRC reactions. */
+export function parseReactionEvent(event: IrcEvent): ParsedReactionEvent | null {
+  if (event.type === "USERNOTICE") {
+    const type = event.tags["msg-id"] === "sharedchatnotice"
+      ? event.tags["source-msg-id"]
+      : event.tags["msg-id"];
+    if (type !== "raid" && type !== "sub" && type !== "resub" && type !== "subgift") return null;
+    const rawAmount = type === "raid"
+      ? event.tags["msg-param-viewerCount"]
+      : type === "resub" ? event.tags["msg-param-cumulative-months"] : event.tags["msg-param-months"];
+    return { type, amount: parseBoundedCount(rawAmount) };
+  }
+  if (event.type === "PRIVMSG" && "bits" in event.tags) {
+    const amount = parseBoundedCount(event.tags.bits);
+    return amount === null ? null : { type: "bits", amount };
+  }
+  return null;
+}
+
 function parseTags(source: string): Record<string, string> {
-  const result: Record<string, string> = {};
+  const result = Object.create(null) as Record<string, string>;
   for (const pair of source.split(";")) {
     const separator = pair.indexOf("=");
     const key = separator < 0 ? pair : pair.slice(0, separator);
     if (key) result[key] = separator < 0 ? "" : unescapeTagValue(pair.slice(separator + 1));
   }
   return result;
+}
+
+function parseBoundedCount(value: string | undefined): number | null {
+  if (!value || !/^\d{1,7}$/u.test(value)) return null;
+  const count = Number(value);
+  return Number.isSafeInteger(count) && count > 0 && count <= 1_000_000 ? count : null;
 }
 
 function parseParams(source: string): { params: string[]; trailing: string | null } {

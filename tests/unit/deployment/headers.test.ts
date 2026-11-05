@@ -53,6 +53,7 @@ describe("deployment headers", () => {
       const policies = headerValues(headers, "Content-Security-Policy");
       expect(policies).toHaveLength(1);
       expect(policies[0]).toContain("wss://irc-ws.chat.twitch.tv");
+      expect(policies[0]).toContain("media-src __PUBLIC_ORIGIN__ blob:");
       expect(policies[0]).not.toContain("frame-ancestors");
       expect(headerValues(headers, "X-Frame-Options")).toHaveLength(0);
       expect(headerValues(headers, "Cache-Control")).toEqual(["no-cache"]);
@@ -134,8 +135,8 @@ describe("deployment headers", () => {
     }
   });
 
-  it("allows CORS only on built assets and fonts, never HTML", () => {
-    for (const rule of ["/assets/*", "/fonts/*"]) {
+  it("allows CORS on built assets, fonts, and opaque-frame effects, never HTML", () => {
+    for (const rule of ["/assets/*", "/fonts/*", "/effects/*"]) {
       expect(rules.get(rule)).toContain("Access-Control-Allow-Origin: *");
     }
     for (const path of ["/", "/login", "/studio", "/export.html", "/overlay", "/overlay/x"]) {
