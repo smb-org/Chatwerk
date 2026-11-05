@@ -31,6 +31,22 @@ describe("Studio translations", () => {
     expect(load("de").comingSoon).toBe("Demnächst verfügbar");
   });
 
+  it("translates all display switch labels and limit states in both languages", () => {
+    for (const key of [
+      "groupEmotesEffects", "fieldEmotes7tv", "fieldEmotesBttv", "fieldEmotesFfz", "fieldShowPaints",
+      "fieldNeverFade", "fieldMaxLines", "fieldMaxChatHeight", "fullHeight", "linesUnit",
+      "groupPanel", "fieldPanelEnabled", "fieldPanelBackgroundColor", "fieldPanelBackgroundOpacity",
+      "fieldPanelBorderWidth", "fieldPanelBorderColor", "fieldPanelRadius", "fieldPanelPadding",
+      "fieldLinePadding", "fieldBacklog", "backlogStackOnlyHint", "fieldBadges7tv", "fieldBadgesBttv",
+      "fieldBadgesFfz", "fieldBadgesChatterino",
+    ]) {
+      expect(load("en")[key], `English translation missing ${key}`).toBeTruthy();
+      expect(load("de")[key], `German translation missing ${key}`).toBeTruthy();
+    }
+    expect(load("en").fullHeight).toBe("Full height");
+    expect(load("de").fullHeight).toBe("Volle Höhe");
+  });
+
   it("provides truthful initial-load retry status in both languages", () => {
     expect(load("en").couldNotLoadRetrying).toBe("Could not load. Retrying...");
     expect(load("de").couldNotLoadRetrying).toBe("Laden fehlgeschlagen. Neuer Versuch …");

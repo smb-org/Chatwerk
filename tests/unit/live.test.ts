@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { JSDOM } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULTS, SCHEMA_VERSION } from "../../src/shared/theme";
+import { fetchRecentBacklog } from "../../src/renderer/backlog";
 import {
   applyConfigRevision,
   nextReconnectDelayMs,
@@ -70,6 +71,50 @@ describe("live overlay client", () => {
       .toMatchObject({ status: "update-required", state: current });
     expect(applyConfigRevision(current, { schemaVersion: SCHEMA_VERSION, revision: 4, config: { fontSize: 24 } }))
       .toMatchObject({ status: "applied", state: { revision: 4, config: { fontSize: 24 } } });
+  });
+
+  it("can defer an uncached token theme until the saved config is known", () => {
+    const tokenValue = "C".repeat(43);
+    const applyTheme = vi.fn();
+    const live = startLiveUpdates({
+      hash: `#token=${tokenValue}`,
+      origin: "https://chatwerk.test",
+      userAgent: "Chrome",
+      fetcher: vi.fn<typeof fetch>(() => new Promise(() => undefined)),
+      socketFactory: () => new FakeSocket() as unknown as WebSocket,
+      applyTheme,
+      deferUncachedTheme: true,
+      registerServiceWorker: false,
+    });
+    expect(applyTheme).not.toHaveBeenCalled();
+    live.stop();
+  });
+
+  it("applies saved config before connecting its channel so disabled backlog makes no request", async () => {
+    const currentTheme = { value: DEFAULTS };
+    const backlogFetcher = vi.fn(async () => Response.json({ messages: [] }));
+    const live = startLiveUpdates({
+      hash: `#token=${token}`,
+      origin: "https://chatwerk.test",
+      userAgent: "Chrome",
+      fetcher: vi.fn<typeof fetch>(async () => Response.json({
+        revision: 1,
+        schemaVersion: SCHEMA_VERSION,
+        config: { ...DEFAULTS, backlog: false },
+        channel: "saved_room",
+      })),
+      socketFactory: () => new FakeSocket() as unknown as WebSocket,
+      applyTheme: (theme) => { currentTheme.value = theme; },
+      onChannel: (channel) => {
+        void fetchRecentBacklog([channel], currentTheme.value, { fetcher: backlogFetcher });
+      },
+      registerServiceWorker: false,
+    });
+
+    await vi.waitFor(() => expect(currentTheme.value.backlog).toBe(false));
+
+    expect(backlogFetcher).not.toHaveBeenCalled();
+    live.stop();
   });
 
   it("backs off from one second to thirty seconds with bounded jitter", () => {

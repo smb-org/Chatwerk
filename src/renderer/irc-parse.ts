@@ -29,6 +29,7 @@ export interface CommonMessage {
   emotes: IrcEmote[];
   text: string;
   tags: Record<string, string>;
+  historical?: boolean;
 }
 
 export type ReactionType = "raid" | "sub" | "resub" | "subgift" | "bits";
@@ -104,6 +105,7 @@ export function parseIrcLine(input: string): IrcEvent | null {
       emotes: parseEmotes(tags.emotes),
       text: trailing ?? "",
       tags,
+      ...(tags.historical === "1" ? { historical: true } : {}),
     };
   }
   if (command === "CLEARCHAT") {
@@ -127,6 +129,8 @@ export function parseIrcLine(input: string): IrcEvent | null {
 
 /** Read only the event tags Twitch defines for anonymous IRC reactions. */
 export function parseReactionEvent(event: IrcEvent): ParsedReactionEvent | null {
+  if ((event.type === "PRIVMSG" || event.type === "USERNOTICE") &&
+    (event.historical || event.tags.historical === "1")) return null;
   if (event.type === "USERNOTICE") {
     const type = event.tags["msg-id"] === "sharedchatnotice"
       ? event.tags["source-msg-id"]

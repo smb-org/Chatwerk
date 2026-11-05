@@ -175,6 +175,8 @@ a.button:not([hidden]) { display: inline-flex; align-items: center; justify-cont
 .settings-group { min-width: 0; margin: 16px 0 0; padding: 0 14px 8px; border: 0; border-bottom: 1px solid var(--ui-line); }
 .settings-group legend { width: 100%; margin: 0; padding: 0; color: var(--ui-muted); font-size: 12px; line-height: 16px; text-transform: uppercase; letter-spacing: .06em; }
 .theme-control { display: grid; min-width: 0; gap: 6px; margin: 0; padding: 6px 0 8px; border: 0; }
+.theme-control[data-disabled="true"] { opacity: .55; }
+.control-hint { margin: 3px 0 0; color: var(--ui-muted); font-size: 11px; line-height: 15px; }
 .settings-group .theme-control legend { display: block; width: auto; margin: 0; padding: 0; color: var(--ui-fg); font-size: 13px; font-weight: 400; line-height: 18px; text-transform: none; letter-spacing: normal; }
 .control-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .control-label { display: block; color: var(--ui-fg); font-size: 13px; font-weight: 400; line-height: 18px; }

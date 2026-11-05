@@ -9,11 +9,19 @@ export type PaintStyle =
 
 export interface PaintLookup {
   resolve(twitchUserId: string): PaintStyle | undefined;
+  resolveBadge(twitchUserId: string): SevenTvBadge | undefined;
   load(twitchUserId: string): Promise<void>;
   setChannelId(channelId: string): void;
+  setEnabled(enabled: boolean): void;
+  setBadgesEnabled(enabled: boolean): void;
   set(twitchUserId: string, paint: unknown): void;
   subscribe(listener: (twitchUserId: string) => void): () => void;
   dispose(): void;
+}
+
+export interface SevenTvBadge {
+  name: string;
+  url: string;
 }
 
 export interface PaintLookupOptions {
@@ -21,6 +29,8 @@ export interface PaintLookupOptions {
   eventApi?: SevenTvEventApi;
   cacheLimit?: number;
   timeoutMs?: number;
+  enabled?: boolean;
+  badgesEnabled?: boolean;
 }
 
 interface CacheEntry {
@@ -30,7 +40,8 @@ interface CacheEntry {
 
 interface EntitlementRecord {
   twitchUserId: string;
-  paintId: string;
+  cosmeticId: string;
+  kind: "PAINT" | "BADGE";
 }
 
 const CACHE_TTL_MS = 5 * 60_000;
@@ -40,6 +51,7 @@ const BATCH_COLLECT_MS = 1_500;
 const REQUEST_INTERVAL_MS = 2_000;
 const MIN_TIMEOUT_MS = 30_000;
 const PAINT_QUERY = `query($ids: [String!]!) { cosmetics(list: $ids) { paints { id name color kind gradients { function canvas_repeat canvas_size at stops { at color } image_url shape angle repeat } shadows { x_offset y_offset radius color } } } }`;
+const BADGE_QUERY = `query($ids: [String!]!) { cosmetics(list: $ids) { badges { id name tooltip host { url } } } }`;
 
 export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup {
   const fetcher = options.fetcher ?? fetch;
@@ -47,11 +59,15 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
   const cacheLimit = Math.min(300, Math.max(1, Math.floor(options.cacheLimit ?? 300)));
   const timeoutMs = Math.max(MIN_TIMEOUT_MS, options.timeoutMs ?? MIN_TIMEOUT_MS);
   const cache = new Map<string, CacheEntry>();
+  const badgeCache = new Map<string, { badge: SevenTvBadge | null; expiresAt: number }>();
   const pendingUsers = new Set<string>();
   const resolvingUsers = new Set<string>();
   const pendingPaints = new Map<string, Set<string>>();
+  const pendingBadges = new Map<string, Set<string>>();
   const paintDefinitions = new Map<string, CacheEntry>();
+  const badgeDefinitions = new Map<string, { badge: SevenTvBadge | null; expiresAt: number }>();
   const assignedPaints = new Map<string, string>();
+  const assignedBadges = new Map<string, string>();
   const entitlementUsers = new Map<string, EntitlementRecord>();
   const updateListeners = new Set<(twitchUserId: string) => void>();
   const channelSubscriptions: Array<() => void> = [];
@@ -59,27 +75,42 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
   let batchTimer: ReturnType<typeof setTimeout> | undefined;
   let lastRequestAt = Number.NEGATIVE_INFINITY;
   let channelId = "";
+  let enabled = options.enabled ?? true;
+  let badgesEnabled = options.badgesEnabled ?? false;
   let disposed = false;
   let batchRunning = false;
+
+  const anyEnabled = (): boolean => enabled || badgesEnabled;
 
   const notify = (userId: string): void => {
     for (const listener of updateListeners) listener(userId);
   };
 
-  const pendingPaintUserCount = (): number => [...pendingPaints.values()].reduce((count, users) => count + users.size, 0);
+  const pendingPaintUserCount = (): number => [...pendingPaints.values(), ...pendingBadges.values()]
+    .reduce((count, users) => count + users.size, 0);
 
   const trimCaches = (): void => {
-    while (cache.size + paintDefinitions.size > cacheLimit) {
+    while (cache.size + badgeCache.size + paintDefinitions.size + badgeDefinitions.size > cacheLimit) {
       if (cache.size > 0) {
         const oldest = cache.keys().next().value as string | undefined;
         if (oldest !== undefined) {
           cache.delete(oldest);
           assignedPaints.delete(oldest);
         }
-      } else {
+      } else if (badgeCache.size > 0) {
+        const oldest = badgeCache.keys().next().value as string | undefined;
+        if (oldest !== undefined) {
+          badgeCache.delete(oldest);
+          assignedBadges.delete(oldest);
+        }
+      } else if (paintDefinitions.size > 0) {
         const oldest = paintDefinitions.keys().next().value as string | undefined;
         if (oldest === undefined) break;
         paintDefinitions.delete(oldest);
+      } else {
+        const oldest = badgeDefinitions.keys().next().value as string | undefined;
+        if (oldest === undefined) break;
+        badgeDefinitions.delete(oldest);
       }
     }
   };
@@ -107,6 +138,29 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
     for (const userId of users) setCache(userId, style);
   };
 
+  const setBadgeCache = (userId: string, badge: SevenTvBadge | null, ttl = CACHE_TTL_MS): void => {
+    if (!/^\d+$/u.test(userId) || disposed) return;
+    badgeCache.delete(userId);
+    badgeCache.set(userId, { badge, expiresAt: Date.now() + ttl });
+    resolvingUsers.delete(userId);
+    trimCaches();
+    notify(userId);
+  };
+
+  const rememberBadgeDefinition = (badgeId: string, badge: SevenTvBadge | null): void => {
+    const current = badgeDefinitions.get(badgeId);
+    if (badge === null && current?.badge && current.expiresAt > Date.now()) badge = current.badge;
+    badgeDefinitions.delete(badgeId);
+    badgeDefinitions.set(badgeId, { badge, expiresAt: Date.now() + CACHE_TTL_MS });
+    trimCaches();
+    const users = pendingBadges.get(badgeId) ?? new Set<string>();
+    pendingBadges.delete(badgeId);
+    for (const userId of assignedBadges.keys()) {
+      if (assignedBadges.get(userId) === badgeId) users.add(userId);
+    }
+    for (const userId of users) setBadgeCache(userId, badge);
+  };
+
   const fetchJson = async (body: Record<string, unknown>): Promise<unknown> => {
     const controller = new AbortController();
     activeControllers.add(controller);
@@ -129,7 +183,8 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
   };
 
   const scheduleBatch = (delay = BATCH_COLLECT_MS): void => {
-    if (disposed || batchTimer !== undefined || (pendingUsers.size === 0 && pendingPaints.size === 0)) return;
+    if (disposed || !anyEnabled() || batchTimer !== undefined ||
+      (pendingUsers.size === 0 && pendingPaints.size === 0 && pendingBadges.size === 0)) return;
     batchTimer = setTimeout(() => {
       batchTimer = undefined;
       void runBatch();
@@ -147,14 +202,14 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
   };
 
   const runBatchWork = async (): Promise<void> => {
-    if (disposed || (pendingUsers.size === 0 && pendingPaints.size === 0)) return;
+    if (disposed || !anyEnabled() || (pendingUsers.size === 0 && pendingPaints.size === 0 && pendingBadges.size === 0)) return;
     const waitMs = lastRequestAt + REQUEST_INTERVAL_MS - Date.now();
     if (waitMs > 0) {
       scheduleBatch(waitMs);
       return;
     }
 
-    const pendingPaintEntries = pendingPaints.size > 0
+    const pendingPaintEntries = enabled && pendingPaints.size > 0
       ? [...pendingPaints.entries()].slice(0, MAX_BATCH_SIZE)
       : [];
     if (pendingPaintEntries.length > 0) {
@@ -182,47 +237,107 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
       return;
     }
 
+    const pendingBadgeEntries = badgesEnabled && pendingBadges.size > 0
+      ? [...pendingBadges.entries()].slice(0, MAX_BATCH_SIZE)
+      : [];
+    if (pendingBadgeEntries.length > 0) {
+      const badgeIds = pendingBadgeEntries.map(([badgeId]) => badgeId);
+      const userByBadge = new Map<string, Set<string>>(pendingBadgeEntries);
+      for (const badgeId of badgeIds) pendingBadges.delete(badgeId);
+      try {
+        const result = await fetchJson({ query: BADGE_QUERY, variables: { ids: badgeIds } });
+        const data = isRecord(result) && isRecord(result.data) ? result.data : null;
+        const cosmetics = data && isRecord(data.cosmetics) ? data.cosmetics : null;
+        const badges = cosmetics && Array.isArray(cosmetics.badges) ? cosmetics.badges : [];
+        for (const badgeId of badgeIds) {
+          const value = badges.find((item) => isRecord(item) && item.id === badgeId);
+          rememberBadgeDefinition(badgeId, value ? buildSevenTvBadge(value) : null);
+        }
+      } catch {
+        for (const [badgeId, users] of userByBadge) {
+          for (const userId of users) {
+            if (assignedBadges.get(userId) === badgeId) setBadgeCache(userId, null, 60_000);
+          }
+        }
+      }
+      scheduleBatch(REQUEST_INTERVAL_MS);
+      return;
+    }
+
     const userIds = [...pendingUsers].slice(0, MAX_BATCH_SIZE);
     for (const userId of userIds) {
       pendingUsers.delete(userId);
       resolvingUsers.add(userId);
     }
     const declarations = userIds.map((_userId, index) => `$id${index}: String!`).join(", ");
+    const styleFields = [enabled ? "paint_id" : "", badgesEnabled ? "badge_id" : ""].filter(Boolean).join(" ");
     const fields = userIds.map((_userId, index) =>
-      `u${index}: userByConnection(platform: TWITCH, id: $id${index}) { id style { paint_id } }`).join(" ");
+      `u${index}: userByConnection(platform: TWITCH, id: $id${index}) { id style { ${styleFields} } }`).join(" ");
     const variables = Object.fromEntries(userIds.map((userId, index) => [`id${index}`, userId]));
     try {
       const result = await fetchJson({ query: `query(${declarations}) { ${fields} }`, variables });
       const data = isRecord(result) && isRecord(result.data) ? result.data : null;
       for (let index = 0; index < userIds.length; index += 1) {
         const userId = userIds[index]!;
-        const currentCache = cache.get(userId);
-        if (assignedPaints.has(userId) || (currentCache && currentCache.expiresAt > Date.now())) continue;
         const user = data && isRecord(data[`u${index}`]) ? data[`u${index}`] as Record<string, unknown> : null;
         const style = user && isRecord(user.style) ? user.style : null;
-        const paintId = style && typeof style.paint_id === "string" ? style.paint_id : "";
-        if (!paintId) {
-          assignedPaints.delete(userId);
-          setCache(userId, null);
-          continue;
-        }
-        assignedPaints.set(userId, paintId);
-        const definition = paintDefinitions.get(paintId);
-        if (definition && definition.expiresAt > Date.now()) setCache(userId, definition.style);
-        else {
-          if (definition) paintDefinitions.delete(paintId);
-          let users = pendingPaints.get(paintId);
-          if (!users) {
-            users = new Set();
-            pendingPaints.set(paintId, users);
+        const currentPaint = cache.get(userId);
+        if (enabled && (!currentPaint || currentPaint.expiresAt <= Date.now())) {
+          if (assignedPaints.has(userId)) {
+            queuePaintDefinition(userId, assignedPaints.get(userId)!);
+          } else {
+            const paintId = style && typeof style.paint_id === "string" ? style.paint_id : "";
+            if (!paintId) {
+              assignedPaints.delete(userId);
+              setCache(userId, null);
+            } else {
+              assignedPaints.set(userId, paintId);
+              const definition = paintDefinitions.get(paintId);
+              if (definition && definition.expiresAt > Date.now()) setCache(userId, definition.style);
+              else {
+                if (definition) paintDefinitions.delete(paintId);
+                let users = pendingPaints.get(paintId);
+                if (!users) {
+                  users = new Set();
+                  pendingPaints.set(paintId, users);
+                }
+                users.add(userId);
+              }
+            }
           }
-          users.add(userId);
+        }
+        const currentBadge = badgeCache.get(userId);
+        if (badgesEnabled && (!currentBadge || currentBadge.expiresAt <= Date.now())) {
+          if (assignedBadges.has(userId)) {
+            queueBadgeDefinition(userId, assignedBadges.get(userId)!);
+          } else {
+            const badgeId = style && typeof style.badge_id === "string" ? style.badge_id : "";
+            if (!badgeId) {
+              assignedBadges.delete(userId);
+              setBadgeCache(userId, null);
+            } else {
+              assignedBadges.set(userId, badgeId);
+              const definition = badgeDefinitions.get(badgeId);
+              if (definition && definition.expiresAt > Date.now()) setBadgeCache(userId, definition.badge);
+              else {
+                if (definition) badgeDefinitions.delete(badgeId);
+                let users = pendingBadges.get(badgeId);
+                if (!users) {
+                  users = new Set();
+                  pendingBadges.set(badgeId, users);
+                }
+                users.add(userId);
+              }
+            }
+          }
         }
       }
     } catch {
       for (const userId of userIds) {
         const currentCache = cache.get(userId);
-        if (!assignedPaints.has(userId) && (!currentCache || currentCache.expiresAt <= Date.now())) setCache(userId, null, 60_000);
+        if (enabled && !assignedPaints.has(userId) && (!currentCache || currentCache.expiresAt <= Date.now())) setCache(userId, null, 60_000);
+        const currentBadge = badgeCache.get(userId);
+        if (badgesEnabled && !assignedBadges.has(userId) && (!currentBadge || currentBadge.expiresAt <= Date.now())) setBadgeCache(userId, null, 60_000);
       }
     }
     scheduleBatch(REQUEST_INTERVAL_MS);
@@ -259,18 +374,50 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
     scheduleBatch();
   };
 
+  const queueBadgeDefinition = (userId: string, badgeId: string): void => {
+    const alreadyPending = pendingUsers.has(userId) || resolvingUsers.has(userId) ||
+      [...pendingPaints.values(), ...pendingBadges.values()].some((users) => users.has(userId));
+    if (!alreadyPending && pendingUsers.size + pendingPaintUserCount() >= MAX_QUEUE_SIZE) {
+      assignedBadges.delete(userId);
+      setBadgeCache(userId, null, 60_000);
+      return;
+    }
+    assignedBadges.delete(userId);
+    assignedBadges.set(userId, badgeId);
+    if (assignedBadges.size > cacheLimit) {
+      const oldest = assignedBadges.keys().next().value as string | undefined;
+      if (oldest !== undefined) assignedBadges.delete(oldest);
+    }
+    pendingUsers.delete(userId);
+    resolvingUsers.add(userId);
+    const definition = badgeDefinitions.get(badgeId);
+    if (definition && definition.expiresAt > Date.now()) {
+      setBadgeCache(userId, definition.badge);
+      return;
+    }
+    if (definition) badgeDefinitions.delete(badgeId);
+    let users = pendingBadges.get(badgeId);
+    if (!users) {
+      users = new Set();
+      pendingBadges.set(badgeId, users);
+    }
+    users.add(userId);
+    scheduleBatch();
+  };
+
   const readEntitlement = (event: SevenTvEvent): EntitlementRecord | null => {
     const object = readEventObject(event.body);
-    if (!object || object.kind !== "PAINT" || typeof object.ref_id !== "string") return null;
+    if (!object || (object.kind !== "PAINT" && object.kind !== "BADGE") || typeof object.ref_id !== "string") return null;
     const user = isRecord(object.user) ? object.user : null;
     const connections = user && Array.isArray(user.connections) ? user.connections : [];
     const connection = connections.find((value) => isRecord(value) && value.platform === "TWITCH" && typeof value.id === "string");
     return isRecord(connection) && typeof connection.id === "string" && /^\d+$/u.test(connection.id)
-      ? { twitchUserId: connection.id, paintId: object.ref_id }
+      ? { twitchUserId: connection.id, cosmeticId: object.ref_id, kind: object.kind }
       : null;
   };
 
   const handleEvent = (event: SevenTvEvent): void => {
+    if (!anyEnabled() || disposed) return;
     if (event.type === "entitlement.create") {
       const entitlement = readEntitlement(event);
       if (!entitlement) return;
@@ -281,7 +428,10 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
         if (oldest === undefined) break;
         entitlementUsers.delete(oldest);
       }
-      queuePaintDefinition(entitlement.twitchUserId, entitlement.paintId);
+      if ((entitlement.kind === "PAINT" && enabled) || (entitlement.kind === "BADGE" && badgesEnabled)) {
+        if (entitlement.kind === "PAINT") queuePaintDefinition(entitlement.twitchUserId, entitlement.cosmeticId);
+        else queueBadgeDefinition(entitlement.twitchUserId, entitlement.cosmeticId);
+      }
       return;
     }
     if (event.type === "entitlement.delete") {
@@ -289,29 +439,44 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
       const entitlement = (entitlementId && entitlementUsers.get(entitlementId)) ?? readEntitlement(event);
       if (!entitlement) return;
       entitlementUsers.delete(entitlementId ?? "");
-      if (assignedPaints.get(entitlement.twitchUserId) === entitlement.paintId) {
+      if (entitlement.kind === "PAINT" && assignedPaints.get(entitlement.twitchUserId) === entitlement.cosmeticId) {
         assignedPaints.delete(entitlement.twitchUserId);
-        const users = pendingPaints.get(entitlement.paintId);
+        const users = pendingPaints.get(entitlement.cosmeticId);
         users?.delete(entitlement.twitchUserId);
-        if (users?.size === 0) pendingPaints.delete(entitlement.paintId);
+        if (users?.size === 0) pendingPaints.delete(entitlement.cosmeticId);
         resolvingUsers.delete(entitlement.twitchUserId);
         setCache(entitlement.twitchUserId, null);
+      }
+      if (entitlement.kind === "BADGE" && assignedBadges.get(entitlement.twitchUserId) === entitlement.cosmeticId) {
+        assignedBadges.delete(entitlement.twitchUserId);
+        const users = pendingBadges.get(entitlement.cosmeticId);
+        users?.delete(entitlement.twitchUserId);
+        if (users?.size === 0) pendingBadges.delete(entitlement.cosmeticId);
+        resolvingUsers.delete(entitlement.twitchUserId);
+        setBadgeCache(entitlement.twitchUserId, null);
       }
       return;
     }
     if (event.type === "cosmetic.create") {
-      const paint = readEventObject(event.body);
-      const paintId = paint && stringValue(paint.id);
-      if (!paint || !paintId || (paint.kind !== undefined && paint.kind !== "PAINT")) return;
-      rememberDefinition(paintId, buildPaintStyle(paint));
+      const cosmetic = readEventObject(event.body);
+      const cosmeticId = cosmetic && stringValue(cosmetic.id);
+      if (!cosmetic || !cosmeticId) return;
+      const kind = cosmetic.kind;
+      if (kind === "BADGE" && badgesEnabled) rememberBadgeDefinition(cosmeticId, buildSevenTvBadge(cosmetic));
+      else if ((kind === undefined || kind === "PAINT") && enabled) rememberDefinition(cosmeticId, buildPaintStyle(cosmetic));
     }
   };
 
   const setChannelId = (id: string): void => {
-    if (id === channelId || disposed) return;
+    const nextChannelId = /^\d+$/u.test(id) ? id : "";
+    if (nextChannelId === channelId || disposed) return;
+    channelId = nextChannelId;
+    syncChannelSubscriptions();
+  };
+
+  const syncChannelSubscriptions = (): void => {
     for (const unsubscribe of channelSubscriptions.splice(0)) unsubscribe();
-    channelId = /^\d+$/u.test(id) ? id : "";
-    if (!channelId || !events) return;
+    if (!anyEnabled() || !channelId || !events) return;
     const condition = { ctx: "channel", platform: "TWITCH", id: channelId };
     for (const type of ["cosmetic.create", "entitlement.create", "entitlement.delete"]) {
       channelSubscriptions.push(events.subscribe(type, condition, handleEvent));
@@ -319,21 +484,25 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
   };
 
   const load = async (userId: string): Promise<void> => {
-    if (!/^\d+$/u.test(userId) || disposed) return;
-    const cached = cache.get(userId);
-    if (cached && cached.expiresAt > Date.now()) {
+    if (!/^\d+$/u.test(userId) || disposed || !anyEnabled()) return;
+    let paintEntry = cache.get(userId);
+    if (paintEntry && paintEntry.expiresAt <= Date.now()) {
       cache.delete(userId);
-      cache.set(userId, cached);
-      return;
+      paintEntry = undefined;
     }
-    if (cached) cache.delete(userId);
-    if (assignedPaints.has(userId)) {
-      queuePaintDefinition(userId, assignedPaints.get(userId)!);
-      return;
+    let badgeEntry = badgeCache.get(userId);
+    if (badgeEntry && badgeEntry.expiresAt <= Date.now()) {
+      badgeCache.delete(userId);
+      badgeEntry = undefined;
     }
-    if (pendingUsers.has(userId) || resolvingUsers.has(userId)) return;
-    if (pendingUsers.size + pendingPaintUserCount() >= MAX_QUEUE_SIZE) return;
-    pendingUsers.add(userId);
+    if ((!enabled || paintEntry) && (!badgesEnabled || badgeEntry)) return;
+    if (enabled && !paintEntry && assignedPaints.has(userId)) queuePaintDefinition(userId, assignedPaints.get(userId)!);
+    if (badgesEnabled && !badgeEntry && assignedBadges.has(userId)) queueBadgeDefinition(userId, assignedBadges.get(userId)!);
+    const needsUserLookup = (enabled && !paintEntry && !assignedPaints.has(userId)) ||
+      (badgesEnabled && !badgeEntry && !assignedBadges.has(userId));
+    if (needsUserLookup && !pendingUsers.has(userId) && !resolvingUsers.has(userId)) {
+      if (pendingUsers.size + pendingPaintUserCount() < MAX_QUEUE_SIZE) pendingUsers.add(userId);
+    }
     scheduleBatch();
   };
 
@@ -346,8 +515,51 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
       }
       return entry.style ?? undefined;
     },
+    resolveBadge(userId) {
+      if (!badgesEnabled) return undefined;
+      const entry = badgeCache.get(userId);
+      if (!entry || entry.expiresAt <= Date.now()) {
+        if (entry) badgeCache.delete(userId);
+        return undefined;
+      }
+      return entry.badge ?? undefined;
+    },
     load,
     setChannelId,
+    setEnabled(nextEnabled) {
+      if (enabled === nextEnabled || disposed) return;
+      enabled = nextEnabled;
+      syncChannelSubscriptions();
+      if (enabled) {
+        scheduleBatch();
+        return;
+      }
+      pendingPaints.clear();
+      if (anyEnabled()) return;
+      if (batchTimer !== undefined) clearTimeout(batchTimer);
+      batchTimer = undefined;
+      for (const controller of activeControllers) controller.abort();
+      pendingUsers.clear();
+      resolvingUsers.clear();
+      pendingBadges.clear();
+    },
+    setBadgesEnabled(nextEnabled) {
+      if (badgesEnabled === nextEnabled || disposed) return;
+      badgesEnabled = nextEnabled;
+      syncChannelSubscriptions();
+      if (badgesEnabled) {
+        scheduleBatch();
+        return;
+      }
+      pendingBadges.clear();
+      if (anyEnabled()) return;
+      if (batchTimer !== undefined) clearTimeout(batchTimer);
+      batchTimer = undefined;
+      for (const controller of activeControllers) controller.abort();
+      pendingUsers.clear();
+      resolvingUsers.clear();
+      pendingPaints.clear();
+    },
     set(userId, paint) {
       setCache(userId, buildPaintStyle(paint));
     },
@@ -363,11 +575,15 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
       activeControllers.clear();
       for (const unsubscribe of channelSubscriptions.splice(0)) unsubscribe();
       cache.clear();
+      badgeCache.clear();
       pendingUsers.clear();
       resolvingUsers.clear();
       pendingPaints.clear();
+      pendingBadges.clear();
       paintDefinitions.clear();
+      badgeDefinitions.clear();
       assignedPaints.clear();
+      assignedBadges.clear();
       entitlementUsers.clear();
       updateListeners.clear();
     },
@@ -408,6 +624,25 @@ export function buildPaintStyle(paint: unknown): PaintStyle | null {
     return color ? addFilter({ type: "solid", value: color }) : null;
   }
   return null;
+}
+
+function buildSevenTvBadge(value: unknown): SevenTvBadge | null {
+  if (!isRecord(value)) return null;
+  const name = stringValue(value.name) ?? stringValue(value.tooltip);
+  const host = isRecord(value.host) ? value.host : null;
+  const rawUrl = host && stringValue(host.url);
+  if (!name || !rawUrl) return null;
+  try {
+    const url = new URL(rawUrl.startsWith("//") ? `https:${rawUrl}` : rawUrl);
+    if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "cdn.7tv.app" ||
+      url.username || url.password || (url.port && url.port !== "443")) return null;
+    if (/\/badge\/[^/]+$/u.test(url.pathname)) url.pathname += "/2x.webp";
+    else if (/\/[124]x$/u.test(url.pathname)) url.pathname += ".webp";
+    if (!isAllowedImageUrl(url.href)) return null;
+    return { name: name.trim().slice(0, 100), url: url.href };
+  } catch {
+    return null;
+  }
 }
 
 function buildGradientStyle(value: unknown): string | null {
@@ -493,7 +728,8 @@ function validatedColor(value: unknown): string | null {
 function safeImageUrl(value: unknown): string | null {
   if (!isAllowedImageUrl(value)) return null;
   try {
-    return new URL(value).href;
+    const url = new URL(value);
+    return url.hostname.toLowerCase() === "cdn.7tv.app" ? url.href : null;
   } catch {
     return null;
   }
@@ -503,18 +739,20 @@ function readEventObject(body: Record<string, unknown>): Record<string, unknown>
   if (isRecord(body.object)) {
     const object = body.object;
     if (isRecord(object.data)) {
-      const paint = readPaintData(object.data);
-      return paint ? {
-        ...paint,
-        id: stringValue(paint.id) ?? stringValue(object.id) ?? stringValue(body.id) ?? "",
-      } : null;
+      const cosmetic = readPaintData(object.data) ?? object.data;
+      const kind = stringValue(object.kind) ?? stringValue(cosmetic.kind) ?? stringValue(body.cosmetic_kind);
+      return {
+        ...cosmetic,
+        id: stringValue(cosmetic.id) ?? stringValue(object.id) ?? stringValue(body.id) ?? "",
+        ...(kind ? { kind } : {}),
+      };
     }
     return object;
   }
   const paint = readPaintData(body);
-  return paint && typeof paint.id !== "string" && typeof body.id === "string"
-    ? { ...paint, id: body.id }
-    : paint;
+  if (paint) return typeof paint.id !== "string" && typeof body.id === "string" ? { ...paint, id: body.id } : paint;
+  if (typeof body.id === "string" && (isRecord(body.host) || typeof body.name === "string")) return body;
+  return null;
 }
 
 function readPaintData(value: Record<string, unknown>): Record<string, unknown> | null {

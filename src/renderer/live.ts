@@ -53,6 +53,7 @@ export interface LiveOptions {
   getChatStatus?(): ChatStatus;
   visibilityTarget?: Pick<Document, "visibilityState" | "addEventListener" | "removeEventListener">;
   registerServiceWorker?: boolean;
+  deferUncachedTheme?: boolean;
   random?: () => number;
 }
 
@@ -182,7 +183,7 @@ export function startLiveUpdates(options: LiveOptions): LiveHandle {
   const testLineCleanups = new Map<string, () => void>();
   const visibilityTarget = options.visibilityTarget ?? getDocument();
 
-  options.applyTheme(state.config);
+  if (!options.deferUncachedTheme || !location.token || state.revision >= 0) options.applyTheme(state.config);
   if (channel) options.onChannel?.(channel);
   registerServiceWorker(options, location);
 
@@ -251,8 +252,8 @@ export function startLiveUpdates(options: LiveOptions): LiveHandle {
         scheduleConfigRetry();
         return response.status;
       }
-      updateChannel(incoming.channel);
       applyIncoming(incoming);
+      updateChannel(incoming.channel);
       scheduleConfigRetry();
       return response.status;
     } catch {
@@ -341,8 +342,8 @@ export function startLiveUpdates(options: LiveOptions): LiveHandle {
     try { message = JSON.parse(event.data) as unknown; } catch { return; }
     if (!isRecord(message) || typeof message.type !== "string") return;
     if (message.type === "config") {
-      updateChannel(message.channel);
       applyIncoming(message);
+      updateChannel(message.channel);
       return;
     }
     if (message.type === "test-line" && typeof message.id === "string") {

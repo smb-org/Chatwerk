@@ -10,6 +10,8 @@ import { createPaintLookup } from "./paints";
 import { createPronounLookup } from "./pronouns";
 import { createRoomScopeCoordinator } from "./room-scopes";
 import { createSevenTvEventApi } from "./seventv-events";
+import { createThirdPartyBadgeLookup } from "./third-party-badges";
+import { fetchRecentBacklog } from "./backlog";
 import { runScenario, type ScenarioName } from "./scenarios";
 
 const chat = document.querySelector<HTMLElement>("#chat");
@@ -17,20 +19,24 @@ if (chat) {
   const liveLocation = parseLiveLocation(window.location.hash, navigator.userAgent);
   chat.dataset.placement = liveLocation.placement;
   const sevenTvEvents = createSevenTvEventApi();
-  const emotes = createEmoteLookup({ eventApi: sevenTvEvents });
+  const emotes = createEmoteLookup({ eventApi: sevenTvEvents, enabledProviders: [] });
   const badges = createBadgeLookup({ source: { type: "route" } });
-  const paints = createPaintLookup({ eventApi: sevenTvEvents });
+  const paints = createPaintLookup({ eventApi: sevenTvEvents, enabled: false });
+  const thirdPartyBadges = createThirdPartyBadgeLookup();
   const pronouns = createPronounLookup();
-  const renderer = createChatRenderer({ root: chat, theme: DEFAULTS, emotes, badges, paints, pronouns });
+  const renderer = createChatRenderer({ root: chat, theme: DEFAULTS, emotes, badges, paints, pronouns, thirdPartyBadges, deferProviderSettings: true });
   let currentTheme = DEFAULTS;
   let irc: IrcClient | undefined;
   let legacyChannel = "";
   let previewChannels: string[] | undefined;
   let previewLiveEnabled = false;
+  let studioThemeReceived = false;
   const roomScopes = createRoomScopeCoordinator({ emotes, paints });
   let chatStatus: ChatStatus = "idle";
   const live: { handle?: LiveHandle } = {};
   let stopScenario: (() => void) | undefined;
+  let backlogController: AbortController | undefined;
+  let backlogChannelsKey = "";
 
   const activeChannels = (): string[] => {
     if (liveLocation.client === "studio" && !liveLocation.token && !previewLiveEnabled) return [];
@@ -40,10 +46,38 @@ if (chat) {
     return fallback ? normalizeChannels([fallback]) : [];
   };
 
+  const usesLiveChat = (): boolean => {
+    const path = window.location.pathname;
+    if (path === "/themes" || path.startsWith("/t/")) return false;
+    if (liveLocation.client === "studio" && !liveLocation.token) return previewLiveEnabled;
+    return true;
+  };
+
+  const syncBacklog = (channels: string[]): void => {
+    const shouldLoad = currentTheme.backlog && currentTheme.layout !== "ticker" && usesLiveChat() && channels.length > 0;
+    const nextKey = JSON.stringify({ channels, shouldLoad });
+    if (nextKey === backlogChannelsKey) return;
+    backlogController?.abort();
+    backlogController = undefined;
+    backlogChannelsKey = nextKey;
+    if (!shouldLoad) return;
+    const controller = new AbortController();
+    backlogController = controller;
+    const finishBacklogFetch = renderer.beginBacklogFetch();
+    void fetchRecentBacklog(channels, currentTheme, { signal: controller.signal }).then((messages) => {
+      if (controller.signal.aborted) return;
+      for (const message of messages) renderer.handle(message.event, message.receivedAt);
+    }).finally(() => {
+      finishBacklogFetch();
+      if (backlogController === controller) backlogController = undefined;
+    });
+  };
+
   const reconcileIrc = (): void => {
     const channels = activeChannels();
     renderer.setChannels(channels);
     roomScopes.setChannels(channels);
+    syncBacklog(channels);
     if (channels.length > 0) {
       chat.querySelector(".chat-empty")?.remove();
     } else if (liveLocation.client !== "studio" && !chat.querySelector(".chat-empty")) {
@@ -98,6 +132,9 @@ if (chat) {
   const stopIrc = (): void => {
     irc?.stop();
     irc = undefined;
+    backlogController?.abort();
+    backlogController = undefined;
+    backlogChannelsKey = "";
     roomScopes.reset();
     chatStatus = "idle";
   };
@@ -115,7 +152,9 @@ if (chat) {
       if (event.data.type === "chatwerk:studio-theme") {
         try {
           currentTheme = validateTheme(event.data.theme);
+          studioThemeReceived = true;
           renderer.setTheme(currentTheme);
+          roomScopes.setPaintsEnabled(currentTheme.showPaints || (currentTheme.showBadges && currentTheme.badges7tv));
           reconcileIrc();
         } catch {
           // The parent controls a local preview; malformed data leaves the current valid theme in place.
@@ -166,7 +205,9 @@ if (chat) {
     userAgent: navigator.userAgent,
     applyTheme: (theme) => {
       currentTheme = theme;
+      if (liveLocation.client === "studio" && !liveLocation.token && !studioThemeReceived) return;
       renderer.setTheme(theme);
+      roomScopes.setPaintsEnabled(theme.showPaints || (theme.showBadges && theme.badges7tv));
       reconcileIrc();
     },
     onChannel: (channel) => {
@@ -179,6 +220,7 @@ if (chat) {
       sevenTvEvents.dispose();
     },
     getChatStatus: () => chatStatus,
+    deferUncachedTheme: true,
   });
   live.handle.acknowledge();
 
@@ -186,6 +228,7 @@ if (chat) {
     live.handle?.stop();
     stopScenario?.();
     irc?.stop();
+    backlogController?.abort();
     renderer.dispose();
     sevenTvEvents.dispose();
   }, { once: true });

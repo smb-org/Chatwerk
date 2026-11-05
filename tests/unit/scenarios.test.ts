@@ -10,7 +10,7 @@ describe("Studio rehearsal scenarios", () => {
     const sub = createScenarioMessages("sub", "sample");
     const bits = createScenarioMessages("bits", "sample");
     expect(quiet.length).toBeGreaterThan(0);
-    expect(flood.length).toBeGreaterThan(quiet.length);
+    expect(flood).toHaveLength(100);
     expect(raid.every((message) => message.type === "USERNOTICE" || message.type === "PRIVMSG")).toBe(true);
     expect([...quiet, ...flood, ...raid, ...sub, ...bits].every((message) => message.channel === "#sample")).toBe(true);
     expect(parseReactionEvent(raid[0]!)).toMatchObject({ type: "raid" });

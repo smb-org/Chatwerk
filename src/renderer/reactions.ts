@@ -19,7 +19,7 @@ export interface ReactionAlias {
 export interface ReactionEffectsOptions {
   root: HTMLElement;
   theme: ThemeConfig;
-  emotes?: EmoteLookup;
+  emotes?: Pick<EmoteLookup, "resolve">;
   fetcher?: typeof fetch;
 }
 

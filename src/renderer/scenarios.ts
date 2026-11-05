@@ -46,8 +46,9 @@ const subLines = [["newfriend09", "Thanks for the welcome!", "#CBA6F7"]] as cons
 const bitsLines = [["cheerer", "Cheer250 That was huge!", "#E9A23B"]] as const;
 
 export function createScenarioMessages(name: ScenarioName, channel: string): CommonMessage[] {
-  const rows = name === "quiet" ? quietLines : name === "raid" ? raidLines
-    : name === "sub" ? subLines : name === "bits" ? bitsLines : floodLines;
+  const rows = name === "flood"
+    ? Array.from({ length: 100 }, (_, index) => floodLines[index % floodLines.length]!)
+    : name === "quiet" ? quietLines : name === "raid" ? raidLines : name === "sub" ? subLines : bitsLines;
   return rows.map(([userLogin, text, color], index) => ({
     type: ["raid", "sub"].includes(name) && index === 0 ? "USERNOTICE" : "PRIVMSG",
     channel: `#${channel.replace(/^#/u, "")}`,

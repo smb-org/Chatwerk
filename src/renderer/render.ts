@@ -4,6 +4,7 @@ import {
   effectiveOutline,
   isValidColor,
   themeCssVariables,
+  themePanelBackground,
   themeRowBackground,
   type ThemeConfig,
 } from "../shared/theme";
@@ -17,6 +18,8 @@ import { isAllowedImageUrl } from "../shared/hosts";
 import type { BadgeLookup } from "./badges";
 import type { PaintLookup, PaintStyle } from "./paints";
 import type { PronounLookup } from "./pronouns";
+import type { ThirdPartyBadgeLookup } from "./third-party-badges";
+import type { SevenTvBadge } from "./paints";
 
 export interface ChatRendererOptions {
   root: HTMLElement;
@@ -24,10 +27,12 @@ export interface ChatRendererOptions {
   nodeLimit?: number;
   scheduler?: (callback: () => void) => unknown;
   cancelScheduled?: (handle: unknown) => void;
+  deferProviderSettings?: boolean;
   emotes?: EmoteLookup;
   badges?: BadgeLookup;
   paints?: PaintLookup;
   pronouns?: PronounLookup;
+  thirdPartyBadges?: ThirdPartyBadgeLookup;
 }
 
 interface PendingMessage {
@@ -58,7 +63,8 @@ interface RenderedLine {
 }
 
 export interface ChatRenderer {
-  handle(event: IrcEvent): void;
+  handle(event: IrcEvent, receivedAt?: number): void;
+  beginBacklogFetch(): () => void;
   setTheme(theme: ThemeConfig): void;
   setChannels(channels: string[]): void;
   clear(): void;
@@ -68,6 +74,7 @@ export interface ChatRenderer {
 const MAX_NODE_LIMIT = 300;
 const DEFAULT_NODE_LIMIT = 100;
 const FADE_DURATION_MS = 200;
+const MAX_MODERATION_TOMBSTONES = 500;
 
 export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   const { root } = options;
@@ -85,15 +92,61 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   const lines = new Set<RenderedLine>();
   const linesByAlias = new Map<string, RenderedLine>();
   const linesBySourceId = new Map<string, RenderedLine>();
+  const moderatedMessageIds = new Map<string, true>();
+  const clearedUserTimestamps = new Map<string, number>();
+  const clearedRoomTimestamps = new Map<string, number>();
+  let backlogFetches = 0;
   const reactionEffects = createReactionEffects({ root, theme, emotes: options.emotes });
-  const unsubscribePaints = options.paints?.subscribe((userId) => refreshPaints(userId));
+  const unsubscribePaints = options.paints?.subscribe((userId) => {
+    refreshPaints(userId);
+    refreshBadges(userId);
+  });
+  const unsubscribeThirdPartyBadges = options.thirdPartyBadges?.subscribe((userId) => refreshBadges(userId));
+  let providerSettingsDeferred = options.deferProviderSettings ?? false;
+  let disposed = false;
+  let layoutScheduled = false;
+  let layoutScheduleHandle: unknown;
+  const watchedImages = new WeakSet<HTMLImageElement>();
+
+  const scheduleHeightPrune = (): void => {
+    if (disposed || layoutScheduled) return;
+    layoutScheduled = true;
+    layoutScheduleHandle = schedule(() => {
+      layoutScheduled = false;
+      layoutScheduleHandle = undefined;
+      pruneToHeight();
+    });
+  };
+
+  const watchLineImages = (line: HTMLElement): void => {
+    for (const image of line.querySelectorAll<HTMLImageElement>("img")) {
+      if (watchedImages.has(image)) continue;
+      watchedImages.add(image);
+      image.addEventListener("load", scheduleHeightPrune, { once: true });
+      image.addEventListener("error", scheduleHeightPrune, { once: true });
+      if (image.complete) scheduleHeightPrune();
+    }
+  };
 
   const applyTheme = (): void => {
     root.dataset.lineOrder = theme.lineOrder;
     root.dataset.layout = theme.layout;
     root.dataset.motion = theme.motion;
+    root.dataset.heightLimited = theme.layout === "stack" && theme.maxChatHeight > 0 ? "true" : "false";
+    root.dataset.panelEnabled = String(theme.panelEnabled);
+    if (!providerSettingsDeferred) {
+      options.emotes?.setProviderEnabled("7TV", theme.emotes7tv);
+      options.emotes?.setProviderEnabled("BTTV", theme.emotesBttv);
+      options.emotes?.setProviderEnabled("FFZ", theme.emotesFfz);
+      options.paints?.setEnabled(theme.showPaints);
+      options.paints?.setBadgesEnabled(theme.showBadges && theme.badges7tv);
+    }
+    for (const provider of ["badgesBttv", "badgesFfz", "badgesChatterino"] as const) {
+      options.thirdPartyBadges?.setEnabled(provider, theme.showBadges && theme[provider]);
+    }
     for (const [name, value] of Object.entries(themeCssVariables(theme))) root.style.setProperty(name, value);
     root.style.setProperty("--t-row-background", themeRowBackground(theme));
+    root.style.setProperty("--t-panel-background", themePanelBackground(theme));
     const outline = effectiveOutline(theme);
     root.style.setProperty("--t-outline", `${outline.width}px`);
     root.style.setProperty("--t-outline-color", outline.color);
@@ -109,9 +162,9 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     for (const line of lines) {
       const badgeContainer = line.node.querySelector<HTMLElement>(".chat-badges");
       if (badgeContainer) {
-        if (theme.showBadges) appendBadgeImages(badgeContainer, line.event, theme, options.badges, true);
-        else badgeContainer.replaceChildren();
+        appendBadgeImages(badgeContainer, line.event, theme, options.badges, options.paints, options.thirdPartyBadges, true);
       }
+      watchLineImages(line.node);
       const pronounContainer = line.node.querySelector<HTMLElement>(".chat-pronouns");
       if (!theme.showPronouns && pronounContainer) pronounContainer.textContent = "";
       else if (theme.showPronouns && pronounContainer && !pronounContainer.textContent && options.pronouns && line.userLogin) {
@@ -120,8 +173,25 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
         });
       }
       const name = line.node.querySelector<HTMLElement>(".chat-name");
-      if (name) applyNamePaint(name, options.paints?.resolve(line.userId ?? ""), nameColorFor(line.event, theme));
+      if (name) {
+        const paint = theme.showPaints && !providerSettingsDeferred ? options.paints?.resolve(line.userId ?? "") : undefined;
+        applyNamePaint(name, paint, nameColorFor(line.event, theme));
+        if (line.userId && !providerSettingsDeferred && (theme.showPaints || (theme.showBadges && theme.badges7tv))) {
+          void options.paints?.load(line.userId);
+        }
+        if (line.userId && theme.showBadges) void options.thirdPartyBadges?.load(line.userId);
+      }
+      if (theme.layout === "stack" && theme.neverFade) {
+        if (line.lifetimeTimer !== undefined) clearTimeout(line.lifetimeTimer);
+        if (line.removalTimer !== undefined) clearTimeout(line.removalTimer);
+        line.lifetimeTimer = undefined;
+        line.removalTimer = undefined;
+        line.node.style.setProperty("opacity", "1");
+        line.node.style.setProperty("transform", "translateY(0)");
+      }
     }
+    if (theme.layout === "stack") enforceLineLimit();
+    if (lines.size > 0) scheduleHeightPrune();
   };
 
   const removeLine = (line: RenderedLine): void => {
@@ -146,24 +216,28 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       return;
     }
     if (pending.length === 0) return;
+    pending.sort((left, right) => left.receivedAt - right.receivedAt);
     const batch = pending;
     pending = [];
     const fragment = root.ownerDocument.createDocumentFragment();
     const now = Date.now();
     for (const item of batch) {
       const remainingLifetime = theme.lifetime - (now - item.receivedAt);
-      if (remainingLifetime <= 0) continue;
+      if (!theme.neverFade && remainingLifetime <= 0) continue;
       const event = item.event;
-      const line = buildLine(event, root.ownerDocument, theme);
+      const line = buildLine(event, root.ownerDocument, theme, item.receivedAt);
       lines.add(line.record);
       addLineAliases(line.record, item.aliases);
       for (const key of item.aliases.keys()) reactionEffects.attachLine(key, line.node);
       if (line.record.sourceId) linesBySourceId.set(line.record.sourceId, line.record);
       line.record.node = line.node;
       fragment.appendChild(line.node);
-      armLifetime(line.record, remainingLifetime);
+      if (!theme.neverFade) armLifetime(line.record, remainingLifetime);
     }
     root.appendChild(fragment);
+    sortStackLines();
+    for (const line of lines) watchLineImages(line.node);
+    scheduleHeightPrune();
   };
 
   const scheduleFlush = (): void => {
@@ -244,6 +318,13 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     }, { once: true });
   }
 
+  function sortStackLines(): void {
+    const rows = [...root.children].filter((child) => child.nodeType === 1 &&
+      (child as HTMLElement).classList.contains("chat-line")) as HTMLElement[];
+    rows.sort((left, right) => Number(left.dataset.receivedAt ?? 0) - Number(right.dataset.receivedAt ?? 0));
+    for (const row of rows) root.appendChild(row);
+  }
+
   function flushStaticTicker(): void {
     let latest: PendingMessage | undefined;
     let item = tickerQueue.dequeue();
@@ -296,17 +377,127 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     }
   }
 
-  const enforceCapacity = (): void => {
-    while (lines.size + pending.length >= limit) {
-      const oldest = lines.values().next().value as RenderedLine | undefined;
-      if (oldest) removeLine(oldest);
-      else pending.shift();
+  const lineLimit = (): number => Math.min(limit, theme.maxLines);
+
+  const discardPending = (item: PendingMessage | undefined): void => {
+    if (!item) return;
+    for (const key of item.aliases.keys()) reactionEffects.cancelAlias(key);
+  };
+
+  const enforceLineLimit = (): void => {
+    while (lines.size + pending.length > lineLimit()) {
+      const oldest = oldestRenderedLine();
+      const pendingIndex = oldestPendingIndex();
+      if (oldest && (pendingIndex < 0 || oldest.receivedAt <= pending[pendingIndex]!.receivedAt)) removeLine(oldest);
+      else if (pendingIndex >= 0) discardPending(pending.splice(pendingIndex, 1)[0]);
+      else break;
     }
   };
 
-  const handle = (event: IrcEvent): void => {
+  const enforceCapacity = (receivedAt: number): boolean => {
+    while (lines.size + pending.length >= lineLimit()) {
+      const oldest = oldestRenderedLine();
+      const pendingIndex = oldestPendingIndex();
+      const pendingOldest = pendingIndex >= 0 ? pending[pendingIndex] : undefined;
+      const oldestAt = oldest && pendingOldest
+        ? Math.min(oldest.receivedAt, pendingOldest.receivedAt)
+        : oldest?.receivedAt ?? pendingOldest?.receivedAt;
+      if (oldestAt === undefined || receivedAt < oldestAt) return false;
+      if (pendingOldest && (!oldest || pendingOldest.receivedAt <= oldest.receivedAt)) {
+        discardPending(pending.splice(pendingIndex, 1)[0]);
+      } else if (oldest) removeLine(oldest);
+      else return false;
+    }
+    return true;
+  };
+
+  function oldestRenderedLine(): RenderedLine | undefined {
+    return [...lines].reduce<RenderedLine | undefined>((oldest, line) =>
+      !oldest || line.receivedAt < oldest.receivedAt ? line : oldest, undefined);
+  }
+
+  function oldestPendingIndex(): number {
+    let index = -1;
+    for (let candidate = 0; candidate < pending.length; candidate += 1) {
+      if (index < 0 || pending[candidate]!.receivedAt < pending[index]!.receivedAt) index = candidate;
+    }
+    return index;
+  }
+
+  function pruneToHeight(): void {
+    if (disposed || theme.layout !== "stack" || lines.size <= 1) return;
+    const frame = root.getBoundingClientRect();
+    if (frame.height <= 0) return;
+    const view = root.ownerDocument.defaultView;
+    const style = view?.getComputedStyle(root);
+    const verticalInsets = [
+      style?.paddingTop, style?.paddingBottom, style?.borderTopWidth, style?.borderBottomWidth,
+    ].reduce((sum, value) => sum + (Number.parseFloat(value ?? "") || 0), 0);
+    const availableHeight = Math.max(0, frame.height - verticalInsets);
+    const measured = [...lines].map((line) => {
+      const bounds = line.node.getBoundingClientRect();
+      const margin = Number.parseFloat(view?.getComputedStyle(line.node).marginBlockEnd ?? "") || 0;
+      return { line, height: Math.max(0, bounds.height + margin) };
+    });
+    let totalHeight = measured.reduce((sum, item) => sum + item.height, 0);
+    if (totalHeight <= availableHeight + 1) return;
+    const heightByLine = new Map(measured.map((item) => [item.line, item.height]));
+    while (totalHeight > availableHeight + 1 && lines.size > 1) {
+      const oldest = oldestRenderedLine();
+      if (!oldest) break;
+      totalHeight -= heightByLine.get(oldest) ?? 0;
+      removeLine(oldest);
+    }
+  }
+
+  function rememberModeration(event: Extract<IrcEvent, { type: "CLEARMSG" | "CLEARCHAT" }>): void {
+    if (backlogFetches === 0) return;
+    const room = moderationRoom(event.tags, event.channel);
+    if (event.type === "CLEARMSG") {
+      if (event.messageId) rememberTombstone(moderatedMessageIds, aliasKey(room, event.messageId), true);
+      return;
+    }
+    const timestamp = moderationTimestamp(event.tags);
+    if (!event.target && !event.targetUserId) {
+      rememberTombstone(clearedRoomTimestamps, room, timestamp);
+      return;
+    }
+    if (event.targetUserId) rememberTombstone(clearedUserTimestamps, `${room}\u0000id:${event.targetUserId}`, timestamp);
+    if (event.target) rememberTombstone(clearedUserTimestamps, `${room}\u0000login:${event.target.toLowerCase()}`, timestamp);
+  }
+
+  function isModeratedBacklog(event: CommonMessage, receivedAt: number): boolean {
+    if (backlogFetches === 0) return false;
+    const room = moderationRoom(event.tags, event.channel);
+    if (event.id && moderatedMessageIds.has(aliasKey(room, event.id))) return true;
+    const timestamp = clearedRoomTimestamps.get(room);
+    if (timestamp !== undefined && receivedAt <= timestamp) return true;
+    const userId = event.tags["user-id"];
+    const userTimestamp = userId ? clearedUserTimestamps.get(`${room}\u0000id:${userId}`) : undefined;
+    if (userTimestamp !== undefined && receivedAt <= userTimestamp) return true;
+    const loginTimestamp = event.userLogin
+      ? clearedUserTimestamps.get(`${room}\u0000login:${event.userLogin.toLowerCase()}`)
+      : undefined;
+    return loginTimestamp !== undefined && receivedAt <= loginTimestamp;
+  }
+
+  function rememberTombstone<K, V>(target: Map<K, V>, key: K, value: V): void {
+    target.delete(key);
+    target.set(key, value);
+    if (target.size > MAX_MODERATION_TOMBSTONES) target.delete(target.keys().next().value as K);
+  }
+
+  const clearModerationTombstones = (): void => {
+    moderatedMessageIds.clear();
+    clearedUserTimestamps.clear();
+    clearedRoomTimestamps.clear();
+  };
+
+  const handle = (event: IrcEvent, receivedAt?: number): void => {
     if (event.type === "PRIVMSG" || event.type === "USERNOTICE") {
       if (shouldFilterMessage(event, theme)) return;
+      const timestamp = receivedAt ?? (event.historical ? timestampFromMessage(event) : Date.now());
+      if (event.historical && isModeratedBacklog(event, timestamp)) return;
       const alias = messageAlias(event, `local:${++localMessageId}`);
       const reaction = parseReactionEvent(event);
       if (event.sourceId) {
@@ -326,16 +517,31 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       }
       if (event.id) {
         const previous = linesByAlias.get(alias.key);
-        if (previous) removeAlias(previous, alias.key);
-        removeQueuedAlias(alias.key);
-        reactionEffects.cancelAlias(alias.key);
+        if (previous) {
+          if (previous.event.historical && !event.historical) {
+            previous.event = event;
+            if (reaction) {
+              reactionEffects.enqueue(event, reaction, alias);
+              reactionEffects.attachLine(alias.key, previous.node);
+            }
+          }
+          return;
+        }
+        const previousPending = findQueued((item) => item.aliases.has(alias.key));
+        if (previousPending) {
+          if (previousPending.event.historical && !event.historical) {
+            previousPending.event = event;
+            if (reaction) reactionEffects.enqueue(event, reaction, alias);
+          }
+          return;
+        }
       }
       if (reaction) reactionEffects.enqueue(event, reaction, alias);
-      const item: PendingMessage = { event, receivedAt: Date.now(), aliases: new Map([[alias.key, alias]]) };
+      const item: PendingMessage = { event, receivedAt: timestamp, aliases: new Map([[alias.key, alias]]) };
       if (theme.layout === "ticker") {
         tickerQueue.enqueue(item);
       } else {
-        enforceCapacity();
+        if (!enforceCapacity(timestamp)) return;
         pending.push(item);
       }
       scheduleFlush();
@@ -347,12 +553,16 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
           if (results.some((result) => result.status === "fulfilled" && result.value)) refreshBadges();
         });
       }
-      if (event.tags["user-id"] && options.paints) {
+      if ((theme.showPaints || (theme.showBadges && theme.badges7tv)) && !providerSettingsDeferred && event.tags["user-id"] && options.paints) {
         void options.paints.load(event.tags["user-id"]).then(() => refreshPaints(event.tags["user-id"]));
+      }
+      if (theme.showBadges && event.tags["user-id"] && options.thirdPartyBadges) {
+        void options.thirdPartyBadges.load(event.tags["user-id"]);
       }
       return;
     }
     if (event.type === "CLEARMSG") {
+      rememberModeration(event);
       if (event.messageId) {
         const room = moderationRoom(event.tags, event.channel);
         const key = aliasKey(room, event.messageId);
@@ -365,6 +575,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       return;
     }
     if (event.type === "CLEARCHAT") {
+      rememberModeration(event);
       const room = moderationRoom(event.tags, event.channel);
       if (!event.target && !event.targetUserId) {
         reactionEffects.clearRoom(room);
@@ -389,6 +600,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   };
 
   const armLifetime = (line: RenderedLine, lifetime: number): void => {
+    if (theme.neverFade) return;
     line.lifetimeTimer = setTimeout(() => {
       if (theme.motion === "none") {
         removeLine(line);
@@ -404,6 +616,9 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     if (scheduled && scheduleHandle !== undefined) cancel(scheduleHandle);
     scheduled = false;
     scheduleHandle = undefined;
+    if (layoutScheduled && layoutScheduleHandle !== undefined) cancel(layoutScheduleHandle);
+    layoutScheduled = false;
+    layoutScheduleHandle = undefined;
     pending = [];
     tickerQueue.clear();
     tickerActive = undefined;
@@ -414,20 +629,42 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     linesBySourceId.clear();
   };
 
+  const view = root.ownerDocument.defaultView;
+  const ResizeObserverClass = view?.ResizeObserver;
+  const resizeObserver = ResizeObserverClass ? new ResizeObserverClass(scheduleHeightPrune) : undefined;
+  resizeObserver?.observe(root);
+  view?.addEventListener("resize", scheduleHeightPrune);
+
   applyTheme();
   return {
     handle,
+    beginBacklogFetch() {
+      if (backlogFetches === 0) clearModerationTombstones();
+      backlogFetches += 1;
+      let ended = false;
+      return () => {
+        if (ended) return;
+        ended = true;
+        backlogFetches = Math.max(0, backlogFetches - 1);
+        if (backlogFetches === 0) clearModerationTombstones();
+      };
+    },
     setTheme(nextTheme) {
       const previousLayout = theme.layout;
       const previousMotion = theme.motion;
+      const previousNeverFade = theme.neverFade;
       if (previousLayout !== nextTheme.layout) changeLayout(nextTheme.layout);
       else if (previousLayout === "ticker" && previousMotion !== nextTheme.motion) {
         changeLayout("stack");
         changeLayout("ticker");
       }
       theme = nextTheme;
+      providerSettingsDeferred = false;
       if (theme.channels.length > 0) activeChannels = normalizeChannels(theme.channels);
       applyTheme();
+      if (theme.layout === "stack" && previousNeverFade && !theme.neverFade) {
+        for (const line of lines) armLifetime(line, theme.lifetime - (Date.now() - line.receivedAt));
+      }
       if (theme.layout === "ticker" && tickerActive && theme.motion === "none") scheduleFlush();
       if (theme.layout === "ticker" && !tickerActive && tickerQueue.size > 0) scheduleFlush();
       if (theme.layout === "stack" && pending.length > 0) scheduleFlush();
@@ -435,14 +672,20 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     setChannels(channels) {
       activeChannels = normalizeChannels(channels);
       for (const line of lines) updateChannelMarker(line);
+      scheduleHeightPrune();
     },
     clear,
     dispose() {
+      disposed = true;
+      resizeObserver?.disconnect();
+      view?.removeEventListener("resize", scheduleHeightPrune);
       clear();
       reactionEffects.dispose();
       unsubscribePaints?.();
+      unsubscribeThirdPartyBadges?.();
       options.emotes?.dispose();
       options.badges?.dispose();
+      options.thirdPartyBadges?.dispose();
       options.paints?.dispose();
       options.pronouns?.dispose();
     },
@@ -456,6 +699,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   ): { node: HTMLElement; record: RenderedLine } {
     const row = document.createElement("div");
     row.setAttribute("class", "chat-line");
+    row.dataset.receivedAt = String(receivedAt);
     const highlighted = event.tags["msg-id"] === "highlighted-message";
     const gigantified = isGigantified(event);
     if (highlighted) row.classList.add("chat-highlighted");
@@ -480,7 +724,8 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     const color = nameColorFor(event, config);
     name.style.setProperty("color", color);
     const userId = event.tags["user-id"] ?? "";
-    applyNamePaint(name, options.paints?.resolve(userId), color);
+    const paint = config.showPaints && !providerSettingsDeferred ? options.paints?.resolve(userId) : undefined;
+    applyNamePaint(name, paint, color);
     const pronouns = document.createElement("span");
     pronouns.setAttribute("class", "chat-pronouns");
     if (config.showPronouns && options.pronouns && event.userLogin) {
@@ -536,7 +781,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     }
     const badges = document.createElement("span");
     badges.setAttribute("class", "chat-badges");
-    appendBadgeImages(badges, event, config, options.badges);
+    appendBadgeImages(badges, event, config, options.badges, options.paints, options.thirdPartyBadges);
     const sourceRoom = document.createElement("span");
     sourceRoom.setAttribute("class", "chat-source-room");
     if (foreignRoom && event.sourceRoomId) {
@@ -580,12 +825,14 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     return { node: row, record };
   }
 
-  function refreshBadges(): void {
-    if (!theme.showBadges || !options.badges) return;
+  function refreshBadges(userId?: string): void {
     for (const line of lines) {
+      if (userId && line.userId !== userId) continue;
       const target = line.node.querySelector<HTMLElement>(".chat-badges");
-      if (target) appendBadgeImages(target, line.event, theme, options.badges, true);
+      if (target) appendBadgeImages(target, line.event, theme, options.badges, options.paints, options.thirdPartyBadges, true);
+      watchLineImages(line.node);
     }
+    scheduleHeightPrune();
   }
 
   function updateChannelMarker(line: RenderedLine): void {
@@ -629,6 +876,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   }
 
   function refreshPaints(userId?: string): void {
+    if (!theme.showPaints || providerSettingsDeferred) return;
     for (const line of lines) {
       if (userId && line.userId !== userId) continue;
       const name = line.node.querySelector<HTMLElement>(".chat-name");
@@ -642,23 +890,48 @@ function appendBadgeImages(
   event: CommonMessage,
   theme: ThemeConfig,
   badges: BadgeLookup | undefined,
+  paints: PaintLookup | undefined,
+  thirdPartyBadges: ThirdPartyBadgeLookup | undefined,
   replace = false,
 ): void {
-  if (!theme.showBadges || !badges) return;
   if (replace) container.replaceChildren();
+  if (!theme.showBadges) return;
   const broadcasterId = event.sourceRoomId && event.sourceRoomId !== event.roomId ? event.sourceRoomId : event.roomId;
-  for (const badge of badges.resolve(event.badges, broadcasterId)) {
-    if (!isAllowedImageUrl(badge.url)) continue;
+  const append = (name: string, url: string, source: string): void => {
+    if (!isAllowedImageUrl(url)) return;
     const image = container.ownerDocument.createElement("img");
     image.setAttribute("class", "chat-badge");
-    image.setAttribute("src", badge.url);
-    image.setAttribute("alt", `${badge.name} ${badge.version}`);
-    image.setAttribute("title", `${badge.name} ${badge.version}`);
+    image.dataset.badgeSource = source;
+    image.setAttribute("src", url);
+    image.setAttribute("alt", name);
+    image.setAttribute("title", name);
     image.setAttribute("decoding", "async");
     image.setAttribute("height", String(Math.round(theme.fontSize)));
     image.style.setProperty("height", `${theme.fontSize}px`);
     image.style.setProperty("width", "auto");
     container.appendChild(image);
+  };
+  for (const badge of badges?.resolve(event.badges, broadcasterId) ?? []) {
+    append(`${badge.name} ${badge.version}`, badge.url, "twitch");
+  }
+  const userId = event.tags["user-id"] ?? "";
+  const sevenTvBadge = paints?.resolveBadge(userId) as SevenTvBadge | undefined;
+  if (sevenTvBadge && isExpectedBadgeHost(sevenTvBadge.url, "cdn.7tv.app")) {
+    append(sevenTvBadge.name, sevenTvBadge.url, "7tv");
+  }
+  for (const badge of thirdPartyBadges?.resolve(userId) ?? []) {
+    const host = badge.provider === "badgesBttv" ? "cdn.betterttv.net"
+      : badge.provider === "badgesFfz" ? "cdn.frankerfacez.com" : "fourtf.com";
+    if (isExpectedBadgeHost(badge.url, host)) append(badge.name, badge.url, badge.provider);
+  }
+}
+
+function isExpectedBadgeHost(value: string, hostname: string): boolean {
+  if (!isAllowedImageUrl(value)) return false;
+  try {
+    return new URL(value).hostname.toLowerCase() === hostname;
+  } catch {
+    return false;
   }
 }
 
@@ -703,6 +976,15 @@ function isGigantified(event: CommonMessage): boolean {
     event.tags["msg-param-power-up-name"] === "Gigantify an Emote";
 }
 
+function timestampFromMessage(event: CommonMessage): number {
+  const sentAt = event.tags["tmi-sent-ts"];
+  if (sentAt && /^\d{1,16}$/u.test(sentAt)) {
+    const timestamp = Number(sentAt);
+    if (Number.isSafeInteger(timestamp) && timestamp >= 0) return timestamp;
+  }
+  return Date.now();
+}
+
 function messageAlias(event: CommonMessage, localId: string): MessageAlias {
   const room = event.roomId || normalizeChannels([event.channel])[0] || event.channel.toLowerCase();
   const id = event.id ?? (event.sourceId ? `source:${event.sourceId}` : localId);
@@ -711,6 +993,15 @@ function messageAlias(event: CommonMessage, localId: string): MessageAlias {
 
 function moderationRoom(tags: Record<string, string>, channel: string): string {
   return tags["room-id"] || normalizeChannels([channel])[0] || channel.toLowerCase();
+}
+
+function moderationTimestamp(tags: Record<string, string>): number {
+  const value = tags["tmi-sent-ts"];
+  if (value && /^\d{1,16}$/u.test(value)) {
+    const timestamp = Number(value);
+    if (Number.isSafeInteger(timestamp) && timestamp >= 0) return timestamp;
+  }
+  return Date.now();
 }
 
 function aliasKey(room: string, id: string | null): string {

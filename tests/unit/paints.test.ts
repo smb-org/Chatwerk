@@ -8,6 +8,73 @@ const changeMap = (id: string, object: unknown) => ({ id, kind: 0, actor: { id: 
 afterEach(() => vi.useRealTimers());
 
 describe("7TV paints", () => {
+  it("loads 7TV badges through the shared cosmetics query and entitlement events", async () => {
+    vi.useFakeTimers();
+    const callbacks = new Map<string, (event: SevenTvEvent) => void>();
+    const eventApi = {
+      subscribe: vi.fn((type: string, condition: Record<string, string>, listener: (event: SevenTvEvent) => void) => {
+        callbacks.set(type, listener);
+        void condition;
+        return vi.fn();
+      }),
+      onReconnect: vi.fn(() => vi.fn()),
+      dispose: vi.fn(),
+    };
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { query: string };
+      if (request.query.includes("userByConnection")) {
+        expect(request.query).toContain("badge_id");
+        return json({ data: { u0: { id: "7tv-user", style: { badge_id: "badge-1" } } } });
+      }
+      expect(request.query).toContain("badges { id name tooltip host { url } }");
+      return json({ data: { cosmetics: { badges: [{
+        id: "badge-1", name: "Event winner", tooltip: "Event winner", host: { url: "//cdn.7tv.app/badge/badge-1" },
+      }] } } });
+    });
+    const paints = createPaintLookup({ eventApi, fetcher, enabled: false, badgesEnabled: true });
+    paints.setChannelId("1234");
+    callbacks.get("entitlement.create")?.({ type: "entitlement.create", body: changeMap("ent-1", {
+      kind: "BADGE", ref_id: "badge-1", user: { connections: [{ platform: "TWITCH", id: "42" }] },
+    }) });
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(paints.resolveBadge("42")).toEqual({
+      name: "Event winner", url: "https://cdn.7tv.app/badge/badge-1/2x.webp",
+    });
+
+    callbacks.get("entitlement.delete")?.({ type: "entitlement.delete", body: changeMap("ent-1", {
+      kind: "BADGE", ref_id: "badge-1", user: { connections: [{ platform: "TWITCH", id: "42" }] },
+    }) });
+    expect(paints.resolveBadge("42")).toBeUndefined();
+    paints.dispose();
+  });
+
+  it("does not fetch or subscribe while paints are disabled and resumes when enabled", async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn(async () => json({ data: {} }));
+    const eventApi = {
+      subscribe: vi.fn(() => vi.fn()),
+      onReconnect: vi.fn(() => vi.fn()),
+      dispose: vi.fn(),
+    };
+    const paints = createPaintLookup({ eventApi, fetcher, enabled: false });
+    paints.setChannelId("1234");
+    void paints.load("42");
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(eventApi.subscribe).not.toHaveBeenCalled();
+
+    paints.setEnabled(true);
+    paints.setChannelId("1234");
+    expect(eventApi.subscribe).toHaveBeenCalledTimes(3);
+    void paints.load("42");
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(fetcher).toHaveBeenCalled();
+    paints.setEnabled(false);
+    const callsWhenDisabled = fetcher.mock.calls.length;
+    void paints.load("43");
+    expect(fetcher).toHaveBeenCalledTimes(callsWhenDisabled);
+    paints.dispose();
+  });
+
   it("subscribes by channel and applies real entitlement and cosmetic change maps", () => {
     const callbacks = new Map<string, (event: SevenTvEvent) => void>();
     const eventApi = {

@@ -14,15 +14,17 @@ export function createRoomScopeCoordinator(options: {
   paints: RoomScopePaints;
 }): {
   setChannels(channels: string[]): void;
+  setPaintsEnabled(enabled: boolean): void;
   handle(event: IrcEvent): void;
   reset(): void;
 } {
   const roomIds = new Map<string, string>();
   let channels: string[] = [];
+  let paintsEnabled = true;
 
   const updateScopes = (): void => {
     options.emotes.setChannelIds([...roomIds.values()]);
-    options.paints.setChannelId(channels[0] ? roomIds.get(channels[0]) ?? "" : "");
+    options.paints.setChannelId(paintsEnabled && channels[0] ? roomIds.get(channels[0]) ?? "" : "");
   };
 
   return {
@@ -32,6 +34,11 @@ export function createRoomScopeCoordinator(options: {
       for (const login of roomIds.keys()) {
         if (!selected.has(login)) roomIds.delete(login);
       }
+      updateScopes();
+    },
+    setPaintsEnabled(enabled) {
+      if (paintsEnabled === enabled) return;
+      paintsEnabled = enabled;
       updateScopes();
     },
     handle(event) {

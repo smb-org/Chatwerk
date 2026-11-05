@@ -115,7 +115,7 @@ describe("deployment headers", () => {
     }
   });
 
-  it("allows emote, badge, and optional pronoun providers only on overlay routes", () => {
+  it("allows badge, backlog, emote, and pronoun providers on overlays and Studio live preview", () => {
     const builtRules = parseRules(renderHeaders(source, publicOriginFor("local", undefined), {
       connectOrigins: ALLOWED_CONNECT_ORIGINS,
       imageHosts: ALLOWED_IMAGE_HOSTS,
@@ -127,9 +127,16 @@ describe("deployment headers", () => {
       for (const origin of ALLOWED_CONNECT_ORIGINS) expect(connect).toContain(origin);
       for (const host of ALLOWED_IMAGE_HOSTS) expect(images).toContain(`https://${host}`);
     }
-    for (const path of ["/", "/login", "/studio", "/studio/export"]) {
-      const rule = path.startsWith("/studio") ? "/studio*" : path.startsWith("/login") ? "/login*" : "/";
-      const policy = builtRules.get(rule)?.filter((line) => line.startsWith("Content-Security-Policy:")).join(" ") ?? "";
+    const studioPolicy = builtRules.get("/studio*")?.find((line) => line.startsWith("Content-Security-Policy:")) ?? "";
+    const studioConnect = studioPolicy.split("connect-src ")[1]?.split(";")[0] ?? "";
+    const studioImages = studioPolicy.split("img-src ")[1]?.split(";")[0] ?? "";
+    for (const origin of ALLOWED_CONNECT_ORIGINS) expect(studioConnect).toContain(origin);
+    for (const host of ALLOWED_IMAGE_HOSTS) expect(studioImages).toContain(`https://${host}`);
+    expect(ALLOWED_CONNECT_ORIGINS).toContain("https://api.chatterino.com");
+    expect(ALLOWED_CONNECT_ORIGINS).toContain("https://recent-messages.robotty.de");
+    expect(ALLOWED_IMAGE_HOSTS).toContain("fourtf.com");
+    for (const path of ["/", "/login", "/export.html"]) {
+      const policy = headersForPath(path).filter((line) => line.startsWith("Content-Security-Policy:")).join(" ");
       for (const origin of ALLOWED_CONNECT_ORIGINS) expect(policy).not.toContain(origin);
       for (const host of ALLOWED_IMAGE_HOSTS) expect(policy).not.toContain(`https://${host}`);
     }
