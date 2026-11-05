@@ -1147,6 +1147,8 @@ The streamer grants the scope once. Chatwerk immediately discards the user acces
 
 The implementation ceiling is broadcaster ownership: only overlays whose owner is the broadcaster receive Hype Train events, and each Durable Object checks that the broadcaster login is among its configured channels. An overlay owned by someone else gets no Hype Train, even when a helper can edit it. No active train state is persisted; an overlay opened during a train shows the treatment after its next progress event. A revocation is accepted only when its subscription status is a string other than `enabled` or `webhook_callback_verification_pending` and the body has no `event`; accepted revocations clear consent even for a status Twitch adds later, then best-effort delete the remaining subscriptions.
 
+Studio disables the Hype Train reaction and rehearsal unless the configured channels include the broadcaster's login, case-insensitively; a helper sees the same channel restriction, while an already-connected owner can still disconnect.
+
 Worker and browser tests use local signed fixtures and mocked Twitch API responses. They do not contact Twitch, verify a production callback, observe Twitch retries or revocations, or exercise an actual Hype Train. Those delivery behaviors remain unverified until a real train is available.
 
 ## GSTACK REVIEW REPORT

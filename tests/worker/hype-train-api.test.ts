@@ -9,15 +9,31 @@ const SESSION_KEY = "hype-train-worker-session-key";
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Hype Train Studio API", () => {
-  it("returns consent status for the active overlay owner", async () => {
+  it("returns the lowercase overlay owner login with consent status", async () => {
     const overlay = await seedOverlay(env.DB, { channel: "status_room" });
+    await env.DB.prepare("UPDATE users SET login = ? WHERE id = ?").bind("MiXeD_StreamEr", overlay.ownerId).run();
     const cookie = await mintSessionCookie(SESSION_KEY, overlay.ownerId);
     const response = await SELF.fetch(new Request(`https://chatwerk.test/api/hype-train?overlayId=${overlay.overlayId}`, {
       headers: { Cookie: cookie },
     }));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ role: "owner", connected: false });
+    expect(await response.json()).toEqual({ role: "owner", connected: false, ownerLogin: "mixed_streamer" });
+  });
+
+  it("returns the same broadcaster login with consent status for a helper", async () => {
+    const overlay = await seedOverlay(env.DB, { channel: "status_room" });
+    await env.DB.prepare("UPDATE users SET login = ? WHERE id = ?").bind("MiXeD_StreamEr", overlay.ownerId).run();
+    const helperId = `helper-${crypto.randomUUID()}`;
+    await env.DB.prepare("INSERT INTO users (id, login) VALUES (?, ?)").bind(helperId, `helper_${crypto.randomUUID().slice(0, 8)}`).run();
+    await env.DB.prepare("INSERT INTO overlay_editors (overlay_id, user_id) VALUES (?, ?)").bind(overlay.overlayId, helperId).run();
+    const cookie = await mintSessionCookie(SESSION_KEY, helperId);
+    const response = await SELF.fetch(new Request(`https://chatwerk.test/api/hype-train?overlayId=${overlay.overlayId}`, {
+      headers: { Cookie: cookie },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ role: "editor", connected: false, ownerLogin: "mixed_streamer" });
   });
 
   it("blocks a helper from disconnecting the broadcaster's consent", async () => {

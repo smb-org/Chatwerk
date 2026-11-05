@@ -200,7 +200,11 @@ async function getConsentStatus(request: Request, env: HypeTrainEnvironment): Pr
   if (!access) return Response.json({ error: "overlay-not-found" }, { status: 404 });
   const consent = await env.DB.prepare("SELECT user_id FROM hype_train_consents WHERE user_id = ?")
     .bind(access.overlay.owner_id).first<{ user_id: string }>();
-  return Response.json({ role: access.role, connected: Boolean(consent) }, { headers: { "Cache-Control": "no-store" } });
+  return Response.json({
+    role: access.role,
+    connected: Boolean(consent),
+    ownerLogin: access.overlay.owner_login.toLowerCase(),
+  }, { headers: { "Cache-Control": "no-store" } });
 }
 
 async function disconnectHypeTrain(request: Request, env: HypeTrainEnvironment, fetcher: typeof fetch): Promise<Response> {

@@ -50,6 +50,13 @@ export function addStudioOverlay(ownerId: string, name: string, channel: string)
   return { overlayId, token };
 }
 
+export function addStudioEditor(overlayId: string): { userId: string; login: string } {
+  const userId = `editor-${randomBytes(8).toString("hex")}`;
+  const login = `editor_${randomBytes(4).toString("hex")}`;
+  executeLocalSql(`INSERT INTO users (id, login) VALUES ('${userId}', '${login}'); INSERT INTO overlay_editors (overlay_id, user_id) VALUES ('${overlayId}', '${userId}');`);
+  return { userId, login };
+}
+
 export function addStudioSharedOverlay(editorId: string, name: string, channel = "shared_room"): {
   overlayId: string;
   token: string;

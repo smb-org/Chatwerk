@@ -13,7 +13,7 @@ export interface OverlayRecord {
 export type OverlayRole = "owner" | "editor";
 
 export interface OverlayAccess {
-  overlay: OverlayRecord;
+  overlay: AccessibleOverlayRecord;
   role: OverlayRole;
 }
 
