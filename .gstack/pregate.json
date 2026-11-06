@@ -1,0 +1,77 @@
+{
+  "$schema": "https://github.com/garrytan/gstack/docs/pregate.md#pregate-v1",
+  "runner": "node -e 'const s=require(\"child_process\").spawnSync,f=process.argv.slice(1),m=new Map;for(const p of f){const w=p.startsWith(\"tests/worker/\"),o=p.endsWith(\"features-off.test.ts\"),c=w?(o?\"vitest.worker.flags-off.config.ts\":\"vitest.worker.config.ts\"):(o?\"vitest.features-off.config.ts\":\"vitest.config.ts\");m.set(c,[...(m.get(c)||[]),p])}for(const [c,a]of m){const r=s(\"pnpm\",[\"exec\",\"vitest\",\"run\",\"--config\",c,...a],{stdio:\"inherit\"});if(r.status!==0)process.exit(r.status||1)}' {files}",
+  "dependencies": {
+    "src/renderer/**": [
+      "tests/unit/backlog.test.ts",
+      "tests/unit/emotes.test.ts",
+      "tests/unit/filters.test.ts",
+      "tests/unit/irc-client.test.ts",
+      "tests/unit/irc-parse.test.ts",
+      "tests/unit/live.test.ts",
+      "tests/unit/paints.test.ts",
+      "tests/unit/pronouns.test.ts",
+      "tests/unit/reactions.test.ts",
+      "tests/unit/render.test.ts",
+      "tests/unit/room-scopes.test.ts",
+      "tests/unit/scenarios.test.ts",
+      "tests/unit/seventv-events.test.ts",
+      "tests/unit/studio-assets.test.ts",
+      "tests/unit/third-party-badges.test.ts",
+      "tests/unit/ticker-queue.test.ts"
+    ],
+    "src/studio/**": [
+      "tests/unit/features-off.test.ts",
+      "tests/unit/preview-sizing.test.ts",
+      "tests/unit/studio-assets.test.ts",
+      "tests/unit/studio-retry.test.ts",
+      "tests/unit/studio-settings-tabs.test.ts",
+      "tests/unit/widget-export.test.ts"
+    ],
+    "src/worker/**": [
+      "tests/worker/auth.test.ts",
+      "tests/worker/badges.test.ts",
+      "tests/worker/config-write.test.ts",
+      "tests/worker/editors.test.ts",
+      "tests/worker/features-off.test.ts",
+      "tests/worker/gallery.test.ts",
+      "tests/worker/health.test.ts",
+      "tests/worker/hype-train-api.test.ts",
+      "tests/worker/hype-train-fanout.test.ts",
+      "tests/worker/hype-train-webhook.test.ts",
+      "tests/worker/hype-train.test.ts",
+      "tests/worker/live-socket.test.ts",
+      "tests/worker/pages.test.ts",
+      "tests/worker/rotate-link.test.ts"
+    ],
+    "src/shared/**": [
+      "tests/unit/backlog.test.ts",
+      "tests/unit/deployment/headers.test.ts",
+      "tests/unit/emotes.test.ts",
+      "tests/unit/features-off.test.ts",
+      "tests/unit/i18n.test.ts",
+      "tests/unit/live.test.ts",
+      "tests/unit/protocol-compat.test.ts",
+      "tests/unit/reactions.test.ts",
+      "tests/unit/render.test.ts",
+      "tests/unit/room-scopes.test.ts",
+      "tests/unit/studio-settings-tabs.test.ts",
+      "tests/unit/theme-schema.test.ts",
+      "tests/worker/editors.test.ts",
+      "tests/worker/features-off.test.ts"
+    ],
+    "public/**": [
+      "tests/unit/deployment/headers.test.ts",
+      "tests/unit/reactions.test.ts",
+      "tests/unit/service-worker.test.ts",
+      "tests/unit/studio-assets.test.ts"
+    ],
+    "scripts/**": [
+      "tests/unit/deployment/headers.test.ts",
+      "tests/unit/ports.test.ts"
+    ]
+  },
+  "empty_lanes": [
+    "docs/**"
+  ]
+}
