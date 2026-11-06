@@ -1,7 +1,11 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { seedStudioSession, setRange } from "./studio-session";
+
+async function frameSize(page: Page): Promise<{ width: number; height: number }> {
+  return page.frameLocator("#studio-preview").locator("body").evaluate(() => ({ width: innerWidth, height: innerHeight }));
+}
 
 test("shows display controls, disables dependent fields, and captures Studio at both widths", async ({ page }) => {
   await seedStudioSession(page);
@@ -65,6 +69,7 @@ test("shows display controls, disables dependent fields, and captures Studio at 
   await neverFade.uncheck();
   await ownLine.uncheck();
   await setRange(page, "maxChatHeight", 200);
+  await expect.poll(() => frameSize(page)).toEqual({ width: 400, height: 200 });
   await expect(page.locator("#theme-maxChatHeight-readout")).toHaveText("200px");
   await expect(page.locator("#status-visible")).toContainText("Saved");
 
@@ -89,19 +94,24 @@ test("shows display controls, disables dependent fields, and captures Studio at 
   }
 
   await setRange(page, "maxChatHeight", 0);
+  await page.locator("#preview-size-preset").selectOption("400x600");
+  await expect.poll(() => frameSize(page)).toEqual({ width: 400, height: 600 });
   await page.locator("#studio-preview").evaluate((frame) => { (frame as HTMLIFrameElement).style.height = "5000px"; });
   await page.locator("#rehearse-flood").click();
   const sample = page.frameLocator("#studio-preview");
   await expect(sample.locator(".chat-line")).toHaveCount(100, { timeout: 8_000 });
 });
 
-test("keeps the 400 by 600 frame, limits chat to 200px, and leaves reactions full-frame", async ({ page }) => {
+test("follows the theme height limit, then keeps a selected 600px frame with full-frame reactions", async ({ page }) => {
   test.setTimeout(30_000);
   await seedStudioSession(page);
   await page.setViewportSize({ width: 1_440, height: 900 });
   await page.goto("/studio");
   await page.locator("#first-run-done").click();
   await setRange(page, "maxChatHeight", 200);
+  await expect.poll(() => frameSize(page)).toEqual({ width: 400, height: 200 });
+  await page.locator("#preview-size-preset").selectOption("400x600");
+  await expect.poll(() => frameSize(page)).toEqual({ width: 400, height: 600 });
   await setRange(page, "textShadow", 4);
   await setRange(page, "backgroundOpacity", 0.5);
   await page.locator("#theme-backgroundColor-hex").fill("#090515");

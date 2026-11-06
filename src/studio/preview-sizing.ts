@@ -36,7 +36,7 @@ export function resizePreviewSourceSizeFromDrag(
       ? resizeSourceAxis(size.width, deltaX, scale, visibleWidth, MIN_SOURCE_WIDTH, MAX_SOURCE_WIDTH)
       : size.width,
     height: resizeHeight
-      ? resizeSourceAxis(size.height, deltaY, scale, visibleHeight, MIN_SOURCE_HEIGHT, MAX_SOURCE_HEIGHT)
+      ? resizeSourceAxis(size.height, -deltaY, scale, visibleHeight, MIN_SOURCE_HEIGHT, MAX_SOURCE_HEIGHT)
       : size.height,
   };
 }
