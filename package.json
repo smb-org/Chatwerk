@@ -14,7 +14,7 @@
     "build": "vite build && node scripts/render-headers.mjs ${CLOUDFLARE_ENV:-local}",
     "build:test": "vite build --mode test && node scripts/render-headers.mjs local",
     "build:production": "vite build && node scripts/render-headers.mjs production",
-    "deploy": "PUBLIC_ORIGIN=https://chatwerk.esembe.app pnpm run build:production && pnpm exec wrangler d1 migrations apply chatwerk --remote && pnpm exec wrangler deploy",
+    "deploy": "node scripts/deploy.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run --config vitest.config.ts && vitest run --config vitest.features-off.config.ts",
