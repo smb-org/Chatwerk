@@ -421,7 +421,7 @@ describe("live overlay client", () => {
     socket.receive({ type: "test-line", id: "test-id-1" });
     expect(onTestLine).toHaveBeenCalledWith("test-id-1", expect.any(Function));
     expect(socket.sent.map((line) => JSON.parse(line))).toContainEqual({
-      type: "ack", revision: 1, chatStatus: "connected", testId: "test-id-1",
+      type: "ack", revision: 1, chatStatus: "connected", buildId: expect.stringMatching(/^[a-f0-9]{16}$/u), testId: "test-id-1",
     });
     live.stop();
   });

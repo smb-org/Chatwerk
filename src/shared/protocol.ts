@@ -22,6 +22,7 @@ export interface ClientAckWireMessage {
   type: "ack";
   revision: number;
   chatStatus: ChatStatus;
+  buildId?: string;
   testId?: string;
   [key: string]: unknown;
 }
@@ -34,7 +35,7 @@ export interface TestLineWireMessage {
 export interface ClientCountsWireMessage {
   type: "clients";
   counts: Record<OverlayClientType, number>;
-  clients: Array<{ client: OverlayClientType; revision: number; chatStatus: ChatStatus }>;
+  clients: Array<{ client: OverlayClientType; revision: number; chatStatus: ChatStatus; buildId?: string | null }>;
 }
 
 export interface TestProgressWireMessage {

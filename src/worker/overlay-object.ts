@@ -10,6 +10,7 @@ const NO_REVISION_FRAME_LIMIT = 60;
 const MESSAGE_BYTE_LIMIT = 1024 * 1024;
 const MESSAGE_WINDOW_MS = 60_000;
 const UNDO_WINDOW_MS = 10_000;
+const BUILD_ID_PATTERN = /^[a-f0-9]{16}$/u;
 const frameEncoder = new TextEncoder();
 type ClientType = "browser" | "obs" | "widget" | "studio";
 type ChatStatus = "connected" | "reconnecting" | "idle";
@@ -20,6 +21,7 @@ interface SocketAttachment {
   client: ClientType | null;
   acknowledgedRevision: number | null;
   chatStatus: ChatStatus;
+  buildId: string | null;
   windowStartedAt: number;
   noRevisionFrameCount: number;
   messageByteCount: number;
@@ -303,6 +305,7 @@ export class OverlayObject extends DurableObject<Env> {
       const revision = value.revision as number;
       attachment.acknowledgedRevision = Math.max(attachment.acknowledgedRevision ?? -1, revision);
       attachment.chatStatus = value.chatStatus as ChatStatus;
+      attachment.buildId = isBuildId(value.buildId) ? value.buildId : null;
       writeAttachment(socket, attachment);
       if (typeof value.testId === "string" && value.testId.length <= 64) this.acknowledgeTest(value.testId, socket);
       this.broadcastClientStatus();
@@ -463,15 +466,18 @@ export class OverlayObject extends DurableObject<Env> {
     send(socket, { type: "clients", ...this.clientStatus() });
   }
 
-  private clientStatus(): { counts: Record<ClientType, number>; clients: Array<{ client: ClientType; revision: number; chatStatus: ChatStatus }> } {
+  private clientStatus(): { counts: Record<ClientType, number>; clients: Array<{ client: ClientType; revision: number; chatStatus: ChatStatus; buildId: string | null }> } {
     const counts: Record<ClientType, number> = { browser: 0, obs: 0, widget: 0, studio: 0 };
-    const clients: Array<{ client: ClientType; revision: number; chatStatus: ChatStatus }> = [];
+    const clients: Array<{ client: ClientType; revision: number; chatStatus: ChatStatus; buildId: string | null }> = [];
     for (const socket of this.ctx.getWebSockets(SOCKET_TAG)) {
       if (socket.readyState !== WebSocket.OPEN) continue;
       const attachment = readAttachment(socket);
       if (attachment.client === null || attachment.acknowledgedRevision === null) continue;
       counts[attachment.client] += 1;
-      clients.push({ client: attachment.client, revision: attachment.acknowledgedRevision, chatStatus: attachment.chatStatus });
+      clients.push({
+        client: attachment.client, revision: attachment.acknowledgedRevision, chatStatus: attachment.chatStatus,
+        buildId: attachment.buildId,
+      });
     }
     return { counts, clients };
   }
@@ -521,6 +527,7 @@ function emptyAttachment(channel: string | null = null): SocketAttachment {
     client: null,
     acknowledgedRevision: null,
     chatStatus: "idle",
+    buildId: null,
     windowStartedAt: Date.now(),
     noRevisionFrameCount: 0,
     messageByteCount: 0,
@@ -570,6 +577,7 @@ function readAttachment(socket: WebSocket): SocketAttachment {
       ? stored.acknowledgedRevision as number
       : null,
     chatStatus: isChatStatus(stored.chatStatus) ? stored.chatStatus : "idle",
+    buildId: isBuildId(stored.buildId) ? stored.buildId : null,
     windowStartedAt: Number.isSafeInteger(stored.windowStartedAt) ? stored.windowStartedAt as number : defaults.windowStartedAt,
     noRevisionFrameCount: safeCount(stored.noRevisionFrameCount, NO_REVISION_FRAME_LIMIT),
     messageByteCount: safeCount(stored.messageByteCount, MESSAGE_BYTE_LIMIT),
@@ -579,6 +587,7 @@ function readAttachment(socket: WebSocket): SocketAttachment {
     Object.keys(stored).some((field) => !fields.includes(field)) ||
     stored.socketId !== attachment.socketId || stored.channel !== attachment.channel || stored.client !== attachment.client ||
     stored.acknowledgedRevision !== attachment.acknowledgedRevision || stored.chatStatus !== attachment.chatStatus ||
+    stored.buildId !== attachment.buildId ||
     stored.windowStartedAt !== attachment.windowStartedAt || stored.noRevisionFrameCount !== attachment.noRevisionFrameCount ||
     stored.messageByteCount !== attachment.messageByteCount;
   if (needsMigration) writeAttachment(socket, attachment);
@@ -599,6 +608,10 @@ function isValidAck(value: Record<string, unknown>, attachment: SocketAttachment
 
 function isChatStatus(value: unknown): value is ChatStatus {
   return value === "connected" || value === "reconnecting" || value === "idle";
+}
+
+function isBuildId(value: unknown): value is string {
+  return typeof value === "string" && BUILD_ID_PATTERN.test(value);
 }
 
 function safeCount(value: unknown, maximum: number): number {

@@ -108,8 +108,10 @@ a.button:not([hidden]) { display: inline-flex; align-items: center; justify-cont
 .button:hover:not(:disabled) { border-color: var(--ui-muted); }
 .button-primary { min-height: 44px; color: var(--ui-accent-ink); background: var(--ui-accent); border-color: var(--ui-accent); font-weight: 600; }
 .button-quiet { background: transparent; }
-.connection-chip { flex: 0 0 auto; min-width: 156px; padding: 6px 10px; border: 1px solid var(--ui-line); border-radius: 999px; color: var(--ui-muted); font-family: var(--ui-font-data); font-size: 12px; text-align: center; }
+.connection-chip { flex: 0 0 auto; width: 156px; min-width: 156px; max-width: 156px; padding: 6px 10px; border: 1px solid var(--ui-line); border-radius: 999px; color: var(--ui-muted); font-family: var(--ui-font-data); font-size: 12px; text-align: center; }
+.connection-chip #connection-count { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connection-chip[data-count]:not([data-count="0"]) { color: var(--ui-ok); }
+.connection-chip[data-count]:not([data-count="0"])[data-outdated="true"] { color: var(--ui-accent); }
 .account-menu { position: relative; flex: 0 0 auto; }
 .account-menu > summary { display: flex; align-items: center; height: 36px; padding: 0 10px; list-style: none; cursor: pointer; border: 1px solid var(--ui-line); border-radius: 4px; }
 .account-menu > summary::-webkit-details-marker { display: none; }
@@ -546,7 +548,7 @@ dialog::backdrop { background: rgb(0 0 0 / 65%); }
 
 @media (max-width: 1100px) and (min-width: 1024px) {
   .workspace { grid-template-columns: minmax(400px, min(50%, 720px)) minmax(400px, 1fr); }
-  .connection-chip { min-width: 110px; padding-right: 7px; padding-left: 7px; font-size: 11px; }
+  .connection-chip { width: calc(16ch + 16px); min-width: 110px; max-width: calc(16ch + 16px); padding-right: 7px; padding-left: 7px; font-size: 11px; }
   .account-menu > summary { padding-right: 7px; padding-left: 7px; }
   .scenario-button { padding: 0 8px; }
 }
@@ -579,7 +581,7 @@ dialog::backdrop { background: rgb(0 0 0 / 65%); }
   .top-nav { display: none; }
   .link-copy { flex: 1 1 auto; max-width: none; }
   .link-copy input { display: none; }
-  .connection-chip { min-width: auto; padding: 5px 7px; font-size: 10px; }
+  .connection-chip { width: calc(16ch + 16px); min-width: 110px; max-width: calc(16ch + 16px); padding: 5px 7px; font-size: 10px; }
   .account-menu > summary { max-width: 72px; overflow: hidden; white-space: nowrap; }
   .active-overlay-label { display: none; }
   .channel-header-field { max-width: 112px; }

@@ -58,6 +58,36 @@ describe("live socket acknowledgements", () => {
     studio.socket.close();
   });
 
+  it("reports valid build ids and treats missing or malformed ids as unknown", async () => {
+    const overlay = await seedOverlay(env.DB);
+    const studio = await openSocket(overlay.token, "studio");
+    const browser = await openSocket(overlay.token, "widget");
+    await waitFor(() => browser.messages.some((message) => message.type === "config"));
+
+    browser.socket.send(JSON.stringify({ type: "ack", revision: 0, chatStatus: "connected" }));
+    await waitFor(() => studio.messages.some((message) => message.type === "clients" &&
+      (message.counts as Record<string, number>).widget === 1));
+    expect(studio.messages.at(-1)).toMatchObject({
+      clients: [expect.objectContaining({ client: "widget", revision: 0, chatStatus: "connected", buildId: null })],
+    });
+
+    browser.socket.send(JSON.stringify({ type: "ack", revision: 0, chatStatus: "idle", buildId: "../invalid" }));
+    await waitFor(() => studio.messages.at(-1)?.type === "clients" &&
+      (studio.messages.at(-1)?.clients as Array<{ buildId?: unknown; chatStatus?: unknown }> | undefined)?.[0]?.buildId === null &&
+      (studio.messages.at(-1)?.clients as Array<{ buildId?: unknown; chatStatus?: unknown }> | undefined)?.[0]?.chatStatus === "idle");
+    expect(studio.messages.at(-1)).toMatchObject({
+      clients: [expect.objectContaining({ client: "widget", chatStatus: "idle", buildId: null })],
+    });
+
+    browser.socket.send(JSON.stringify({ type: "ack", revision: 0, chatStatus: "connected", buildId: "0123456789abcdef" }));
+    await waitFor(() => (studio.messages.at(-1)?.clients as Array<{ buildId?: unknown }> | undefined)?.[0]?.buildId === "0123456789abcdef");
+    expect(studio.messages.at(-1)).toMatchObject({
+      clients: [expect.objectContaining({ client: "widget", chatStatus: "connected", buildId: "0123456789abcdef" })],
+    });
+    browser.socket.close();
+    studio.socket.close();
+  });
+
   it("broadcasts one local test event and reports shown of total after acknowledgement", async () => {
     const overlay = await seedOverlay(env.DB);
     const studio = await openSocket(overlay.token, "studio");

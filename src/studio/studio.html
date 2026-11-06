@@ -32,7 +32,9 @@
           <button class="button" id="copy-link" type="button" data-i18n="copy" data-i18n-aria-label="copyOverlayLink"></button>
           <span class="obs-size-hint" id="obs-size-hint" aria-live="polite"></span>
         </div>
-        <div class="connection-chip" id="connection-chip" aria-live="polite" data-count="0" data-i18n="connectionUnknown"></div>
+        <div class="connection-chip" id="connection-chip" aria-live="polite" aria-atomic="true" data-count="0">
+          <span id="connection-count" data-i18n="connectionUnknown"></span>
+        </div>
         <details class="account-menu" id="account-menu">
           <summary data-i18n="account"></summary>
           <div class="account-popover">

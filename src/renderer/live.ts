@@ -1,5 +1,6 @@
 import { DEFAULTS, SCHEMA_VERSION, type ThemeConfig } from "../shared/theme";
 import { decideConfigUpdate, type ChatStatus, type OverlayClientType } from "../shared/protocol";
+import { BUILD_ID } from "../shared/build-id";
 import { isValidChannel } from "./irc";
 
 export const LIVE_CACHE_KEY = "chatwerk-theme";
@@ -214,7 +215,9 @@ export function startLiveUpdates(options: LiveOptions): LiveHandle {
   };
   const acknowledge = (testId?: string): void => {
     if (stopped || revoked || !socket || socket.readyState !== 1 || state.revision < 0) return;
-    const message: Record<string, unknown> = { type: "ack", revision: state.revision, chatStatus: getChatStatus() };
+    const message: Record<string, unknown> = {
+      type: "ack", revision: state.revision, chatStatus: getChatStatus(), buildId: BUILD_ID,
+    };
     if (testId) message.testId = testId;
     try { socket.send(JSON.stringify(message)); } catch { /* reconnect will send the latest acknowledgement */ }
   };
