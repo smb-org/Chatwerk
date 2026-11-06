@@ -33,7 +33,7 @@ function trace(): IrcTrace {
   return { joins: [], parts: [], closes: 0 };
 }
 
-test("channel popover is anchored, does not move the page, and closes with focus restored", async ({ page }) => {
+test("channel popover stays visible without moving the page and closes with focus restored", async ({ page }) => {
   await seedStudioSession(page);
   await page.goto("/studio");
   await expect(page.locator("#status-visible")).toHaveText("Saved, rev 0");
@@ -48,8 +48,10 @@ test("channel popover is anchored, does not move the page, and closes with focus
   const after = await workspace.boundingBox();
   const popupBox = await popover.boundingBox();
   const fieldBox = await field.boundingBox();
+  const previewBox = await page.locator(".preview-column").boundingBox();
   expect(after).toEqual(before);
-  expect(popupBox!.x).toBeGreaterThanOrEqual(fieldBox!.x - 1);
+  expect(popupBox!.x).toBeGreaterThanOrEqual(0);
+  expect(popupBox!.x + popupBox!.width).toBeLessThanOrEqual(previewBox!.x);
   expect(popupBox!.y).toBeGreaterThan(fieldBox!.y);
   await expect(page.locator("[data-channel-new]")).toBeFocused();
   await page.locator("[data-channel-new]").fill("draftroom");
@@ -86,9 +88,6 @@ test("tokened overlays join on initial config and receive a header channel edit 
   await expect.poll(() => irc.joins).toContain("secondroom");
   expect(overlayPage.url()).toBe(overlayUrl);
 
-  // The open channel popover covers the preview's Live switch in the settings-left layout.
-  await page.keyboard.press("Escape");
-  await expect(page.locator("#channel-popover")).toBeHidden();
   await page.locator("#preview-mode-live").click();
   await expect(page.locator("#preview-mode-live")).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("#rehearse-quiet")).toBeDisabled();
@@ -114,6 +113,54 @@ test("tokened overlays join on initial config and receive a header channel edit 
   await expect.poll(() => irc.joins.length).toBeGreaterThan(joinsBeforeReload);
 
   await overlayPage.close();
+});
+
+test("keeps the channel popover clear of the preview switch at desktop widths in both languages", async ({ page }) => {
+  await seedStudioSession(page);
+  await page.goto("/studio");
+  await expect(page.locator("#status-visible")).toHaveText("Saved, rev 0");
+
+  for (const viewport of [
+    { width: 1024, height: 768 },
+    { width: 1280, height: 800 },
+    { width: 1440, height: 900 },
+  ]) {
+    for (const language of ["en", "de"] as const) {
+      await page.setViewportSize(viewport);
+      await page.evaluate((nextLanguage) => localStorage.setItem("chatwerk-language", nextLanguage), language);
+      await page.reload();
+      await expect(page.locator("#status-visible")).toHaveText(language === "en" ? "Saved, rev 0" : "Gespeichert, Rev. 0");
+      await page.locator("#channel-field-button").click();
+
+      const popover = page.locator("#channel-popover");
+      await expect(popover).toBeVisible();
+      await expect(popover.locator("[data-channel-new]")).toBeVisible();
+      const geometry = await page.evaluate(() => {
+        const popoverBox = document.querySelector<HTMLElement>("#channel-popover")!.getBoundingClientRect();
+        const previewBox = document.querySelector<HTMLElement>(".preview-column")!.getBoundingClientRect();
+        const switchBox = document.querySelector<HTMLElement>("#preview-mode-live")!.getBoundingClientRect();
+        const hit = document.elementFromPoint(switchBox.x + switchBox.width / 2, switchBox.y + switchBox.height / 2);
+        return {
+          popover: { left: popoverBox.left, top: popoverBox.top, right: popoverBox.right, bottom: popoverBox.bottom },
+          previewLeft: previewBox.left,
+          switchHit: hit?.id,
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+        };
+      });
+
+      expect(geometry.popover.left, `${language} at ${viewport.width}px`).toBeGreaterThanOrEqual(0);
+      expect(geometry.popover.top, `${language} at ${viewport.width}px`).toBeGreaterThanOrEqual(0);
+      expect(geometry.popover.right, `${language} at ${viewport.width}px`).toBeLessThanOrEqual(geometry.viewport.width);
+      expect(geometry.popover.bottom, `${language} at ${viewport.width}px`).toBeLessThanOrEqual(geometry.viewport.height);
+      expect(geometry.popover.right, `${language} at ${viewport.width}px`).toBeLessThanOrEqual(geometry.previewLeft);
+      expect(geometry.switchHit, `${language} at ${viewport.width}px`).toBe("preview-mode-live");
+
+      if (viewport.width === 1280 && language === "en") {
+        await mkdir(path.resolve(".tmp/shots"), { recursive: true });
+        await page.screenshot({ path: path.resolve(".tmp/shots/popover-1280.png") });
+      }
+    }
+  }
 });
 
 test("live without a channel shows the header hint and rehearsal stays unavailable", async ({ page }) => {
