@@ -93,6 +93,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   let scheduled = false;
   let scheduleHandle: unknown;
   const lines = new Set<RenderedLine>();
+  const heightPrunedLines = new Set<RenderedLine>();
   const linesByAlias = new Map<string, RenderedLine>();
   const linesBySourceId = new Map<string, RenderedLine>();
   const moderatedMessageIds = new Map<string, true>();
@@ -178,7 +179,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       if ((!theme.showPronouns || theme.hideNames) && pronounContainer) pronounContainer.textContent = "";
       else if (theme.showPronouns && !theme.hideNames && pronounContainer && !pronounContainer.textContent && options.pronouns && line.userLogin) {
         void options.pronouns.lookup(line.userLogin).then((value) => {
-          if (value && pronounContainer.isConnected) pronounContainer.textContent = ` (${value})`;
+          if (value && lines.has(line)) pronounContainer.textContent = ` (${value})`;
         });
       }
       const name = line.node.querySelector<HTMLElement>(".chat-name");
@@ -204,9 +205,11 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   };
 
   const removeLine = (line: RenderedLine): void => {
+    const wasVisible = !heightPrunedLines.has(line) && line.node.parentNode === root;
     if (line.lifetimeTimer !== undefined) clearTimeout(line.lifetimeTimer);
     if (line.removalTimer !== undefined) clearTimeout(line.removalTimer);
     lines.delete(line);
+    heightPrunedLines.delete(line);
     for (const key of line.aliases.keys()) {
       reactionEffects.detachLine(key);
       if (linesByAlias.get(key) === line) linesByAlias.delete(key);
@@ -214,6 +217,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     if (line.sourceId && linesBySourceId.get(line.sourceId) === line) linesBySourceId.delete(line.sourceId);
     if (tickerActive === line) tickerActive = undefined;
     line.node.remove();
+    if (wasVisible && heightPrunedLines.size > 0) scheduleHeightPrune();
   };
 
   const flush = (): void => {
@@ -244,9 +248,8 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       if (!theme.neverFade) armLifetime(line.record, remainingLifetime);
     }
     root.appendChild(fragment);
-    sortStackLines();
     for (const line of lines) watchLineImages(line.node);
-    scheduleHeightPrune();
+    pruneToHeight(false);
   };
 
   const scheduleFlush = (): void => {
@@ -328,10 +331,13 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   }
 
   function sortStackLines(): void {
-    const rows = [...root.children].filter((child) => child.nodeType === 1 &&
-      (child as HTMLElement).classList.contains("chat-line")) as HTMLElement[];
-    rows.sort((left, right) => Number(left.dataset.receivedAt ?? 0) - Number(right.dataset.receivedAt ?? 0));
-    for (const row of rows) root.appendChild(row);
+    const rows = [...lines]
+      .filter((line) => !heightPrunedLines.has(line) && line.node.parentNode === root)
+      .sort((left, right) => left.receivedAt - right.receivedAt);
+    const currentRows = [...root.children].filter((child) => child.classList.contains("chat-line")) as HTMLElement[];
+    let firstOutOfOrder = 0;
+    while (firstOutOfOrder < rows.length && currentRows[firstOutOfOrder] === rows[firstOutOfOrder]!.node) firstOutOfOrder += 1;
+    for (let index = firstOutOfOrder; index < rows.length; index += 1) root.appendChild(rows[index]!.node);
   }
 
   function flushStaticTicker(): void {
@@ -376,6 +382,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     lines.clear();
     linesByAlias.clear();
     linesBySourceId.clear();
+    heightPrunedLines.clear();
     tickerActive = undefined;
     pending = [];
     tickerQueue.clear();
@@ -433,8 +440,21 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     return index;
   }
 
-  function pruneToHeight(): void {
-    if (disposed || theme.layout !== "stack" || lines.size <= 1) return;
+  function pruneToHeight(restore = true): void {
+    if (disposed || theme.layout !== "stack" || lines.size === 0) return;
+    if (restore && heightPrunedLines.size > 0) {
+      const orderedLines = [...lines].sort((left, right) => left.receivedAt - right.receivedAt);
+      for (const line of [...heightPrunedLines].sort((left, right) => left.receivedAt - right.receivedAt)) {
+        if (!lines.has(line)) continue;
+        const lineIndex = orderedLines.indexOf(line);
+        const nextVisible = orderedLines.slice(lineIndex + 1).find((candidate) => candidate.node.parentNode === root);
+        root.insertBefore(line.node, nextVisible?.node ?? null);
+      }
+      heightPrunedLines.clear();
+      sortStackLines();
+    } else if (!restore) {
+      sortStackLines();
+    }
     const frame = root.getBoundingClientRect();
     if (frame.height <= 0) return;
     const view = root.ownerDocument.defaultView;
@@ -443,19 +463,31 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       style?.paddingTop, style?.paddingBottom, style?.borderTopWidth, style?.borderBottomWidth,
     ].reduce((sum, value) => sum + (Number.parseFloat(value ?? "") || 0), 0);
     const availableHeight = Math.max(0, frame.height - verticalInsets);
-    const measured = [...lines].map((line) => {
+    const visibleRows = [...lines].filter((line) => line.node.parentNode === root && !heightPrunedLines.has(line));
+    const measured = visibleRows.map((line) => {
       const bounds = line.node.getBoundingClientRect();
       const margin = Number.parseFloat(view?.getComputedStyle(line.node).marginBlockEnd ?? "") || 0;
       return { line, height: Math.max(0, bounds.height + margin) };
     });
-    let totalHeight = measured.reduce((sum, item) => sum + item.height, 0);
-    if (totalHeight <= availableHeight + 1) return;
-    const heightByLine = new Map(measured.map((item) => [item.line, item.height]));
-    while (totalHeight > availableHeight + 1 && lines.size > 1) {
-      const oldest = oldestRenderedLine();
-      if (!oldest) break;
-      totalHeight -= heightByLine.get(oldest) ?? 0;
-      removeLine(oldest);
+    const insertionOrder = new Map([...lines].map((line, index) => [line, index]));
+    const newestFirst = [...measured].sort((left, right) =>
+      right.line.receivedAt - left.line.receivedAt ||
+      (insertionOrder.get(right.line) ?? 0) - (insertionOrder.get(left.line) ?? 0));
+    const visibleLines = new Set<RenderedLine>();
+    let totalHeight = 0;
+    for (const [index, item] of newestFirst.entries()) {
+      visibleLines.add(item.line);
+      totalHeight += item.height;
+      if (index === 0 && item.height > availableHeight + 1) break;
+      if (index > 0 && totalHeight > availableHeight + 1) {
+        visibleLines.delete(item.line);
+        break;
+      }
+    }
+    for (const item of measured) {
+      if (visibleLines.has(item.line)) continue;
+      heightPrunedLines.add(item.line);
+      item.line.node.remove();
     }
   }
 
@@ -640,9 +672,8 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
 
   const view = root.ownerDocument.defaultView;
   const ResizeObserverClass = view?.ResizeObserver;
-  const resizeObserver = ResizeObserverClass ? new ResizeObserverClass(scheduleHeightPrune) : undefined;
+  const resizeObserver = ResizeObserverClass ? new ResizeObserverClass(() => pruneToHeight()) : undefined;
   resizeObserver?.observe(root);
-  view?.addEventListener("resize", scheduleHeightPrune);
 
   applyTheme();
   return {
@@ -690,7 +721,6 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     dispose() {
       disposed = true;
       resizeObserver?.disconnect();
-      view?.removeEventListener("resize", scheduleHeightPrune);
       clear();
       reactionEffects.dispose();
       unsubscribePaints?.();
@@ -742,11 +772,6 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     applyNamePaint(name, paint, color);
     const pronouns = document.createElement("span");
     pronouns.setAttribute("class", "chat-pronouns");
-    if (config.showPronouns && !config.hideNames && options.pronouns && event.userLogin) {
-      void options.pronouns.lookup(event.userLogin).then((value) => {
-        if (value && name.isConnected && !theme.hideNames) pronouns.textContent = ` (${value})`;
-      });
-    }
     const message = document.createElement("span");
     message.setAttribute("class", "chat-message");
     const text = event.text || event.tags["system-msg"] || "";
@@ -835,6 +860,11 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       lifetimeTimer: undefined,
       removalTimer: undefined,
     };
+    if (config.showPronouns && !config.hideNames && options.pronouns && event.userLogin) {
+      void options.pronouns.lookup(event.userLogin).then((value) => {
+        if (value && lines.has(record) && !theme.hideNames) pronouns.textContent = ` (${value})`;
+      });
+    }
     return { node: row, record };
   }
 

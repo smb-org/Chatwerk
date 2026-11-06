@@ -21,6 +21,8 @@ import {
   DEFAULT_PREVIEW_SOURCE_SIZE,
   calculatePreviewScale,
   isValidPreviewSourceSize,
+  resizePreviewSourceSizeFromDrag,
+  type PreviewResizeAxis,
   type PreviewSourceSize,
 } from "./preview-sizing";
 
@@ -75,6 +77,8 @@ const preview = $("#studio-preview") as HTMLIFrameElement;
 const previewWindow = $("#preview-window") as HTMLElement;
 const previewFrameWrap = $("#preview-frame-wrap") as HTMLElement;
 const previewScale = $("#preview-scale") as HTMLElement;
+const previewSizeDragLabel = $("#preview-size-drag-label") as HTMLOutputElement;
+const previewResizeHandles = [...document.querySelectorAll<HTMLButtonElement>("[data-preview-resize-axis]")];
 const previewSizePreset = $("#preview-size-preset") as HTMLSelectElement;
 const previewCustomSize = $("#preview-custom-size") as HTMLElement;
 const previewCustomWidth = $("#preview-custom-width") as HTMLInputElement;
@@ -123,6 +127,17 @@ let liveChatState: "connecting" | "waiting" | "message" | undefined;
 let liveChatChannel = "";
 let theme: ThemeConfig = DEFAULTS;
 let previewSourceSize: PreviewSourceSize = DEFAULT_PREVIEW_SOURCE_SIZE;
+let activePreviewResize: {
+  pointerId: number;
+  handle: HTMLButtonElement;
+  axis: PreviewResizeAxis;
+  startX: number;
+  startY: number;
+  startSize: PreviewSourceSize;
+  scale: number;
+  visibleWidth: number;
+  visibleHeight: number;
+} | undefined;
 let revision = 0;
 let channel = "";
 let connectedOutputs = 0;
@@ -1376,6 +1391,7 @@ function wireStaticControls(): void {
   });
   const resizeObserver = new ResizeObserver(updatePreviewScale);
   resizeObserver.observe(previewWindow);
+  previewResizeHandles.forEach(wirePreviewResizeHandle);
   window.addEventListener("resize", () => {
     updateHeaderResponsive();
     if (!channelPopover.hidden) positionChannelPopover();
@@ -2736,13 +2752,18 @@ function setScaleMode(enabled: boolean): void {
 }
 
 function updatePreviewScale(): void {
-  if (!previewWindow || !previewFrameWrap || !previewScale) return;
+  if (!previewWindow || !previewFrameWrap || !previewScale || activePreviewResize) return;
   const scale = oneToOne ? 1 : Math.max(0.05, calculatePreviewScale(
     previewSourceSize,
     previewWindow.clientWidth,
     previewWindow.clientHeight,
     20,
   ));
+  setPreviewFrameGeometry(scale);
+  previewScale.textContent = translate(language, "previewScale", { percent: Math.round(scale * 100) });
+}
+
+function setPreviewFrameGeometry(scale: number): void {
   preview.width = String(previewSourceSize.width);
   preview.height = String(previewSourceSize.height);
   preview.style.width = `${previewSourceSize.width}px`;
@@ -2750,10 +2771,93 @@ function updatePreviewScale(): void {
   previewFrameWrap.style.width = `${previewSourceSize.width * scale}px`;
   previewFrameWrap.style.height = `${previewSourceSize.height * scale}px`;
   preview.style.transform = `scale(${scale})`;
-  previewScale.textContent = translate(language, "previewScale", { percent: Math.round(scale * 100) });
+}
+
+function wirePreviewResizeHandle(handle: HTMLButtonElement): void {
+  const axis = handle.dataset.previewResizeAxis;
+  if (axis !== "width" && axis !== "height" && axis !== "both") return;
+  handle.addEventListener("pointerdown", (event) => beginPreviewResize(event, handle, axis));
+  handle.addEventListener("pointermove", updatePreviewResize);
+  handle.addEventListener("pointerup", finishPreviewResize);
+  handle.addEventListener("pointercancel", finishPreviewResize);
+  handle.addEventListener("keydown", (event) => resizePreviewFromKeyboard(event, axis));
+}
+
+function beginPreviewResize(event: PointerEvent, handle: HTMLButtonElement, axis: PreviewResizeAxis): void {
+  if (activePreviewResize || (event.pointerType === "mouse" && event.button !== 0)) return;
+  event.preventDefault();
+  const frame = previewFrameWrap.getBoundingClientRect();
+  const stage = previewWindow.getBoundingClientRect();
+  const stageStyle = getComputedStyle(previewWindow);
+  const borderLeft = Number.parseFloat(stageStyle.borderLeftWidth) || 0;
+  const borderRight = Number.parseFloat(stageStyle.borderRightWidth) || 0;
+  const borderTop = Number.parseFloat(stageStyle.borderTopWidth) || 0;
+  const borderBottom = Number.parseFloat(stageStyle.borderBottomWidth) || 0;
+  const paddingRight = Number.parseFloat(stageStyle.paddingRight) || 0;
+  const paddingBottom = Number.parseFloat(stageStyle.paddingBottom) || 0;
+  const scale = Number.parseFloat(preview.style.transform.match(/scale\(([\d.]+)\)/u)?.[1] ?? "1");
+  activePreviewResize = {
+    pointerId: event.pointerId,
+    handle,
+    axis,
+    startX: event.clientX,
+    startY: event.clientY,
+    startSize: { ...previewSourceSize },
+    scale,
+    visibleWidth: Math.max(100, (stage.right - borderRight - paddingRight - frame.left - 7) / scale),
+    visibleHeight: Math.max(100, (stage.bottom - borderBottom - paddingBottom - frame.top - 7) / scale),
+  };
+  previewFrameWrap.style.position = "absolute";
+  previewFrameWrap.style.left = `${frame.left - stage.left - borderLeft}px`;
+  previewFrameWrap.style.top = `${frame.top - stage.top - borderTop}px`;
+  previewSizeDragLabel.hidden = false;
+  previewSizeDragLabel.value = `${previewSourceSize.width} × ${previewSourceSize.height}`;
+  handle.setPointerCapture(event.pointerId);
+}
+
+function updatePreviewResize(event: PointerEvent): void {
+  const drag = activePreviewResize;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  const size = resizePreviewSourceSizeFromDrag(
+    drag.startSize,
+    event.clientX - drag.startX,
+    event.clientY - drag.startY,
+    drag.scale,
+    drag.visibleWidth,
+    drag.visibleHeight,
+    drag.axis,
+  );
+  applyPreviewSourceSize(size, false, false);
+  setPreviewFrameGeometry(drag.scale);
+  previewSizeDragLabel.value = `${size.width} × ${size.height}`;
+}
+
+function finishPreviewResize(event: PointerEvent): void {
+  const drag = activePreviewResize;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  activePreviewResize = undefined;
+  previewFrameWrap.style.position = "";
+  previewFrameWrap.style.left = "";
+  previewFrameWrap.style.top = "";
+  previewSizeDragLabel.hidden = true;
+  applyPreviewSourceSize(previewSourceSize, true);
+}
+
+function resizePreviewFromKeyboard(event: KeyboardEvent, axis: PreviewResizeAxis): void {
+  if (activePreviewResize) return;
+  const step = event.shiftKey ? 50 : 10;
+  const next = { ...previewSourceSize };
+  if ((axis === "width" || axis === "both") && event.key === "ArrowRight") next.width = Math.min(3840, next.width + step);
+  else if ((axis === "width" || axis === "both") && event.key === "ArrowLeft") next.width = Math.max(100, next.width - step);
+  else if ((axis === "height" || axis === "both") && event.key === "ArrowDown") next.height = Math.min(2160, next.height + step);
+  else if ((axis === "height" || axis === "both") && event.key === "ArrowUp") next.height = Math.max(100, next.height - step);
+  else return;
+  event.preventDefault();
+  applyPreviewSourceSize(next, true);
 }
 
 function loadPreviewSourceSize(overlayId: string): void {
+  cancelPreviewResize();
   try {
     const stored = localStorage.getItem(`chatwerk-source-size:${overlayId}`);
     const parsed: unknown = stored ? JSON.parse(stored) as unknown : DEFAULT_PREVIEW_SOURCE_SIZE;
@@ -2767,12 +2871,23 @@ function loadPreviewSourceSize(overlayId: string): void {
   updatePreviewScale();
 }
 
-function applyPreviewSourceSize(size: PreviewSourceSize, persist: boolean): void {
+function cancelPreviewResize(): void {
+  const drag = activePreviewResize;
+  if (!drag) return;
+  activePreviewResize = undefined;
+  if (drag.handle.hasPointerCapture(drag.pointerId)) drag.handle.releasePointerCapture(drag.pointerId);
+  previewFrameWrap.style.position = "";
+  previewFrameWrap.style.left = "";
+  previewFrameWrap.style.top = "";
+  previewSizeDragLabel.hidden = true;
+}
+
+function applyPreviewSourceSize(size: PreviewSourceSize, persist: boolean, updateScale = true): void {
   previewSourceSize = size;
   previewSizeError.hidden = true;
   updatePreviewSizeControl();
   updateSourceSizeHint();
-  updatePreviewScale();
+  if (updateScale) updatePreviewScale();
   if (persist && overlay) {
     try { localStorage.setItem(`chatwerk-source-size:${overlay.id}`, JSON.stringify(size)); } catch { /* This setting is a local Studio convenience. */ }
   }

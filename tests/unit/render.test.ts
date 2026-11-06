@@ -161,7 +161,7 @@ describe("text renderer", () => {
     renderer.dispose();
   });
 
-  it.each(["name-first", "message-first"] as const)("prunes oldest lines to fit maxChatHeight with %s order", (lineOrder) => {
+  it.each(["name-first", "message-first"] as const)("hides oldest lines on shrink and restores valid lines on grow with %s order", (lineOrder) => {
     let frameHeight = 200;
     const nativeGetBoundingClientRect = dom.window.HTMLElement.prototype.getBoundingClientRect;
     let resizeCallback: ResizeObserverCallback | undefined;
@@ -215,12 +215,17 @@ describe("text renderer", () => {
     resizeCallback?.([], {} as ResizeObserver);
     expect(root.querySelectorAll(".chat-line")).toHaveLength(2);
     expect(root.textContent).toContain("newest");
+
+    frameHeight = 300;
+    resizeCallback?.([], {} as ResizeObserver);
+    expect(root.querySelectorAll(".chat-line")).toHaveLength(4);
+    expect(root.textContent).toContain("old one");
     renderer.dispose();
     restoreResizeObserver();
     restoreResizeObserver = undefined;
   });
 
-  it("keeps one panel line taller than the height cap", () => {
+  it("keeps an oversized newest row and hides every older row behind it", () => {
     vi.spyOn(dom.window.HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
       if (this === root) return rect(0, 100, 400);
       if (!this.classList.contains("chat-line")) return { x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0, toJSON: () => ({}) };
@@ -236,14 +241,138 @@ describe("text renderer", () => {
       theme: { ...DEFAULTS, maxChatHeight: 100, panelEnabled: true },
       scheduler: (callback) => { callback(); return 1; },
     });
-    renderer.handle(parseIrcLine("@id=short :viewer!viewer@host PRIVMSG #room :short")!);
+    renderer.handle(parseIrcLine("@id=short-old :viewer!viewer@host PRIVMSG #room :short old")!);
+    renderer.handle(parseIrcLine("@id=short-middle :viewer!viewer@host PRIVMSG #room :short middle")!);
     renderer.handle(parseIrcLine("@id=huge :viewer!viewer@host PRIVMSG #room :huge")!);
     expect(root.querySelectorAll(".chat-line")).toHaveLength(1);
     expect(root.textContent).toContain("huge");
+    expect(root.textContent).not.toContain("short middle");
+    expect(root.textContent).not.toContain("short old");
+    expect(root.querySelector<HTMLElement>(".chat-line")!.getBoundingClientRect().top).toBeLessThan(0);
+    expect(root.querySelector<HTMLElement>(".chat-line")!.getBoundingClientRect().bottom).toBe(100);
     renderer.dispose();
   });
 
-  it("uses a historical timestamp for ordering and removes history before live lines", () => {
+  it("restores an older height-pruned row after the visible newest row is moderated", () => {
+    vi.spyOn(dom.window.HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === root) return rect(0, 100, 400);
+      if (!this.classList.contains("chat-line")) return { x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0, toJSON: () => ({}) };
+      return rect(40, 60, 400);
+    });
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, maxChatHeight: 100 },
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=older;room-id=10 :viewer!viewer@host PRIVMSG #room :older")!);
+    renderer.handle(parseIrcLine("@id=newest;room-id=10 :viewer!viewer@host PRIVMSG #room :newest")!);
+    expect(root.textContent).toContain("newest");
+    expect(root.textContent).not.toContain("older");
+
+    renderer.handle(parseIrcLine("@room-id=10;target-msg-id=newest :tmi.twitch.tv CLEARMSG #room :newest")!);
+
+    expect(root.querySelectorAll(".chat-line")).toHaveLength(1);
+    expect(root.textContent).toContain("older");
+    renderer.dispose();
+  });
+
+  it("does not move settled rows when sorting a new append preserves their order", () => {
+    vi.spyOn(dom.window.HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === root) return rect(0, 200, 400);
+      if (!this.classList.contains("chat-line")) return { x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0, toJSON: () => ({}) };
+      return rect(140, 60, 400);
+    });
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, maxChatHeight: 200 },
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=settled-1 :viewer!viewer@host PRIVMSG #room :first")!);
+    renderer.handle(parseIrcLine("@id=settled-2 :viewer!viewer@host PRIVMSG #room :second")!);
+    renderer.handle(parseIrcLine("@id=settled-3 :viewer!viewer@host PRIVMSG #room :third")!);
+    const settledRows = [...root.querySelectorAll<HTMLElement>(".chat-line")];
+    const appendSpy = vi.spyOn(root, "appendChild");
+
+    renderer.handle(parseIrcLine("@id=settled-4 :viewer!viewer@host PRIVMSG #room :fourth")!);
+
+    expect(appendSpy.mock.calls.filter(([node]) => settledRows.includes(node as HTMLElement)).length).toBe(0);
+    renderer.dispose();
+  });
+
+  it("does not reattach height-pruned rows just to measure newly flushed rows", () => {
+    vi.spyOn(dom.window.HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === root) return rect(0, 120, 400);
+      if (!this.classList.contains("chat-line")) return { x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0, toJSON: () => ({}) };
+      return rect(60, 60, 400);
+    });
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, maxChatHeight: 120 },
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=hidden-old :viewer!viewer@host PRIVMSG #room :hidden old")!);
+    const hiddenOld = root.querySelector<HTMLElement>(".chat-line")!;
+    renderer.handle(parseIrcLine("@id=middle :viewer!viewer@host PRIVMSG #room :middle")!);
+    renderer.handle(parseIrcLine("@id=newest :viewer!viewer@host PRIVMSG #room :newest")!);
+    expect(hiddenOld.isConnected).toBe(false);
+    const appendSpy = vi.spyOn(root, "appendChild");
+
+    renderer.handle(parseIrcLine("@id=next :viewer!viewer@host PRIVMSG #room :next")!);
+
+    expect(appendSpy.mock.calls.filter(([node]) => node === hiddenOld).length).toBe(0);
+    renderer.dispose();
+  });
+
+  it("keeps pending pronouns on a row while it is detached for height pruning", async () => {
+    let frameHeight = 100;
+    const resolvePronouns = new Map<string, (value: string | null) => void>();
+    let resizeCallback: ResizeObserverCallback | undefined;
+    const originalResizeObserver = Object.getOwnPropertyDescriptor(dom.window, "ResizeObserver");
+    Object.defineProperty(dom.window, "ResizeObserver", {
+      configurable: true,
+      value: class {
+        constructor(callback: ResizeObserverCallback) { resizeCallback = callback; }
+        observe(): void { /* The test changes the measured frame size directly. */ }
+        disconnect(): void { /* No browser resources are held by this fake. */ }
+      },
+    });
+    restoreResizeObserver = () => {
+      if (originalResizeObserver) Object.defineProperty(dom.window, "ResizeObserver", originalResizeObserver);
+      else delete (dom.window as unknown as { ResizeObserver?: unknown }).ResizeObserver;
+    };
+    vi.spyOn(dom.window.HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === root) return rect(0, frameHeight, 400);
+      if (!this.classList.contains("chat-line")) return { x: 0, y: 0, width: 0, height: 0, top: 0, right: 0, bottom: 0, left: 0, toJSON: () => ({}) };
+      return rect(frameHeight - root.querySelectorAll(".chat-line").length * 60, 60, 400);
+    });
+    const pronouns = {
+      lookup: vi.fn((login: string) => new Promise<string | null>((resolve) => { resolvePronouns.set(login, resolve); })),
+      dispose: vi.fn(),
+    };
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, maxChatHeight: 100, showPronouns: true },
+      pronouns,
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=pronoun-old;display-name=Old;login=old :old!old@host PRIVMSG #room :older")!);
+    const oldRow = root.querySelector<HTMLElement>(".chat-line")!;
+    renderer.handle(parseIrcLine("@id=pronoun-new;display-name=New;login=new :new!new@host PRIVMSG #room :newer")!);
+    expect(oldRow.isConnected).toBe(false);
+
+    resolvePronouns.get("old")?.("They/Them");
+    await Promise.resolve();
+    expect(oldRow.querySelector(".chat-pronouns")?.textContent).toBe(" (They/Them)");
+    frameHeight = 200;
+    resizeCallback?.([], {} as ResizeObserver);
+    expect(oldRow.isConnected).toBe(true);
+    expect(oldRow.textContent).toContain("(They/Them)");
+    renderer.dispose();
+    restoreResizeObserver();
+    restoreResizeObserver = undefined;
+  });
+
+  it("uses a historical timestamp for ordering and restores height-pruned history before live lines", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     let frameHeight = 300;
@@ -274,6 +403,9 @@ describe("text renderer", () => {
     expect(root.textContent).not.toContain("history");
     expect(root.textContent).toContain("live first");
     expect(root.textContent).toContain("live second");
+    frameHeight = 300;
+    renderer.setTheme({ ...DEFAULTS, maxChatHeight: 300, neverFade: true });
+    expect(root.textContent).toContain("history");
     renderer.dispose();
   });
 
@@ -298,6 +430,11 @@ describe("text renderer", () => {
   it("prunes lines after asynchronously refreshed badge images change their height", async () => {
     let badgeListener: ((userId: string) => void) | undefined;
     let badgesReady = false;
+    const scheduled: Array<() => void> = [];
+    const runScheduled = (): void => {
+      const callbacks = scheduled.splice(0);
+      for (const callback of callbacks) callback();
+    };
     const thirdParty = {
       setEnabled: vi.fn(),
       load: vi.fn(async () => undefined),
@@ -319,16 +456,21 @@ describe("text renderer", () => {
       root,
       theme: { ...DEFAULTS, maxChatHeight: 70 },
       thirdPartyBadges: thirdParty as unknown as import("../../src/renderer/third-party-badges").ThirdPartyBadgeLookup,
-      scheduler: (callback) => { callback(); return 1; },
+      scheduler: (callback) => { scheduled.push(callback); return scheduled.length; },
     });
     renderer.handle(parseIrcLine("@id=badge-old;user-id=42 :viewer!viewer@host PRIVMSG #room :old")!);
+    runScheduled();
     renderer.handle(parseIrcLine("@id=badge-new;user-id=42 :viewer!viewer@host PRIVMSG #room :new")!);
+    runScheduled();
     expect(root.querySelectorAll(".chat-line")).toHaveLength(2);
 
     badgesReady = true;
     badgeListener?.("42");
     await Promise.resolve();
 
+    expect(root.querySelectorAll(".chat-line")).toHaveLength(2);
+    expect(scheduled).toHaveLength(1);
+    runScheduled();
     expect(root.querySelectorAll(".chat-line")).toHaveLength(1);
     expect(root.textContent).toContain("new");
     expect(root.textContent).not.toContain("old");
@@ -1176,6 +1318,29 @@ describe("text renderer", () => {
     expectedStyle.style.color = ensureReadableNameColor("#000000", highlightBackground);
     expect(line.classList.contains("chat-reaction-highlight")).toBe(true);
     expect(name.style.color).toBe(expectedStyle.style.color);
+    renderer.dispose();
+  });
+
+  it("keeps a contiguous newest suffix when a middle row cannot fit", () => {
+    vi.spyOn(dom.window.HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === root) return rect(0, 100, 400);
+      if (!this.classList.contains("chat-line")) return rect(0, 0, 0);
+      const message = this.querySelector(".chat-message")?.textContent ?? "";
+      const height = message === "old" ? 20 : message === "middle" ? 80 : 40;
+      return rect(0, height, 400);
+    });
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, maxChatHeight: 100 },
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    for (const message of ["old", "middle", "newest"]) {
+      renderer.handle(parseIrcLine(`@id=row-${message} :viewer!viewer@host PRIVMSG #room :${message}`)!);
+    }
+    expect(root.querySelectorAll(".chat-line")).toHaveLength(1);
+    expect(root.textContent).toContain("newest");
+    expect(root.textContent).not.toContain("middle");
+    expect(root.textContent).not.toContain("old");
     renderer.dispose();
   });
 

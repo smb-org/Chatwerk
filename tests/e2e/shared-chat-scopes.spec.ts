@@ -50,6 +50,8 @@ test("alternating Shared Chat source rooms do not churn channel emote provider s
     const frame = document.createElement("iframe");
     frame.id = "shared-chat-preview";
     frame.setAttribute("sandbox", "allow-scripts");
+    frame.style.width = "400px";
+    frame.style.height = "600px";
     frame.src = "/overlay#client=studio";
     document.body.appendChild(frame);
   });

@@ -1151,6 +1151,8 @@ Studio disables the Hype Train reaction and rehearsal unless the configured chan
 
 Worker and browser tests use local signed fixtures and mocked Twitch API responses. They do not contact Twitch, verify a production callback, observe Twitch retries or revocations, or exercise an actual Hype Train. Those delivery behaviors remain unverified until a real train is available.
 
+The Studio preview can be resized by drag or keyboard at its right edge, bottom edge or corner. Chat rows rewrap at the new width. With less height, the newest row always stays visible, clipped at the top if it is too tall. Selection then stops at the first row that no longer fits, so an older row is never visible while a newer one is hidden. With more room, rows that are still valid return as far as `maxLines` and the fade deadline allow. The source size stays stored locally per overlay and the OBS hint follows it.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |

@@ -92,6 +92,10 @@
             <p class="live-no-channel-message" id="live-no-channel-message" data-i18n="noChannel" hidden></p>
             <div class="preview-frame-wrap" id="preview-frame-wrap">
               <iframe id="studio-preview" width="400" height="600" data-i18n-title="sampleChat" sandbox="allow-scripts" src="/overlay#client=studio" tabindex="-1"></iframe>
+              <output class="preview-size-drag-label" id="preview-size-drag-label" hidden aria-live="off"></output>
+              <button class="preview-resize-handle preview-resize-right" id="preview-resize-right" type="button" data-preview-resize-axis="width" data-i18n-aria-label="previewResizeWidth"></button>
+              <button class="preview-resize-handle preview-resize-bottom" id="preview-resize-bottom" type="button" data-preview-resize-axis="height" data-i18n-aria-label="previewResizeHeight"></button>
+              <button class="preview-resize-handle preview-resize-corner" id="preview-resize-corner" type="button" data-preview-resize-axis="both" data-i18n-aria-label="previewResizeBoth"></button>
             </div>
             <div class="preview-meta"><span id="preview-scale" data-i18n="previewScale" data-percent=""></span></div>
           </div>
