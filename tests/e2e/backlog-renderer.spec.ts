@@ -11,6 +11,74 @@ const wideSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="192" height="64"
 const ultraWideSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="768" height="64"><rect width="768" height="64" fill="#fa0"/></svg>';
 const squareSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="30" fill="#0af"/></svg>';
 
+test("updates a backlog row when its delayed 7TV emote set arrives without moving it", async ({ page }) => {
+  let releaseChannelEmotes!: () => void;
+  const channelEmotesGate = new Promise<void>((resolve) => { releaseChannelEmotes = resolve; });
+  let channelEmotesRequested = false;
+  await page.route("https://recent-messages.robotty.de/**", async (route) => {
+    const now = Date.now();
+    await route.fulfill({
+      status: 200,
+      headers: { ...corsHeaders, "content-type": "application/json" },
+      body: JSON.stringify({ messages: [
+        `@id=before;tmi-sent-ts=${now - 3_000};historical=1;display-name=Viewer :viewer!viewer@host PRIVMSG #room :before`,
+        `@id=late-pog;tmi-sent-ts=${now - 2_000};historical=1;display-name=Viewer :viewer!viewer@host PRIVMSG #room :Pog`,
+        `@id=after;tmi-sent-ts=${now - 1_000};historical=1;display-name=Viewer :viewer!viewer@host PRIVMSG #room :after`,
+      ], error: null, error_code: null }),
+    });
+  });
+  await page.route("https://7tv.io/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/emote-sets/global")) {
+      await route.fulfill({ json: { id: "fixture-global", emotes: [] } });
+      return;
+    }
+    if (/\/users\/twitch\/\d+$/u.test(url.pathname)) {
+      channelEmotesRequested = true;
+      await channelEmotesGate;
+      await route.fulfill({ json: {
+        user: { id: "fixture-user" },
+        emote_set: { id: "fixture-channel", emotes: [{ id: "pog", name: "Pog" }] },
+      } });
+      return;
+    }
+    await route.fulfill({ json: { id: "fixture-set", emotes: [] } });
+  });
+  await page.route("https://cdn.7tv.app/**", async (route) => {
+    await route.fulfill({ status: 200, contentType: "image/svg+xml", body: squareSvg });
+  });
+  await page.routeWebSocket("wss://events.7tv.io/v3", (socket) => {
+    socket.onMessage(() => undefined);
+    socket.send(JSON.stringify({ op: 1, d: { heartbeat_interval: 30_000, session_id: "delayed-emote" } }));
+  });
+  await page.context().routeWebSocket("wss://irc-ws.chat.twitch.tv/**", (socket) => {
+    socket.onMessage((message) => {
+      const join = /^JOIN #([a-z0-9_]+)$/u.exec(String(message).trim());
+      if (join) socket.send(`@room-id=10 :tmi.twitch.tv ROOMSTATE #${join[1]}`);
+    });
+  });
+
+  await page.goto("/overlay#channel=room&client=browser");
+  const chat = page.locator("#chat");
+  const rows = chat.locator(".chat-line");
+  const pogRow = rows.nth(1);
+  await expect.poll(() => channelEmotesRequested).toBe(true);
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toContainText("before");
+  await expect(rows.nth(1).locator(".chat-message")).toHaveText("Pog");
+  await expect(rows.nth(1).locator("img.chat-emote")).toHaveCount(0);
+  await expect(rows.nth(2)).toContainText("after");
+  expect(await pogRow.evaluate((row) => [...row.parentElement!.children].indexOf(row))).toBe(1);
+
+  releaseChannelEmotes();
+
+  await expect(rows.nth(1).locator('img.chat-emote[alt="Pog"]')).toHaveCount(1);
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(0)).toContainText("before");
+  await expect(rows.nth(2)).toContainText("after");
+  expect(await pogRow.evaluate((row) => [...row.parentElement!.children].indexOf(row))).toBe(1);
+});
+
 test("renders bare backlog words and 7TV emotes from the mocked recent-messages route", async ({ page }) => {
   await page.setViewportSize({ width: 400, height: 200 });
   let releaseBacklog!: () => void;

@@ -14,7 +14,7 @@ import { shouldFilterMessage } from "./filters";
 import { BoundedTickerQueue } from "./ticker-queue";
 import type { CommonMessage, IrcEvent } from "./irc-parse";
 import { parseReactionEvent } from "./irc-parse";
-import { splitMessage, type EmoteLookup } from "./emotes";
+import { splitMessage, type EmoteLookup, type MessagePart } from "./emotes";
 import { createReactionEffects, type HypeTrainReactionMessage } from "./reactions";
 import { isAllowedImageUrl } from "../shared/hosts";
 import type { BadgeLookup } from "./badges";
@@ -51,6 +51,8 @@ interface MessageAlias {
 
 interface RenderedLine {
   node: HTMLElement;
+  message: HTMLElement;
+  messageParts: MessagePart[];
   sourceId: string | null;
   channel: string;
   aliases: Map<string, MessageAlias>;
@@ -115,6 +117,10 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   let disposed = false;
   let layoutScheduled = false;
   let layoutScheduleHandle: unknown;
+  let emoteRefreshScheduled = false;
+  let emoteRefreshHandle: unknown;
+  let pendingEmoteRefreshAll = false;
+  const pendingEmoteRefreshRooms = new Set<string>();
   const watchedImages = new WeakSet<HTMLImageElement>();
 
   const scheduleHeightPrune = (): void => {
@@ -136,6 +142,25 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       if (image.complete) scheduleHeightPrune();
     }
   };
+
+  const scheduleEmoteRefresh = (channelId?: string): void => {
+    if (disposed) return;
+    if (channelId) pendingEmoteRefreshRooms.add(channelId);
+    else pendingEmoteRefreshAll = true;
+    if (emoteRefreshScheduled) return;
+    emoteRefreshScheduled = true;
+    const handle = schedule(() => {
+      emoteRefreshScheduled = false;
+      emoteRefreshHandle = undefined;
+      const allRooms = pendingEmoteRefreshAll;
+      const rooms = new Set(pendingEmoteRefreshRooms);
+      pendingEmoteRefreshAll = false;
+      pendingEmoteRefreshRooms.clear();
+      refreshEmotes(rooms, allRooms);
+    });
+    if (emoteRefreshScheduled) emoteRefreshHandle = handle;
+  };
+  const unsubscribeEmotes = options.emotes?.subscribe(scheduleEmoteRefresh);
 
   const applyTheme = (): void => {
     root.dataset.lineOrder = theme.lineOrder;
@@ -660,6 +685,11 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     if (layoutScheduled && layoutScheduleHandle !== undefined) cancel(layoutScheduleHandle);
     layoutScheduled = false;
     layoutScheduleHandle = undefined;
+    if (emoteRefreshScheduled && emoteRefreshHandle !== undefined) cancel(emoteRefreshHandle);
+    emoteRefreshScheduled = false;
+    emoteRefreshHandle = undefined;
+    pendingEmoteRefreshAll = false;
+    pendingEmoteRefreshRooms.clear();
     pending = [];
     tickerQueue.clear();
     tickerActive = undefined;
@@ -723,6 +753,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       resizeObserver?.disconnect();
       clear();
       reactionEffects.dispose();
+      unsubscribeEmotes?.();
       unsubscribePaints?.();
       unsubscribeThirdPartyBadges?.();
       options.emotes?.dispose();
@@ -774,50 +805,9 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     pronouns.setAttribute("class", "chat-pronouns");
     const message = document.createElement("span");
     message.setAttribute("class", "chat-message");
-    const text = event.text || event.tags["system-msg"] || "";
     const foreignRoom = Boolean(event.sourceRoomId && event.roomId && event.sourceRoomId !== event.roomId);
-    const emoteRoomId = foreignRoom ? event.sourceRoomId ?? undefined : event.roomId ?? undefined;
-    const parts = splitMessage(text, event.emotes, options.emotes, !foreignRoom, emoteRoomId);
-    for (const part of parts) {
-      if (part.type === "text") {
-        message.appendChild(document.createTextNode(part.value));
-      } else if (isAllowedImageUrl(part.url)) {
-        const image = document.createElement("img");
-        image.setAttribute("class", "chat-emote");
-        image.setAttribute("data-chatwerk-emote", "true");
-        if (gigantified) image.setAttribute("data-gigantified", "true");
-        image.setAttribute("src", part.url);
-        image.setAttribute("alt", part.name);
-        image.setAttribute("decoding", "async");
-        setEmoteImageHeight(image, config, gigantified);
-        if (part.overlays?.length) {
-          const wrapper = document.createElement("span");
-          wrapper.setAttribute("class", "chat-emote-wrapper");
-          wrapper.style.setProperty("display", "inline-block");
-          wrapper.style.setProperty("position", "relative");
-          wrapper.style.setProperty("vertical-align", "middle");
-          wrapper.appendChild(image);
-          for (const overlay of part.overlays) {
-            if (!isAllowedImageUrl(overlay.url)) continue;
-            const overlayImage = document.createElement("img");
-            overlayImage.setAttribute("class", "chat-emote chat-emote-overlay");
-            overlayImage.setAttribute("data-chatwerk-emote", "true");
-            if (gigantified) overlayImage.setAttribute("data-gigantified", "true");
-            overlayImage.setAttribute("src", overlay.url);
-            overlayImage.setAttribute("alt", overlay.name);
-            overlayImage.setAttribute("decoding", "async");
-            setEmoteImageHeight(overlayImage, config, gigantified);
-            overlayImage.style.setProperty("position", "absolute");
-            overlayImage.style.setProperty("inset", "0");
-            overlayImage.style.setProperty("z-index", "1");
-            wrapper.appendChild(overlayImage);
-          }
-          message.appendChild(wrapper);
-        } else message.appendChild(image);
-      } else {
-        message.appendChild(document.createTextNode(part.name));
-      }
-    }
+    const parts = splitEventMessage(event, options.emotes);
+    appendMessageParts(message, parts, config, gigantified);
     const badges = document.createElement("span");
     badges.setAttribute("class", "chat-badges");
     appendBadgeImages(badges, event, config, options.badges, options.paints, options.thirdPartyBadges);
@@ -848,6 +838,8 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     }
     const record: RenderedLine = {
       node: row,
+      message,
+      messageParts: parts,
       sourceId: event.sourceId,
       channel: event.channel.toLowerCase(),
       aliases: new Map(),
@@ -876,6 +868,37 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       watchLineImages(line.node);
     }
     scheduleHeightPrune();
+  }
+
+  function refreshEmotes(channelIds: Set<string>, allRooms: boolean): void {
+    for (const line of lines) {
+      if (!allRooms && !channelIds.has(emoteRoomIdFor(line.event) ?? "")) continue;
+      const parts = splitEventMessage(line.event, options.emotes);
+      if (!hasNewEmoteCoverage(line.messageParts, parts)) continue;
+      line.message.replaceChildren();
+      appendMessageParts(line.message, parts, theme, isGigantified(line.event));
+      line.messageParts = parts;
+      if (line.node.classList.contains("ticker-line")) {
+        const displayName = line.node.querySelector<HTMLElement>(".chat-name")?.textContent ?? "";
+        const badges = line.node.querySelector<HTMLElement>(".chat-badges");
+        const sourceRoom = line.node.querySelector<HTMLElement>(".chat-source-room");
+        if (badges && sourceRoom) {
+          line.tickerWidth = measureTickerWidth(
+            line.event,
+            theme,
+            parts,
+            displayName,
+            badges,
+            sourceRoom,
+            line.channelMarker,
+            root.ownerDocument,
+          );
+          updateTickerDuration(line);
+        }
+      }
+      watchLineImages(line.node);
+      scheduleHeightPrune();
+    }
   }
 
   function refreshName(lineNode: HTMLElement): void {
@@ -977,6 +1000,95 @@ function appendBadgeImages(
       : badge.provider === "badgesChatterino" ? "fourtf.com" : "cdn.chatterinohomies.com";
     if (isExpectedBadgeHost(badge.url, host)) append(badge.name, badge.url, badge.provider);
   }
+}
+
+function splitEventMessage(event: CommonMessage, emotes: EmoteLookup | undefined): MessagePart[] {
+  const foreignRoom = Boolean(event.sourceRoomId && event.roomId && event.sourceRoomId !== event.roomId);
+  const includeProviderEmotes = !foreignRoom;
+  const roomId = emoteRoomIdFor(event);
+  return splitMessage(event.text || event.tags["system-msg"] || "", event.emotes, emotes, includeProviderEmotes, roomId);
+}
+
+function emoteRoomIdFor(event: CommonMessage): string | undefined {
+  const foreignRoom = Boolean(event.sourceRoomId && event.roomId && event.sourceRoomId !== event.roomId);
+  return foreignRoom ? event.sourceRoomId ?? undefined : event.roomId ?? undefined;
+}
+
+function appendMessageParts(message: HTMLElement, parts: MessagePart[], theme: ThemeConfig, gigantified: boolean): void {
+  const document = message.ownerDocument;
+  for (const part of parts) {
+    if (part.type === "text") {
+      message.appendChild(document.createTextNode(part.value));
+    } else if (isAllowedImageUrl(part.url)) {
+      const image = document.createElement("img");
+      image.setAttribute("class", "chat-emote");
+      image.setAttribute("data-chatwerk-emote", "true");
+      if (gigantified) image.setAttribute("data-gigantified", "true");
+      image.setAttribute("src", part.url);
+      image.setAttribute("alt", part.name);
+      image.setAttribute("decoding", "async");
+      setEmoteImageHeight(image, theme, gigantified);
+      if (part.overlays?.length) {
+        const wrapper = document.createElement("span");
+        wrapper.setAttribute("class", "chat-emote-wrapper");
+        wrapper.style.setProperty("display", "inline-block");
+        wrapper.style.setProperty("position", "relative");
+        wrapper.style.setProperty("vertical-align", "middle");
+        wrapper.appendChild(image);
+        for (const overlay of part.overlays) {
+          if (!isAllowedImageUrl(overlay.url)) continue;
+          const overlayImage = document.createElement("img");
+          overlayImage.setAttribute("class", "chat-emote chat-emote-overlay");
+          overlayImage.setAttribute("data-chatwerk-emote", "true");
+          if (gigantified) overlayImage.setAttribute("data-gigantified", "true");
+          overlayImage.setAttribute("src", overlay.url);
+          overlayImage.setAttribute("alt", overlay.name);
+          overlayImage.setAttribute("decoding", "async");
+          setEmoteImageHeight(overlayImage, theme, gigantified);
+          overlayImage.style.setProperty("position", "absolute");
+          overlayImage.style.setProperty("inset", "0");
+          overlayImage.style.setProperty("z-index", "1");
+          wrapper.appendChild(overlayImage);
+        }
+        message.appendChild(wrapper);
+      } else message.appendChild(image);
+    } else {
+      message.appendChild(document.createTextNode(part.name));
+    }
+  }
+}
+
+function hasNewEmoteCoverage(previous: MessagePart[], next: MessagePart[]): boolean {
+  const previousRanges = emoteCoverage(previous);
+  const nextRanges = emoteCoverage(next);
+  return nextRanges.some((range) => !isRangeCovered(previousRanges, range.start, range.end)) &&
+    previousRanges.every((range) => isRangeCovered(nextRanges, range.start, range.end));
+}
+
+function emoteCoverage(parts: MessagePart[]): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  let offset = 0;
+  for (const part of parts) {
+    if (part.type === "text") {
+      offset += part.value.length;
+      continue;
+    }
+    const end = offset + part.name.length + (part.overlays?.reduce((total, overlay) => total + overlay.name.length, 0) ?? 0);
+    ranges.push({ start: offset, end });
+    offset = end;
+  }
+  return ranges;
+}
+
+function isRangeCovered(ranges: Array<{ start: number; end: number }>, start: number, end: number): boolean {
+  let cursor = start;
+  for (const range of ranges) {
+    if (range.end <= cursor) continue;
+    if (range.start > cursor) return false;
+    cursor = Math.max(cursor, range.end);
+    if (cursor >= end) return true;
+  }
+  return cursor >= end;
 }
 
 function isExpectedBadgeHost(value: string, hostname: string): boolean {

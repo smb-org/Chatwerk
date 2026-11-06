@@ -19,6 +19,7 @@ export interface EmoteProvider {
 
 export interface EmoteLookup {
   resolve(name: string, channelId?: string): EmoteAsset | undefined;
+  subscribe(listener: (channelId?: string) => void): () => void;
   add(assets: EmoteAsset[]): void;
   setChannelId(channelId: string): void;
   setChannelIds(channelIds: string[]): void;
@@ -66,6 +67,7 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
   const providers = options.providers ?? createDefaultProviders(options.fetcher ?? fetch, events);
   const timeoutMs = Math.max(DEFAULT_TIMEOUT_MS, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const scopes = new Map<string, Map<string, EmoteAsset>>();
+  const listeners = new Set<(channelId?: string) => void>();
   const tasks = new Map<string, ScopeTask>();
   const providerNames = providers.map((provider) => provider.name.trim().toUpperCase());
   const enabledProviders = new Set((options.enabledProviders ?? providerNames).map((name) => name.trim().toUpperCase()));
@@ -77,7 +79,11 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
     for (const item of assets) {
       if (item.name && typeof item.name === "string" && typeof item.url === "string") next.set(item.name, item);
     }
+    const previous = scopes.get(scope);
+    if (sameAssets(previous, next)) return;
     scopes.set(scope, next);
+    const channelScope = /:channel:(\d+)$/u.exec(scope);
+    for (const listener of [...listeners]) listener(channelScope?.[1]);
   };
 
   const run = async (
@@ -220,6 +226,10 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
       }
       return undefined;
     },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     add(assets) {
       if (disposed) return;
       replace("manual", [...(scopes.get("manual")?.values() ?? []), ...assets]);
@@ -261,6 +271,7 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
       for (const scope of [...tasks.keys()]) cancelTask(scope);
       for (const provider of providers) provider.dispose?.();
       scopes.clear();
+      listeners.clear();
       if (ownsEvents) events.dispose();
     },
   };
@@ -269,6 +280,15 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
     const known = ["7TV", "BTTV", "FFZ"].filter((name) => providerNames.includes(name));
     return [...known, ...providerNames.filter((name) => !["7TV", "BTTV", "FFZ"].includes(name))];
   }
+}
+
+function sameAssets(previous: Map<string, EmoteAsset> | undefined, next: Map<string, EmoteAsset>): boolean {
+  if (!previous || previous.size !== next.size) return false;
+  for (const [name, asset] of next) {
+    const old = previous.get(name);
+    if (!old || old.url !== asset.url || old.provider !== asset.provider || old.zeroWidth !== asset.zeroWidth) return false;
+  }
+  return true;
 }
 
 function scopeProviderName(provider: EmoteProvider): string {
