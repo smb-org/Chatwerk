@@ -31,6 +31,7 @@
   "hypeTrain": "Hype Train",
   "close": "Schließen",
   "previewScale": "Vorschau {percent} %",
+  "previewCanvasSize": "Streamauflösung",
   "previewResizeWidth": "Vorschau-Breite ändern",
   "previewResizeHeight": "Vorschau-Höhe ändern",
   "previewResizeBoth": "Vorschau-Breite und -Höhe ändern",

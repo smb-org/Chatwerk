@@ -49,6 +49,35 @@ describe("preview source drag sizing", () => {
 });
 
 describe("preview canvas geometry", () => {
+  it.each([
+    { canvasSize: { width: 1_280, height: 720 }, maximumPosition: { x: 480, y: 460 } },
+    { canvasSize: { width: 1_920, height: 1_080 }, maximumPosition: { x: 1_120, y: 820 } },
+    { canvasSize: { width: 2_560, height: 1_440 }, maximumPosition: { x: 1_760, y: 1_180 } },
+    { canvasSize: { width: 3_840, height: 2_160 }, maximumPosition: { x: 3_040, y: 1_900 } },
+  ] as const)("uses selected logical canvas $canvasSize.width×$canvasSize.height for scale and movement bounds", ({ canvasSize, maximumPosition }) => {
+    expect(calculatePreviewCanvasGeometry(
+      1_200,
+      800,
+      { top: 56, right: 20, bottom: 20, left: 20 },
+      canvasSize,
+    )).toEqual({
+      left: 20,
+      top: 91.75,
+      width: 1_160,
+      height: 652.5,
+      scale: 1_160 / canvasSize.width,
+    });
+    expect(movePreviewPositionBy({ x: 0, y: 0 }, { width: 800, height: 260 }, 5_000, 5_000, canvasSize))
+      .toEqual(maximumPosition);
+    expect(movePreviewPositionBy({ x: 40, y: 40 }, { width: 800, height: 260 }, 17, 21, canvasSize))
+      .toEqual({ x: 60, y: 60 });
+    expect(movePreviewPositionFromDrag({ x: 0, y: 0 }, { width: 800, height: 260 }, 5_000, 5_000, 0.5, canvasSize))
+      .toEqual(maximumPosition);
+    expect(resizePreviewSourceSizeFromDrag(
+      { width: 100, height: 100 }, 5_000, -5_000, 1, canvasSize.width, canvasSize.height, "both",
+    )).toEqual(canvasSize);
+  });
+
   it("fits a 16:9 canvas inside padded stage content", () => {
     expect(calculatePreviewCanvasGeometry(1_200, 800, { top: 56, right: 20, bottom: 20, left: 20 })).toEqual({
       left: 20,

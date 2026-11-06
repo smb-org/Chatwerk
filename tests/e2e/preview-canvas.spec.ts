@@ -126,6 +126,189 @@ test("Fit with an uploaded 16:9 image uses a 1920px canvas scale and a typed OBS
   await expect(page.locator("#preview-scale")).toHaveText(/\d+%/u);
 });
 
+test("selecting 1280x720 scales the frame, keeps the readout right, and persists after reload", async ({ page }) => {
+  await mkdir(".tmp/shots", { recursive: true });
+  await openStudio(page);
+  const canvasSize = page.locator("#preview-canvas-size");
+  await expect(canvasSize).toBeHidden();
+  await uploadBackground(page);
+  await expect(canvasSize).toBeVisible();
+
+  const readoutRightBefore = await page.locator(".preview-readouts").evaluate((element) => element.getBoundingClientRect().right);
+  await canvasSize.selectOption("1280x720");
+  const geometry = await page.evaluate(() => {
+    const canvas = document.querySelector<HTMLElement>("#preview-canvas")!.getBoundingClientRect();
+    const frame = document.querySelector<HTMLElement>("#preview-frame-wrap")!.getBoundingClientRect();
+    const readouts = document.querySelector<HTMLElement>(".preview-readouts")!.getBoundingClientRect();
+    const scaleReadout = document.querySelector<HTMLElement>("#preview-scale")!.parentElement!.getBoundingClientRect();
+    const stage = document.querySelector<HTMLElement>("#preview-window")!.getBoundingClientRect();
+    return {
+      frameToCanvasWidth: frame.width / canvas.width,
+      readoutRight: readouts.right,
+      scaleReadoutRight: scaleReadout.right,
+      stageRight: stage.right,
+    };
+  });
+  expect(geometry.frameToCanvasWidth).toBeCloseTo(0.625, 4);
+  expect(geometry.readoutRight).toBeCloseTo(readoutRightBefore, 0);
+  expect(geometry.readoutRight).toBeCloseTo(geometry.stageRight - 16, 0);
+  expect(geometry.scaleReadoutRight).toBeCloseTo(geometry.readoutRight, 0);
+  await expect(canvasSize).toHaveValue("1280x720");
+  await expect.poll(() => readCanvasPosition(page)).toEqual({ x: 40, y: 460, width: 800, height: 260 });
+  await page.locator(".preview-column").screenshot({ path: ".tmp/shots/canvas-720.png" });
+
+  await page.locator("#preview-size-preset").selectOption("custom");
+  await page.locator("#preview-custom-height").fill("820");
+  await page.locator("#preview-custom-apply").click();
+  await page.locator("#preview-resize-top").focus();
+  await page.keyboard.press("ArrowDown");
+  await expect.poll(() => readCanvasPosition(page)).toEqual({ x: 40, y: 0, width: 800, height: 720 });
+  await page.locator("#preview-custom-height").fill("720");
+  await page.locator("#preview-custom-apply").click();
+  const handles = await page.evaluate(() => {
+    const select = document.querySelector<HTMLElement>("#preview-canvas-size")!.getBoundingClientRect();
+    const handle = document.querySelector<HTMLElement>("#preview-resize-top")!.getBoundingClientRect();
+    return {
+      overlaps: select.left < handle.right && select.right > handle.left && select.top < handle.bottom && select.bottom > handle.top,
+      handleHit: document.elementFromPoint(handle.x + handle.width / 2, handle.y + handle.height / 2)?.id,
+    };
+  });
+  expect(handles.overlaps).toBe(false);
+  expect(handles.handleHit).toBe("preview-resize-top");
+
+  await page.locator("#preview-move-control").focus();
+  for (let step = 0; step < 20; step += 1) await page.keyboard.press("Shift+ArrowRight");
+  await expect.poll(() => readCanvasPosition(page)).toEqual({ x: 480, y: 0, width: 800, height: 720 });
+  await page.locator("#preview-resize-right").focus();
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(() => readCanvasPosition(page)).toEqual({ x: 480, y: 0, width: 800, height: 720 });
+  await moveBy(page, "#preview-frame-wrap", -10_000, 0);
+  await expect.poll(() => readCanvasPosition(page)).toEqual({ x: 0, y: 0, width: 800, height: 720 });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileLayout = await page.evaluate(() => {
+    const bounds = (selector: string) => document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+    const overlaps = (left: DOMRect, right: DOMRect) =>
+      left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
+    const stage = bounds("#preview-window");
+    const readouts = bounds(".preview-readouts");
+    const sample = bounds(".preview-mode-chip");
+    const topHandle = bounds("#preview-resize-top");
+    const cornerHandle = bounds("#preview-resize-corner");
+    const frame = bounds("#preview-frame-wrap");
+    return {
+      readoutRight: readouts.right,
+      stageRight: stage.right,
+      scaleReadoutRight: document.querySelector<HTMLElement>("#preview-scale")!.parentElement!.getBoundingClientRect().right,
+      readoutBelowFrame: readouts.top >= frame.bottom,
+      readoutOverlapsSample: overlaps(readouts, sample),
+      readoutOverlapsTopHandle: overlaps(readouts, topHandle),
+      readoutOverlapsCornerHandle: overlaps(readouts, cornerHandle),
+    };
+  });
+  expect(mobileLayout.readoutRight).toBeCloseTo(mobileLayout.stageRight - 8, 0);
+  expect(mobileLayout.scaleReadoutRight).toBeCloseTo(mobileLayout.readoutRight, 0);
+  expect(mobileLayout.readoutBelowFrame).toBe(true);
+  expect(mobileLayout.readoutOverlapsSample).toBe(false);
+  expect(mobileLayout.readoutOverlapsTopHandle).toBe(false);
+  expect(mobileLayout.readoutOverlapsCornerHandle).toBe(false);
+
+  await page.reload();
+  await expect(canvasSize).toHaveValue("1280x720");
+});
+
+test("canvas controls and resize handles stay clickable around the custom size bar", async ({ page }) => {
+  await mkdir(".tmp/shots", { recursive: true });
+  await openStudio(page);
+  await uploadBackground(page);
+  await page.locator("#preview-canvas-size").selectOption("1280x720");
+  await page.locator("#preview-size-preset").selectOption("custom");
+  await expect(page.locator("#preview-custom-size")).toBeVisible();
+
+  for (const width of [1_024, 1_280, 1_440]) {
+    await page.setViewportSize({ width, height: 1_000 });
+    const geometry = await page.evaluate(() => {
+      const bounds = (selector: string) => {
+        const rect = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height };
+      };
+      const centerHit = (selector: string) => {
+        const rect = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
+        return document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)?.id;
+      };
+      const overlaps = (left: ReturnType<typeof bounds>, right: ReturnType<typeof bounds>) =>
+        left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
+      const row = bounds(".preview-readouts");
+      const custom = bounds("#preview-custom-size");
+      const chip = bounds(".preview-mode-chip");
+      const stage = bounds("#preview-window");
+      return {
+        canvasMode: document.querySelector<HTMLElement>("#preview-window")!.dataset.canvasMode,
+        hits: {
+          width: centerHit("#preview-custom-width"),
+          height: centerHit("#preview-custom-height"),
+          apply: centerHit("#preview-custom-apply"),
+          select: centerHit("#preview-canvas-size"),
+          topHandle: centerHit("#preview-resize-top"),
+          cornerHandle: centerHit("#preview-resize-corner"),
+          move: centerHit("#preview-move-control"),
+        },
+        overlaps: {
+          rowAndCustomSize: overlaps(row, custom),
+          rowAndModeChip: overlaps(row, chip),
+          customSizeAndModeChip: overlaps(custom, chip),
+        },
+        rowWithinStage: row.left >= stage.left && row.right <= stage.right,
+      };
+    });
+
+    expect(geometry.canvasMode, `${width}px canvas mode`).toBe("true");
+    expect(geometry.hits, `${width}px hit targets`).toEqual({
+      width: "preview-custom-width",
+      height: "preview-custom-height",
+      apply: "preview-custom-apply",
+      select: "preview-canvas-size",
+      topHandle: "preview-resize-top",
+      cornerHandle: "preview-resize-corner",
+      move: "preview-move-control",
+    });
+    expect(geometry.overlaps, `${width}px overlays`).toEqual({
+      rowAndCustomSize: false,
+      rowAndModeChip: false,
+      customSizeAndModeChip: false,
+    });
+    expect(geometry.rowWithinStage, `${width}px readout row stays in stage`).toBe(true);
+
+    if (width === 1_024) await page.locator(".preview-column").screenshot({ path: ".tmp/shots/canvas-720-1024.png" });
+    if (width === 1_440) await page.locator(".preview-column").screenshot({ path: ".tmp/shots/canvas-720.png" });
+  }
+});
+
+test("an invalid stored canvas size falls back to 1920x1080", async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("chatwerk-preview-canvas-size", "2560x1080"));
+  await openStudio(page);
+  await expect(page.locator("#preview-canvas-size")).toHaveValue("1920x1080");
+});
+
+test("canvas sizing remains usable when browser storage throws", async ({ page }) => {
+  await page.setViewportSize({ width: 1_440, height: 1_000 });
+  await seedStudioSession(page);
+  await page.addInitScript(() => Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    get() { throw new DOMException("Storage is blocked", "SecurityError"); },
+  }));
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.goto("/studio");
+  await expect(page.locator("#status-visible")).toContainText(/Saved|Gespeichert/u);
+  const canvasSize = page.locator("#preview-canvas-size");
+  await expect(canvasSize).toHaveValue("1920x1080");
+  await uploadBackground(page);
+  await canvasSize.selectOption("1280x720");
+  await expect(canvasSize).toHaveValue("1280x720");
+  expect(pageErrors).toEqual([]);
+});
+
 test("dragging saves its local position, clamps all edges, preserves it per overlay and does not reload or save config", async ({ page }) => {
   let secondOverlayId = "";
   const identity = await openStudio(page, undefined, (current) => {
