@@ -353,7 +353,7 @@ describe("emote lookup", () => {
     lookup.dispose();
   });
 
-  it("uses arriving emotes for new lines and leaves rendered lines unchanged", async () => {
+  it("uses arriving emotes for existing and new lines", async () => {
     let finish!: (assets: EmoteAsset[]) => void;
     const lookup = createEmoteLookup({ providers: [{
       name: "late",
@@ -368,10 +368,9 @@ describe("emote lookup", () => {
 
     finish([asset("Late", "late")]);
     await vi.waitFor(() => expect(lookup.resolve("Late")).toBeDefined());
-    expect(root.querySelector(".chat-message")?.textContent).toBe("Late");
-    expect(root.querySelector(".chat-emote")).toBeNull();
+    expect(root.querySelector('img.chat-emote[alt="Late"]')).not.toBeNull();
     renderer.handle(parseIrcLine("@id=after :viewer!viewer@host PRIVMSG #room :Late")!);
-    expect(root.querySelectorAll(".chat-emote")).toHaveLength(1);
+    expect(root.querySelectorAll('img.chat-emote[alt="Late"]')).toHaveLength(2);
     renderer.dispose();
   });
 

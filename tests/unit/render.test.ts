@@ -3,7 +3,7 @@ import { JSDOM } from "jsdom";
 import { DEFAULTS, ensureReadableNameColor, estimateTextLegibility } from "../../src/shared/theme";
 import { createChatRenderer } from "../../src/renderer/render";
 import { parseIrcLine } from "../../src/renderer/irc-parse";
-import { createEmoteLookup } from "../../src/renderer/emotes";
+import { createEmoteLookup, type EmoteAsset } from "../../src/renderer/emotes";
 import { createBadgeLookup } from "../../src/renderer/badges";
 import { buildPaintStyle, createPaintLookup } from "../../src/renderer/paints";
 
@@ -27,6 +27,173 @@ function rect(top: number, height: number, width: number): DOMRect {
 }
 
 describe("text renderer", () => {
+  it("re-tokenizes only matching existing rows after emote assets arrive without extending their lifetime", () => {
+    vi.useFakeTimers();
+    let publish!: (assets: EmoteAsset[]) => void;
+    const emotes = createEmoteLookup({ providers: [{
+      name: "7TV",
+      loadGlobal(onUpdate) {
+        publish = onUpdate;
+        return new Promise<EmoteAsset[]>(() => undefined);
+      },
+    }] });
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, lifetime: 1_000, motion: "none" },
+      emotes,
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=late-emote;msg-id=highlighted-message :viewer!viewer@host PRIVMSG #room :Pog")!);
+    renderer.handle(parseIrcLine("@id=unrelated :viewer!viewer@host PRIVMSG #room :ordinary text")!);
+    const emoteRow = root.querySelector<HTMLElement>("[data-received-at]")!;
+    const unrelatedRow = [...root.querySelectorAll<HTMLElement>(".chat-line")].find((line) => line.textContent?.includes("ordinary text"))!;
+    const unrelatedContent = unrelatedRow.querySelector(".chat-message")!.firstChild;
+    const receivedAt = emoteRow.dataset.receivedAt;
+
+    expect(emoteRow.querySelector("img.chat-emote")).toBeNull();
+    vi.advanceTimersByTime(600);
+    publish([{ name: "Pog", url: "https://cdn.7tv.app/emote/pog/2x.webp", provider: "7TV" }]);
+
+    expect(emoteRow.querySelector('img.chat-emote[alt="Pog"]')).not.toBeNull();
+    expect(root.querySelectorAll(".chat-line")[0]).toBe(emoteRow);
+    expect(root.querySelectorAll(".chat-line")[1]).toBe(unrelatedRow);
+    expect(unrelatedRow.querySelector(".chat-message")!.firstChild).toBe(unrelatedContent);
+    expect(emoteRow.classList.contains("chat-highlighted")).toBe(true);
+    expect(emoteRow.dataset.receivedAt).toBe(receivedAt);
+    vi.advanceTimersByTime(399);
+    expect(emoteRow.isConnected).toBe(true);
+    expect(unrelatedRow.isConnected).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(emoteRow.isConnected).toBe(false);
+    expect(unrelatedRow.isConnected).toBe(false);
+    renderer.dispose();
+  });
+
+  it("preserves Twitch ranges and zero-width overlays when a late asset update re-tokenizes rows", () => {
+    let publish!: (assets: EmoteAsset[]) => void;
+    const emotes = createEmoteLookup({ providers: [{
+      name: "7TV",
+      loadGlobal(onUpdate) {
+        publish = onUpdate;
+        return new Promise<EmoteAsset[]>(() => undefined);
+      },
+    }] });
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, emotes, scheduler: (callback) => { callback(); return 1; } });
+    renderer.handle(parseIrcLine("@id=native;emotes=25:0-4 :viewer!viewer@host PRIVMSG #room :Kappa Pog")!);
+    renderer.handle(parseIrcLine("@id=overlay :viewer!viewer@host PRIVMSG #room :BaseOverlay")!);
+    const nativeRow = root.querySelector<HTMLElement>("[data-received-at]")!;
+    const overlayRow = [...root.querySelectorAll<HTMLElement>(".chat-line")].find((line) => line.querySelector(".chat-message")?.textContent === "BaseOverlay")!;
+
+    publish([
+      { name: "Pog", url: "https://cdn.7tv.app/emote/pog/2x.webp", provider: "7TV" },
+      { name: "Base", url: "https://cdn.7tv.app/emote/base/2x.webp", provider: "7TV" },
+      { name: "Overlay", url: "https://cdn.7tv.app/emote/overlay/2x.webp", provider: "7TV", zeroWidth: true },
+    ]);
+
+    expect([...nativeRow.querySelectorAll<HTMLImageElement>("img.chat-emote")].map((image) => image.alt)).toEqual(["Kappa", "Pog"]);
+    expect(overlayRow.querySelector(".chat-emote-wrapper img.chat-emote[alt=\"Base\"]")).not.toBeNull();
+    expect(overlayRow.querySelector("img.chat-emote-overlay[alt=\"Overlay\"]")).not.toBeNull();
+    renderer.dispose();
+  });
+
+  it("updates hidden height-pruned rows when matching emotes arrive", () => {
+    const nativeGetBoundingClientRect = dom.window.HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(dom.window.HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this === root) return rect(0, 30, 400);
+      if (this.classList.contains("chat-line")) return rect(0, 30, 400);
+      return nativeGetBoundingClientRect.call(this);
+    });
+    let publish!: (assets: EmoteAsset[]) => void;
+    const emotes = createEmoteLookup({ providers: [{
+      name: "7TV",
+      loadGlobal(onUpdate) {
+        publish = onUpdate;
+        return new Promise<EmoteAsset[]>(() => undefined);
+      },
+    }] });
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, maxChatHeight: 30 },
+      emotes,
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=hidden-emote :viewer!viewer@host PRIVMSG #room :Pog")!);
+    const hiddenRow = root.firstElementChild as HTMLElement;
+    renderer.handle(parseIrcLine("@id=newest :viewer!viewer@host PRIVMSG #room :newest")!);
+    expect(hiddenRow.isConnected).toBe(false);
+
+    publish([{ name: "Pog", url: "https://cdn.7tv.app/emote/pog/2x.webp", provider: "7TV" }]);
+
+    expect(hiddenRow.querySelector('img.chat-emote[alt="Pog"]')).not.toBeNull();
+    expect(hiddenRow.isConnected).toBe(false);
+    renderer.dispose();
+  });
+
+  it("batches emote refreshes to one scheduled tick across more than 100 rows", () => {
+    let publish!: (assets: EmoteAsset[]) => void;
+    const emotes = createEmoteLookup({ providers: [{
+      name: "7TV",
+      loadGlobal(onUpdate) {
+        publish = onUpdate;
+        return new Promise<EmoteAsset[]>(() => undefined);
+      },
+    }] });
+    const callbacks: Array<{ id: number; callback: () => void }> = [];
+    let scheduledCount = 0;
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, maxLines: 150 },
+      nodeLimit: 200,
+      emotes,
+      scheduler: (callback) => {
+        const id = ++scheduledCount;
+        callbacks.push({ id, callback });
+        return id;
+      },
+      cancelScheduled: (handle) => {
+        const index = callbacks.findIndex((item) => item.id === handle);
+        if (index >= 0) callbacks.splice(index, 1);
+      },
+    });
+    for (let index = 0; index < 120; index += 1) {
+      renderer.handle(parseIrcLine(`@id=batch-${index} :viewer!viewer@host PRIVMSG #room :Pog ${index}`)!);
+    }
+    callbacks.shift()!.callback();
+    const countBeforeUpdates = scheduledCount;
+
+    publish([{ name: "Pog", url: "https://cdn.7tv.app/emote/pog/2x.webp", provider: "7TV" }]);
+    publish([
+      { name: "Pog", url: "https://cdn.7tv.app/emote/pog/2x.webp", provider: "7TV" },
+      { name: "Other", url: "https://cdn.7tv.app/emote/other/2x.webp", provider: "7TV" },
+    ]);
+
+    expect(scheduledCount - countBeforeUpdates).toBe(1);
+    callbacks.shift()!.callback();
+    expect(root.querySelectorAll('img.chat-emote[alt="Pog"]')).toHaveLength(120);
+    renderer.dispose();
+  });
+
+  it("leaves already-rendered 7TV emotes in place when the provider is switched off", async () => {
+    const emotes = createEmoteLookup({ providers: [{
+      name: "7TV",
+      async loadGlobal() {
+        return [{ name: "Pog", url: "https://cdn.7tv.app/emote/pog/2x.webp", provider: "7TV" }];
+      },
+    }] });
+    await vi.waitFor(() => expect(emotes.resolve("Pog")).toBeDefined());
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, emotes, scheduler: (callback) => { callback(); return 1; } });
+    renderer.handle(parseIrcLine("@id=before-off :viewer!viewer@host PRIVMSG #room :Pog")!);
+    const existingRow = root.querySelector<HTMLElement>(".chat-line")!;
+
+    renderer.setTheme({ ...DEFAULTS, emotes7tv: false });
+
+    expect(existingRow.querySelector('img.chat-emote[alt="Pog"]')).not.toBeNull();
+    renderer.handle(parseIrcLine("@id=after-off :viewer!viewer@host PRIVMSG #room :Pog")!);
+    expect(root.querySelectorAll('img.chat-emote[alt="Pog"]')).toHaveLength(1);
+    expect(root.textContent).toContain("Pog");
+    renderer.dispose();
+  });
+
   it("keeps a default-theme message after 12 seconds and removes it after 120 seconds", () => {
     vi.useFakeTimers();
     const renderer = createChatRenderer({
