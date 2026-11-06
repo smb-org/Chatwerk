@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 import { DEFAULTS } from "../../src/shared/theme";
-import { seedStudioSession, setRange } from "./studio-session";
+import { seedStudioSession, setRange, setThemeChoice } from "./studio-session";
 
 const makeShotsDirectory = (): void => { mkdirSync(".tmp/shots", { recursive: true }); };
 
@@ -201,7 +201,7 @@ test("motion none keeps a static line highlight and creates no animation or rain
   await page.goto("/studio");
   await page.locator("#first-run-done").click();
   const preview = page.frameLocator("#studio-preview");
-  await page.locator('input[name="theme-motion"][value="none"]').check();
+  await setThemeChoice(page, "motion", "none");
   await expect(preview.locator('#chat[data-motion="none"]')).toHaveCount(1);
   await page.locator("#rehearse-raid").click();
 
@@ -217,7 +217,7 @@ test("ticker reactions leave the ticker queue and active line intact", async ({ 
   await page.locator("#first-run-done").click();
   const preview = page.frameLocator("#studio-preview");
   const chat = preview.locator("#chat");
-  await page.locator('input[name="theme-layout"][value="ticker"]').check();
+  await setThemeChoice(page, "layout", "ticker");
   await expect(chat).toHaveAttribute("data-layout", "ticker");
   await page.locator("#rehearse-bits").click();
   await expect(preview.locator('.reaction-burst[data-event-type="bits"]')).toHaveCount(1);

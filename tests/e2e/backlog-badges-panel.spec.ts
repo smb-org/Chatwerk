@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { seedStudioSession, setRange } from "./studio-session";
+import { seedStudioSession, setRange, setThemeChecked } from "./studio-session";
 
 const corsHeaders = {
   "access-control-allow-origin": "*",
@@ -130,8 +130,8 @@ test("Studio Live preview loads backlog and all badge sources from its opaque or
   await page.goto("/studio");
   await page.locator("#first-run-done").click();
   await expect.poll(() => backlogCalls).toBe(0);
-  for (const field of ["emotes7tv", "emotesBttv", "emotesFfz", "showPaints"]) await page.locator(`#theme-${field}`).uncheck();
-  await page.locator("#theme-panelEnabled").check();
+  for (const field of ["emotes7tv", "emotesBttv", "emotesFfz", "showPaints"]) await setThemeChecked(page, field, false);
+  await setThemeChecked(page, "panelEnabled");
   await setRange(page, "panelBorderWidth", 4);
   await setRange(page, "panelPadding", 12);
   await setRange(page, "linePadding", 4);

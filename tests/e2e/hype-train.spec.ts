@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 import { mintSessionCookie } from "../worker/worker-test-helpers";
 import { TEST_SESSION_KEY } from "./test-session";
-import { addStudioEditor, addStudioOverlay, seedStudioSession, setRange } from "./studio-session";
+import { addStudioEditor, addStudioOverlay, seedStudioSession, selectSettingsTabForField, setRange, setThemeChecked, setThemeChoice } from "./studio-session";
 
 const shots = ".tmp/shots";
 const statusResponse = (role: "owner" | "editor", connected: boolean, ownerLogin: string) => ({ role, connected, ownerLogin });
@@ -57,8 +57,8 @@ test("Hype Train rehearsal shows the frame ring and chip, then clears", async ({
   await expect(chat).toHaveAttribute("data-height-limited", "true");
   await page.locator("#rehearse-hype-train").click();
   await expect(preview.locator(".hype-train-chip")).toBeVisible();
-  await page.locator("#theme-panelEnabled").check();
-  await page.locator('input[name="theme-layout"][value="ticker"]').check();
+  await setThemeChecked(page, "panelEnabled");
+  await setThemeChoice(page, "layout", "ticker");
   await page.locator("#rehearse-hype-train").click();
   await expect(chat).toHaveAttribute("data-layout", "ticker");
   await expect(preview.locator(".hype-train-chip")).toBeVisible();
@@ -77,6 +77,7 @@ test("Studio shows owner connection states and the helper-only notice", async ({
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto("/studio");
   await page.locator("#first-run-done").click();
+  await selectSettingsTabForField(page, "reactionHypeTrain");
   const consent = page.locator("#hype-train-consent");
   await expect(consent).toHaveAttribute("data-state", "disconnected");
   await expect(consent.getByRole("button", { name: "Connect Hype Train" })).toBeVisible();
@@ -118,6 +119,7 @@ test("foreign channels grey out Hype Train without changing its saved value", as
   await page.setViewportSize({ width: 1360, height: 900 });
   await page.goto("/studio");
   await page.locator("#first-run-done").click();
+  await selectSettingsTabForField(page, "reactionHypeTrain");
   await page.locator("#settings-scroll").locator('[data-theme-field="reactionHypeTrain"]').scrollIntoViewIfNeeded();
   const field = page.locator('[data-theme-field="reactionHypeTrain"]');
   const checkbox = page.locator("#theme-reactionHypeTrain");
@@ -133,6 +135,13 @@ test("foreign channels grey out Hype Train without changing its saved value", as
   }, identity.token);
   expect(persistedBefore.config.reactionHypeTrain).toBe(true);
   await setStudioChannel(page, "foreign_room");
+  if (await page.locator("#channel-popover [data-channel-value]").count() > 1) {
+    await page.locator('#channel-popover [data-channel-focus="remove-1"]').click();
+  }
+  await expect.poll(async () => {
+    const response = await page.request.get("/api/overlay/config", { headers: { Authorization: `Bearer ${identity.token}` } });
+    return (await response.json() as { config: { channels: string[] } }).config.channels;
+  }).toEqual(["foreign_room"]);
   await expect(checkbox).toBeDisabled();
   await expect(checkbox).toBeChecked();
   await expect(rehearsal).toBeDisabled();
@@ -156,9 +165,11 @@ test("foreign channels grey out Hype Train without changing its saved value", as
   await expect(checkbox).toBeEnabled();
   await expect(checkbox).toBeChecked();
   await expect(rehearsal).toBeEnabled();
+  await page.keyboard.press("Escape");
   await page.locator("#preview-mode-live").click();
   await expect(rehearsal).toBeDisabled();
   await removeStudioChannel(page, 1);
+  await page.keyboard.press("Escape");
   await expect(status).toHaveText("Only works on your own channel.");
   await expect(checkbox).toBeDisabled();
   await expect(rehearsal).toBeDisabled();
@@ -201,6 +212,7 @@ test("Hype Train state follows another editor's channel update and keeps Disconn
   });
   await page.goto("/studio");
   await page.locator("#first-run-done").click();
+  await selectSettingsTabForField(page, "reactionHypeTrain");
   const checkbox = page.locator("#theme-reactionHypeTrain");
   const consent = page.locator("#hype-train-consent");
   const status = consent.getByRole("status");
@@ -217,6 +229,7 @@ test("Hype Train state follows another editor's channel update and keeps Disconn
     await editorPage.route(/\/api\/hype-train(?:\?.*)?$/u, (route) => route.fulfill({ json: statusResponse("editor", false, identity.login) }));
     await editorPage.goto(new URL("/studio", page.url()).toString());
     await editorPage.locator("#first-run-done").click();
+    await selectSettingsTabForField(editorPage, "reactionHypeTrain");
     await expect(editorPage.locator("#theme-reactionHypeTrain")).toBeEnabled();
 
     expect(await updateChannelsAsEditor(editorPage, identity.overlayId, identity.token, ["foreign_room"])).toBe(200);
@@ -263,6 +276,7 @@ test("Hype Train controls stay usable while consent status loads or is unavailab
   });
   await page.goto("/studio");
   await page.locator("#first-run-done").click();
+  await selectSettingsTabForField(page, "reactionHypeTrain");
   const checkbox = page.locator("#theme-reactionHypeTrain");
   await expect(checkbox).toBeEnabled();
   await expect(page.locator("#rehearse-hype-train")).toBeEnabled();

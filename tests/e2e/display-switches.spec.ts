@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { seedStudioSession, setRange } from "./studio-session";
+import { fillThemeControl, seedStudioSession, selectSettingsTabForField, setRange, setThemeChecked, setThemeChoice } from "./studio-session";
 
 async function frameSize(page: Page): Promise<{ width: number; height: number }> {
   return page.frameLocator("#studio-preview").locator("body").evaluate(() => ({ width: innerWidth, height: innerHeight }));
@@ -14,6 +14,7 @@ test("shows display controls, disables dependent fields, and captures Studio at 
   await expect(page.locator("#status-visible")).toContainText("Saved");
   await page.locator("#first-run-done").click();
 
+  await selectSettingsTabForField(page, "emotes7tv");
   const effects = page.locator('.settings-group[data-group="Emotes & Effects"]');
   await expect(effects.getByRole("checkbox", { name: "7TV emotes" })).toBeChecked();
   await expect(effects.getByRole("checkbox", { name: "BTTV emotes" })).toBeChecked();
@@ -23,14 +24,18 @@ test("shows display controls, disables dependent fields, and captures Studio at 
     await expect(effects.getByRole("checkbox", { name: label })).toBeChecked();
   }
   await expect(effects.getByRole("checkbox", { name: "Chatterino Homies badges" })).not.toBeChecked();
+  await selectSettingsTabForField(page, "nameOnOwnLine");
   const messages = page.locator('.settings-group[data-group="Messages"]');
   await expect(messages.getByRole("checkbox", { name: "Name on own line" })).not.toBeChecked();
   await expect(messages.getByRole("checkbox", { name: "Hide names" })).not.toBeChecked();
   await expect(messages.getByRole("checkbox", { name: "Readable names" })).not.toBeChecked();
   await expect(page.locator("#theme-textShadow-readout")).toHaveText("0px");
+  await selectSettingsTabForField(page, "smallCaps");
   await expect(page.getByRole("checkbox", { name: "Small caps" })).not.toBeChecked();
+  await selectSettingsTabForField(page, "backlog");
   await expect(messages.getByRole("checkbox", { name: "Load recent messages" })).toBeChecked();
   await expect(messages.locator(".control-hint")).toContainText("Ticker skips recent messages");
+  await selectSettingsTabForField(page, "panelEnabled");
   const panel = page.locator('.settings-group[data-group="Panel"]');
   const panelToggle = panel.getByRole("checkbox", { name: "Panel" });
   await expect(panelToggle).not.toBeChecked();
@@ -38,36 +43,38 @@ test("shows display controls, disables dependent fields, and captures Studio at 
     await expect.poll(() => page.locator(`[data-theme-field="${field}"] input`).evaluateAll((inputs) =>
       inputs.every((input) => (input as HTMLInputElement).disabled))).toBe(true);
   }
-  await panelToggle.check();
+  await setThemeChecked(page, "panelEnabled");
   await expect(page.locator('#theme-panelBorderColor-color')).toBeEnabled();
-  await panelToggle.uncheck();
+  await setThemeChecked(page, "panelEnabled", false);
   await expect(page.locator("#theme-maxChatHeight-readout")).toHaveText("Full height");
 
   const neverFade = page.getByRole("checkbox", { name: "Never expire" });
   const lifetime = page.locator("#theme-lifetime");
-  await neverFade.check();
+  await setThemeChecked(page, "neverFade");
   await expect(lifetime).toBeDisabled();
-  await neverFade.uncheck();
+  await setThemeChecked(page, "neverFade", false);
   await expect(lifetime).toBeEnabled();
 
-  await neverFade.check();
+  await setThemeChecked(page, "neverFade");
   const ownLine = messages.getByRole("checkbox", { name: "Name on own line" });
-  await ownLine.check();
+  await setThemeChecked(page, "nameOnOwnLine");
   const previewLine = page.frameLocator("#studio-preview").locator(".chat-line").first();
-  await page.locator('input[name="theme-layout"][value="ticker"]').check();
+  await setThemeChoice(page, "layout", "ticker");
+  await selectSettingsTabForField(page, "maxLines");
   await expect(page.locator("#theme-maxLines")).toBeDisabled();
   await expect(page.locator("#theme-maxChatHeight")).toBeDisabled();
   await expect(lifetime).toBeEnabled();
   await expect(neverFade).toBeDisabled();
   await expect(ownLine).toBeDisabled();
   await expect(previewLine).not.toHaveClass(/chat-name-own-line/u);
-  await page.locator('input[name="theme-layout"][value="stack"]').check();
+  await setThemeChoice(page, "layout", "stack");
+  await selectSettingsTabForField(page, "lifetime");
   await expect(lifetime).toBeDisabled();
   await expect(neverFade).toBeEnabled();
   await expect(ownLine).toBeEnabled();
   await expect(previewLine).toHaveClass(/chat-name-own-line/u);
-  await neverFade.uncheck();
-  await ownLine.uncheck();
+  await setThemeChecked(page, "neverFade", false);
+  await setThemeChecked(page, "nameOnOwnLine", false);
   await setRange(page, "maxChatHeight", 200);
   await expect.poll(() => frameSize(page)).toEqual({ width: 400, height: 200 });
   await expect(page.locator("#theme-maxChatHeight-readout")).toHaveText("200px");
@@ -80,15 +87,19 @@ test("shows display controls, disables dependent fields, and captures Studio at 
   const readableNamesControl = messages.getByRole("checkbox", { name: "Readable names" });
   for (const width of [1_024, 1_440]) {
     await page.setViewportSize({ width, height: 900 });
+    await selectSettingsTabForField(page, "fontFamily");
     await settingsScroll.evaluate((element) => { element.scrollTop = 0; });
     await expect(textGroup).toBeVisible();
     await expect(textGroup.getByRole("slider", { name: "Text shadow" })).toBeVisible();
     await page.screenshot({ path: path.join(shots, `studio-display-controls-${width}.png`) });
     await textGroup.screenshot({ path: path.join(shots, `studio-text-controls-${width}.png`) });
+    await selectSettingsTabForField(page, "readableNames");
     await readableNamesControl.scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(shots, `studio-message-controls-${width}.png`) });
+    await selectSettingsTabForField(page, "panelEnabled");
     await panel.scrollIntoViewIfNeeded();
     await panel.screenshot({ path: path.join(shots, `studio-panel-controls-${width}.png`) });
+    await selectSettingsTabForField(page, "emotes7tv");
     await effects.scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(shots, `studio-display-effects-${width}.png`) });
   }
@@ -114,11 +125,11 @@ test("follows the theme height limit, then keeps a selected 600px frame with ful
   await expect.poll(() => frameSize(page)).toEqual({ width: 400, height: 600 });
   await setRange(page, "textShadow", 4);
   await setRange(page, "backgroundOpacity", 0.5);
-  await page.locator("#theme-backgroundColor-hex").fill("#090515");
-  await page.getByRole("checkbox", { name: "Small caps" }).check();
-  await page.getByRole("checkbox", { name: "Name on own line" }).check();
-  await page.getByRole("checkbox", { name: "Readable names" }).check();
-  await page.locator('input[name="theme-lineOrder"][value="name-first"]').check();
+  await fillThemeControl(page, "backgroundColor", "#090515", ".hex-control");
+  await setThemeChecked(page, "smallCaps");
+  await setThemeChecked(page, "nameOnOwnLine");
+  await setThemeChecked(page, "readableNames");
+  await setThemeChoice(page, "lineOrder", "name-first");
   const featureOverlay = page.frameLocator("#studio-preview");
   const featureChat = featureOverlay.locator("#chat");
   await expect(featureChat.locator(".chat-line").first()).toBeVisible();
@@ -205,12 +216,12 @@ test("follows the theme height limit, then keeps a selected 600px frame with ful
   expect(hiddenMetadata.ownLineHeight).toBe(hiddenMetadata.normalHeight);
 
   await featureOverlay.locator("body").screenshot({ path: path.join(shots, "overlay-display-features-400x600.png") });
-  await page.getByRole("checkbox", { name: "Hide names" }).check();
+  await setThemeChecked(page, "hideNames");
   await expect(featureOverlay.locator(".chat-name").first()).toHaveClass(/chat-sr-only/u);
   await featureOverlay.locator("body").screenshot({ path: path.join(shots, "overlay-hidden-names-400x600.png") });
-  await page.getByRole("checkbox", { name: "Hide names" }).uncheck();
-  await page.locator('input[name="theme-lineOrder"][value="message-first"]').check();
-  await page.locator("#theme-panelEnabled").check();
+  await setThemeChecked(page, "hideNames", false);
+  await setThemeChoice(page, "lineOrder", "message-first");
+  await setThemeChecked(page, "panelEnabled");
   const overlay = featureOverlay;
   const chat = overlay.locator("#chat");
   const defaultBoxStyle = await chat.evaluate((element) => {

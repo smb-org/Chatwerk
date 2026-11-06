@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { addStudioOverlay, e2eOrigin, seedStudioSession, setRange } from "./studio-session";
+import { addStudioOverlay, e2eOrigin, seedStudioSession, selectSettingsTabForField, setRange } from "./studio-session";
 
 test("keeps logged-out Studio access on the login route", async ({ page }) => {
   await page.goto("/studio");
@@ -50,10 +50,11 @@ test("loads an existing Main overlay through / with defaults at revision zero", 
   expect(errors).toEqual([]);
 });
 
-test("renders current theme controls, hides empty groups, and links Themes", async ({ page }) => {
+test("renders theme controls without Channels and links Themes", async ({ page }) => {
   const { login } = await seedStudioSession(page);
   await page.goto("/studio");
 
+  await selectSettingsTabForField(page, "emoteScale");
   const messages = page.locator('.settings-group[data-group="Messages"]');
   await expect(messages.locator('[data-theme-field="emoteScale"]')).toBeVisible();
   await expect(messages.getByRole("checkbox", { name: "Show badges" })).toBeChecked();
@@ -61,9 +62,9 @@ test("renders current theme controls, hides empty groups, and links Themes", asy
   await expect(page.locator('[data-group="Channels"]')).toHaveCount(0);
   await page.locator("#channel-field-button").click();
   await expect(page.locator("#channel-popover [data-channel-value]")).toHaveValue(login);
+  await selectSettingsTabForField(page, "hideNumbers");
   await expect(page.locator('[data-group="Filters"]')).toBeVisible();
   await expect(page.locator('[data-theme-field="hideNumbers"]')).toBeVisible();
-  await expect(page.locator('[data-group="Advanced"]')).toHaveCount(0);
 
   const themes = page.getByText("Themes", { exact: true });
   await expect(themes).toHaveAttribute("href", "/themes");

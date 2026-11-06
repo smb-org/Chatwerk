@@ -47,6 +47,20 @@
       </header>
 
       <main class="workspace" id="workspace">
+        <aside class="settings-panel" data-i18n-aria-label="settings">
+          <div class="status-row" id="status-row">
+            <span class="status-text" id="status-visible" aria-live="off" data-i18n="loading"></span>
+            <span class="status-announcer" id="status-announcer" aria-live="polite"></span>
+            <span class="error-area" id="save-error" role="alert"></span>
+            <button class="small-button undo-look-button" id="undo-look" type="button" data-i18n="undo" hidden></button>
+          </div>
+          <div class="settings-tabs" id="settings-tabs" role="tablist" data-i18n-aria-label="settings"></div>
+          <div class="warning-row" id="warning-row" aria-live="polite"></div>
+          <div class="settings-scroll" id="settings-scroll">
+            <div id="theme-controls"></div>
+          </div>
+        </aside>
+
         <section class="preview-column" data-i18n-aria-label="preview">
           <div class="preview-toolbar">
             <span class="toolbar-label" data-i18n="background"></span>
@@ -102,18 +116,6 @@
           <div class="mobile-warning" data-i18n="editingWide"></div>
         </section>
 
-        <aside class="settings-panel" data-i18n-aria-label="settings">
-          <div class="status-row" id="status-row">
-            <span class="status-text" id="status-visible" aria-live="off" data-i18n="loading"></span>
-            <span class="status-announcer" id="status-announcer" aria-live="polite"></span>
-            <span class="error-area" id="save-error" role="alert"></span>
-            <button class="small-button undo-look-button" id="undo-look" type="button" data-i18n="undo" hidden></button>
-          </div>
-          <div class="warning-row" id="warning-row" aria-live="polite"></div>
-          <div class="settings-scroll" id="settings-scroll">
-            <div id="theme-controls"></div>
-          </div>
-        </aside>
       </main>
 
       <footer class="rehearse-footer" data-i18n-aria-label="rehearse">
