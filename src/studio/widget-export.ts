@@ -8,14 +8,17 @@ export interface WidgetExportBlocks {
 
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 
-export function buildWidgetExport(origin: string, token: string, language: Language): WidgetExportBlocks {
+export function buildWidgetOverlayUrl(origin: string, token: string): string {
   const parsedOrigin = new URL(origin);
   if (parsedOrigin.origin !== origin || !["http:", "https:"].includes(parsedOrigin.protocol)) {
     throw new TypeError("Expected an HTTP origin");
   }
   if (!TOKEN_PATTERN.test(token)) throw new TypeError("Invalid overlay token");
+  return `${parsedOrigin.origin}/overlay#token=${token}&client=widget&placement=origin`;
+}
 
-  const overlayUrl = `${parsedOrigin.origin}/overlay#token=${token}&client=widget&placement=origin`;
+export function buildWidgetExport(origin: string, token: string, language: Language): WidgetExportBlocks {
+  const overlayUrl = buildWidgetOverlayUrl(origin, token);
   const html = [
     "<!-- Chatwerk widget · HTML tab -->",
     "<style>",

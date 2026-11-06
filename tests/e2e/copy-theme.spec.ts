@@ -452,19 +452,30 @@ test("fits long German look names at mobile width and a 200-percent viewport", a
   expect(size.height).toBeLessThanOrEqual(size.viewportHeight);
 });
 
-test("exports the three widget blocks and runs their sandboxed overlay against the live API and socket", async ({ page }) => {
-  const identity = await seedStudioSession(page);
-  await page.goto("/studio/export");
-  await expect(page.locator("#code-html")).toContainText("chatwerkFrame");
-  await expect(page.locator("#code-js")).toContainText("indexOf('https://') !== 0");
-  await expect(page.locator("#code-fields")).toContainText(`${e2eOrigin}/overlay#token=${identity.token}&client=widget&placement=origin`);
-  await screenshot(page, "widget-export");
-  await page.locator("#export-platform").selectOption("soundalerts");
+test("sets up widget blocks and runs the sandboxed overlay against the local API and socket", async ({ page }) => {
+  const identity = await seedStudioSession(page, { channel: "" });
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/studio/export?platform=streamelements");
+  await expect(page.locator("#code-html-streamelements")).toContainText("chatwerkFrame");
+  await expect(page.locator("#code-js-streamelements")).toContainText("indexOf('https://') !== 0");
+  await expect(page.locator("#code-fields-streamelements")).toContainText(`${e2eOrigin}/overlay#token=${identity.token}&client=widget&placement=origin`);
+  await expect(page.locator("#setup-panel-streamelements")).toContainText("The CSS tab stays empty.");
+  await expect(page.locator("#setup-no-channel-streamelements")).toBeVisible();
+  await screenshot(page, "setup-streamelements");
+  await page.locator("#setup-tab-soundalerts").click();
   await expect(page.locator("#soundalerts-note")).toHaveText("Not measured yet. Test it once.");
-  await expect(page.locator(".export-note-permanent")).toHaveText("Without Cloudflare a widget keeps running, but cannot reload.");
+  await expect(page.locator("#setup-panel-soundalerts .export-note-permanent")).toHaveText("Without Cloudflare a widget keeps running, but cannot reload.");
+  await screenshot(page, "setup-soundalerts");
 
-  const html = await page.locator("#code-html").textContent() ?? "";
-  const js = await page.locator("#code-js").textContent() ?? "";
+  for (const block of ["html", "js", "fields"] as const) {
+    const pre = page.locator(`#setup-panel-soundalerts [data-block-content="${block}"]`);
+    const expected = await pre.textContent() ?? "";
+    await page.locator(`#setup-panel-soundalerts [data-copy-block="${block}"]`).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(expected);
+  }
+
+  const html = await page.locator("#code-html-soundalerts").textContent() ?? "";
+  const js = await page.locator("#code-js-soundalerts").textContent() ?? "";
   const overlayUrl = `${e2eOrigin}/overlay#token=${identity.token}&client=widget&placement=origin`;
   const host = await page.context().newPage();
   await host.goto("about:blank");
@@ -475,4 +486,161 @@ test("exports the three widget blocks and runs their sandboxed overlay against t
   await expect(host.locator("#chatwerkFrame")).toHaveAttribute("src", overlayUrl);
   await expect(host.frameLocator("#chatwerkFrame").locator("#chat")).toBeVisible();
   await expect.poll(() => liveSockets).toContain("/api/overlay/live");
+});
+
+test("loads local source dimensions and the saved height limit into copyable OBS values", async ({ page }) => {
+  const identity = await seedStudioSession(page, { channel: "" });
+  await setConfig(page, identity.overlayId, 0, { maxChatHeight: 260 });
+  await page.addInitScript((overlayId) => {
+    localStorage.setItem("chatwerk-overlay-id", overlayId);
+    localStorage.setItem(`chatwerk-source-size:${overlayId}`, JSON.stringify({ width: 800, height: 260 }));
+  }, identity.overlayId);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/studio/export?platform=obs");
+
+  await expect(page.locator("#setup-url-obs")).toHaveValue(`${e2eOrigin}/overlay#token=${identity.token}`);
+  await expect(page.locator("#setup-width-obs")).toHaveValue("800");
+  await expect(page.locator("#setup-height-obs")).toHaveValue("260");
+  await expect(page.locator("#setup-panel-obs")).toContainText("The top handle changes the height.");
+  await expect(page.locator("#setup-panel-obs")).toContainText("Right-click the source, choose Transform, then Reset Transform.");
+  await screenshot(page, "setup-obs");
+
+  const copyFields = page.locator("#setup-values-obs .setup-copy-field");
+  const expectedValues = [`${e2eOrigin}/overlay#token=${identity.token}`, "800", "260"];
+  for (let index = 0; index < expectedValues.length; index += 1) {
+    await copyFields.nth(index).getByRole("button").click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(expectedValues[index]);
+  }
+});
+
+test("falls back to the default source size when Studio has no saved size or height limit", async ({ page }) => {
+  await seedStudioSession(page, { channel: "" });
+  await page.goto("/studio/export?platform=obs");
+  await expect(page.locator("#setup-width-obs")).toHaveValue("400");
+  await expect(page.locator("#setup-height-obs")).toHaveValue("600");
+});
+
+test("uses the local source height when the saved height limit is below 100", async ({ page }) => {
+  const identity = await seedStudioSession(page, { channel: "" });
+  await page.addInitScript((overlayId) => {
+    localStorage.setItem("chatwerk-overlay-id", overlayId);
+    localStorage.setItem(`chatwerk-source-size:${overlayId}`, JSON.stringify({ width: 720, height: 340 }));
+  }, identity.overlayId);
+  await page.goto("/studio/export?platform=obs");
+  await expect(page.locator("#setup-width-obs")).toHaveValue("720");
+  await expect(page.locator("#setup-height-obs")).toHaveValue("340");
+});
+
+test("selects setup platforms by keyboard, remembers the tab, and honors a platform query", async ({ page }) => {
+  await seedStudioSession(page, { channel: "" });
+  await page.goto("/studio/export");
+  const tabs = page.locator("#setup-tabs");
+  await expect(tabs.locator('[aria-selected="true"]')).toHaveAttribute("id", "setup-tab-obs");
+
+  await page.locator("#setup-tab-obs").focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#setup-tab-streamelements")).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("End");
+  await expect(page.locator("#setup-tab-soundalerts")).toHaveAttribute("aria-selected", "true");
+  await page.reload();
+  await expect(page.locator("#setup-tab-soundalerts")).toHaveAttribute("aria-selected", "true");
+
+  await page.goto("/studio/export?platform=obs");
+  await expect(page.locator("#setup-tab-obs")).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(`${e2eOrigin}/studio/export?platform=obs`);
+});
+
+test("opens the setup page from Studio navigation and the selected first-run output", async ({ page }) => {
+  await seedStudioSession(page, { channel: "" });
+  await page.goto("/studio");
+  await expect(page.locator(".studio-header .top-nav a[href='/studio/export']")).toHaveText("Setup");
+  await page.locator('[data-platform="soundalerts"]').click();
+  await expect(page.locator("#first-run-setup")).toHaveAttribute("href", "/studio/export?platform=soundalerts");
+  await page.locator("#first-run-setup").click();
+  await expect(page).toHaveURL(`${e2eOrigin}/studio/export?platform=soundalerts`);
+  await expect(page.locator("#setup-tab-soundalerts")).toHaveAttribute("aria-selected", "true");
+  await page.goto("/themes");
+  await expect(page.locator(".gallery-header .top-nav a[href='/studio/export']")).toHaveText("Setup");
+});
+
+test("keeps page chrome fixed across platform switches and fits at 1024 pixels", async ({ page }) => {
+  await seedStudioSession(page, { channel: "" });
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await page.goto("/studio/export?platform=streamelements");
+  const outsideContent = async () => page.evaluate(() => [".export-header", ".export-title-row", "#setup-tabs", ".export-actions"]
+    .map((selector) => {
+      const rect = document.querySelector(selector)!.getBoundingClientRect();
+      return [rect.x, rect.y, rect.width, rect.height];
+    }));
+  const before = await outsideContent();
+  const documentWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+  expect(documentWidth).toBeLessThanOrEqual(1024);
+  await page.locator("#setup-tab-soundalerts").click();
+  expect(await outsideContent()).toEqual(before);
+});
+
+test("renders the setup instructions in German", async ({ page }) => {
+  await seedStudioSession(page, { channel: "" });
+  await page.addInitScript(() => localStorage.setItem("chatwerk-language", "de"));
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/studio/export?platform=obs");
+  await expect(page.locator("h1")).toHaveText("Einrichten");
+  await expect(page.locator("#setup-panel-obs .setup-values-hint")).toHaveText("Diese Werte kommen aus dem Studio. Der obere Griff ändert die Höhe.");
+  await expect(page.locator("#setup-panel-obs .setup-steps > li:first-child")).toHaveText("Füge eine Browserquelle hinzu.");
+  await expect(page.locator("#setup-panel-obs .setup-steps > li:nth-child(4)")).toHaveText("Klicke mit rechts auf die Quelle, wähle Transformieren und dann Transformation zurücksetzen. Tastenkürzel: Cmd+R auf dem Mac oder Ctrl+R unter Windows.");
+  const visibleSteps = await page.locator("#setup-panel-obs .setup-steps > li").evaluateAll((steps) =>
+    steps.map((step) => step.getBoundingClientRect().bottom <= window.innerHeight),
+  );
+  expect(visibleSteps).toEqual([true, true, true, true, true]);
+  await screenshot(page, "setup-obs-de");
+});
+
+test("keeps the OBS URL full width and places width and height side by side", async ({ page }) => {
+  await seedStudioSession(page, { channel: "" });
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/studio/export?platform=obs");
+
+  const fields = page.locator("#setup-values-obs .setup-copy-field");
+  const boxes = await fields.evaluateAll((elements) => elements.map((element) => {
+    const { x, y, width } = element.getBoundingClientRect();
+    return { x, y, width };
+  }));
+  expect(boxes).toHaveLength(3);
+  expect(boxes[0].width).toBeGreaterThan(boxes[1].width * 1.9);
+  expect(boxes[1].y).toBe(boxes[2].y);
+  expect(boxes[1].x).toBeLessThan(boxes[2].x);
+  expect(boxes[1].width).toBeCloseTo(boxes[2].width, 0);
+  for (let index = 0; index < 3; index += 1) {
+    await expect(fields.nth(index).getByRole("button")).toHaveCount(1);
+  }
+
+  await page.setViewportSize({ width: 1024, height: 768 });
+  const widthsAt1024 = await fields.evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().width));
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1024);
+  expect(widthsAt1024[1]).toBeGreaterThanOrEqual(200);
+  expect(widthsAt1024[2]).toBeGreaterThanOrEqual(200);
+});
+
+test("shows loading, export failure, and no-overlay states in place", async ({ page }) => {
+  await seedStudioSession(page, { channel: "" });
+  let releaseFirstResponse: (() => void) | undefined;
+  const firstResponse = new Promise<void>((resolve) => { releaseFirstResponse = resolve; });
+  let requestCount = 0;
+  await page.route("**/api/overlays", async (route) => {
+    requestCount += 1;
+    if (requestCount === 1) {
+      await firstResponse;
+      await route.fulfill({ status: 503, json: { error: "offline" } });
+      return;
+    }
+    await route.fulfill({ json: { overlays: [] } });
+  });
+  await page.goto("/studio/export");
+  await expect(page.locator("#setup-loading")).toBeVisible();
+  releaseFirstResponse?.();
+  await expect(page.locator("#export-error")).toContainText("Export could not load. Try again.");
+  await page.locator("#export-error button").click();
+  await expect(page.locator("#export-error")).toHaveText("No overlays are available for this account.");
+  await expect(page.locator("#setup-panels")).toBeHidden();
 });

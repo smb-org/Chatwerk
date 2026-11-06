@@ -1598,6 +1598,7 @@ function wireStaticControls(): void {
         item.setAttribute("aria-pressed", String(item === button));
       });
       try { localStorage.setItem("chatwerk-output-platform", currentPlatform); } catch { /* Selection stays in memory. */ }
+      updateFirstRunSetupLink();
     });
   });
   document.querySelectorAll<HTMLButtonElement>(".scenario-button").forEach((button) => {
@@ -1692,12 +1693,15 @@ async function copyOverlayLink(): Promise<void> {
 }
 
 function setupFirstRun(): void {
+  let firstRunDone = false;
   try {
     currentPlatform = localStorage.getItem("chatwerk-output-platform") ?? "obs";
-    if (localStorage.getItem("chatwerk-first-run-done") === "1") return;
+    firstRunDone = localStorage.getItem("chatwerk-first-run-done") === "1";
   } catch {
     currentPlatform = "obs";
   }
+  updateFirstRunSetupLink();
+  if (firstRunDone) return;
   const button = document.querySelector<HTMLButtonElement>(`[data-platform="${currentPlatform}"]`);
   document.querySelectorAll<HTMLButtonElement>("[data-platform]").forEach((item) => {
     item.setAttribute("aria-pressed", String(item === button));
@@ -1705,6 +1709,11 @@ function setupFirstRun(): void {
   selectSettingsTab("appearance");
   $("#first-run").classList.add("is-visible");
   $("#rehearse-tools").setAttribute("hidden", "true");
+}
+
+function updateFirstRunSetupLink(): void {
+  const link = document.querySelector<HTMLAnchorElement>("#first-run-setup");
+  if (link) link.href = `/studio/export?platform=${currentPlatform}`;
 }
 
 function finishFirstRun(): void {

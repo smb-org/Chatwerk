@@ -1156,6 +1156,10 @@ The Studio preview can be resized by drag or keyboard at its right edge, top edg
 
 When the Studio preview uses a custom background image in Fit mode, the image sits in a centered 16:9, 1920×1080 canvas contained by the padded stage. The image covers that canvas without stretching; stage space outside it stays plain. The preview scale is the canvas width divided by 1920, so the frame is shown at its configured source size relative to the stream. In this mode the frame can be dragged or moved by arrow keys (10 canvas pixels, or 50 with Shift), and its top and top-right resize handles keep the bottom-left corner fixed while clamping the frame to the canvas. Its canvas-pixel position is stored locally per overlay and shown beside the scale readout for copying into OBS; movement does not save theme or overlay configuration. The iframe is not reloaded, and the position stays fixed in canvas pixels as the stage changes size. A preset round trip such as 400×600 → 1920×1080 → 400×600 leaves the position clamped by the larger preset. Other backgrounds and 1:1 mode keep the centered, immovable frame.
 
+## Overlay setup page
+
+`/studio/export` remains the route and is titled Setup (Einrichten in German). The Studio navigation and first-run output flow link to OBS, StreamElements or SoundAlerts instructions. The page uses the active overlay selection already stored by Studio. OBS gets the regular token link; widget tabs use the existing HTML, JS and Fields export, whose Fields block sets the full widget URL. The token remains in the URL fragment. Width comes from the per-overlay local source size; height uses saved `maxChatHeight` when it is at least 100px, then the local source height, then the 400×600 default. The OBS steps explain source properties, transform reset, dragging inside the red box and why the Browser source need not be 1920×1080. Widget steps leave CSS empty. SoundAlerts remains unmeasured and the no-Cloudflare notice stays visible. This page introduces no schema change.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
