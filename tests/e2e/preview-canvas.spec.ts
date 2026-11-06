@@ -229,6 +229,52 @@ test("canvas resize keeps the bottom-left fixed and saves maxChatHeight once on 
   await expect(page.locator("#preview-window")).toHaveAttribute("data-canvas-mode", "true");
 });
 
+test("canvas corner resize snaps to the saved limit while keeping the stored position and readout truthful", async ({ page }) => {
+  const identity = await openStudio(page);
+  await setRange(page, "maxChatHeight", 300);
+  await expect(page.locator("#status-visible")).toHaveText("Saved, rev 1");
+  await uploadBackground(page);
+  const requests: Array<Record<string, unknown>> = [];
+  page.on("request", (request) => {
+    if (request.method() !== "PUT" || !/\/api\/overlays\/[0-9a-f-]+\/config$/u.test(new URL(request.url()).pathname)) return;
+    const body = request.postDataJSON() as { patch?: Record<string, unknown> };
+    if (body.patch) requests.push(body.patch);
+  });
+
+  await page.locator("#preview-size-preset").selectOption("1920x1080");
+  await expect.poll(() => readCanvasPosition(page)).toEqual({ x: 0, y: 0, width: 1_920, height: 1_080 });
+  expect(requests).toEqual([]);
+  const before = await readCanvasPosition(page);
+  const initialFrame = await page.locator("#preview-frame-wrap").boundingBox();
+  const grip = await page.locator("#preview-resize-corner").boundingBox();
+  const scale = await page.locator("#preview-canvas").evaluate((canvas) => canvas.getBoundingClientRect().width / 1_920);
+  if (!initialFrame || !grip) throw new Error("Missing canvas frame or corner handle");
+  const x = grip.x + grip.width / 2;
+  const y = grip.y + grip.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await expect.poll(() => readCanvasPosition(page)).toEqual({ x: 0, y: 780, width: 1_920, height: 300 });
+  expect(requests).toEqual([]);
+  const snappedFrame = await page.locator("#preview-frame-wrap").boundingBox();
+  expect(snappedFrame!.y + snappedFrame!.height).toBeCloseTo(initialFrame.y + initialFrame.height, 1);
+
+  await page.mouse.move(x, y + Math.round(scale * 10), { steps: 1 });
+  await expect.poll(() => readCanvasPosition(page)).toEqual({ x: 0, y: 790, width: 1_920, height: 290 });
+  const resizedFrame = await page.locator("#preview-frame-wrap").boundingBox();
+  expect(resizedFrame!.y + resizedFrame!.height).toBeCloseTo(initialFrame.y + initialFrame.height, 1);
+  await expect(page.locator("#preview-position-meta")).toHaveText("X 0  Y 790  1920 x 290");
+  expect(before.y + before.height).toBe(1_080);
+  expect(requests).toEqual([]);
+
+  await page.mouse.up();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests).toEqual([{ maxChatHeight: 290 }]);
+  await expect(page.locator("#theme-maxChatHeight")).toHaveValue("290");
+  await expect.poll(() => page.evaluate((overlayId) => localStorage.getItem(`chatwerk-preview-position:${overlayId}`), identity.overlayId))
+    .toBe(JSON.stringify({ x: 0, y: 790 }));
+  await expect.poll(() => readCanvasPosition(page)).toEqual({ x: 0, y: 790, width: 1_920, height: 290 });
+});
+
 test("undo after a canvas handle resize restores its previous Y and readout", async ({ page }) => {
   const identity = await openStudio(page);
   await setRange(page, "maxChatHeight", 260);

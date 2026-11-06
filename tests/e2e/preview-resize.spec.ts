@@ -34,6 +34,14 @@ async function frameSize(page: Page): Promise<{ width: number; height: number }>
   return page.frameLocator("#studio-preview").locator("body").evaluate(() => ({ width: innerWidth, height: innerHeight }));
 }
 
+async function chooseLimited1080Preset(page: Page, limit = 300): Promise<void> {
+  await setRange(page, "maxChatHeight", limit);
+  await expect(page.locator("#status-visible")).toHaveText("Saved, rev 1");
+  await page.locator("#preview-size-preset").selectOption("1920x1080");
+  await expect.poll(() => frameSize(page)).toEqual({ width: 1_920, height: 1_080 });
+  await expect(page.frameLocator("#studio-preview").locator("#chat")).toHaveCSS("max-height", `${limit}px`);
+}
+
 async function trackPreviewDocument(page: Page): Promise<void> {
   await page.evaluate(() => {
     const frame = document.querySelector<HTMLIFrameElement>("#studio-preview")!;
@@ -1107,4 +1115,125 @@ test("captures wide, narrow, and short resize screenshots", async ({ page }) => 
     await expect.poll(() => frameSize(page)).toEqual({ width, height });
     await page.locator("#preview-window").screenshot({ path: `.tmp/shots/${filename}` });
   }
+});
+
+test("top-handle drag starts from the saved height limit and saves the dragged height once", async ({ page }) => {
+  const identity = await studio(page);
+  await chooseLimited1080Preset(page);
+  const configPatches = trackConfigPatches(page);
+  const handle = page.locator("#preview-resize-top");
+  const handleBounds = await handle.boundingBox();
+  const initialFrame = await page.locator("#preview-frame-wrap").boundingBox();
+  const scale = await page.locator("#studio-preview").evaluate((frame) =>
+    Number(frame.style.transform.match(/scale\(([\d.]+)\)/u)?.[1]));
+  const untouched = await Promise.all([
+    page.locator(".preview-toolbar").boundingBox(),
+    page.locator(".settings-panel").boundingBox(),
+    page.locator(".preview-meta").boundingBox(),
+  ]);
+  if (!handleBounds || !initialFrame) throw new Error("Missing top resize handle or frame");
+  const x = handleBounds.x + handleBounds.width / 2;
+  const y = handleBounds.y + handleBounds.height / 2;
+
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await expect.poll(() => frameSize(page)).toEqual({ width: 1_920, height: 300 });
+  const snappedFrame = await page.locator("#preview-frame-wrap").boundingBox();
+  expect(snappedFrame!.y + snappedFrame!.height).toBeCloseTo(initialFrame.y + initialFrame.height, 1);
+  expect(await Promise.all([
+    page.locator(".preview-toolbar").boundingBox(),
+    page.locator(".settings-panel").boundingBox(),
+    page.locator(".preview-meta").boundingBox(),
+  ])).toEqual(untouched);
+  expect(configPatches).toEqual([]);
+  await page.mouse.move(x, y + Math.round(scale * 10), { steps: 1 });
+  await expect.poll(() => frameSize(page)).toEqual({ width: 1_920, height: 290 });
+  const draggedFrame = await page.locator("#preview-frame-wrap").boundingBox();
+  expect(draggedFrame!.y + draggedFrame!.height).toBeCloseTo(initialFrame.y + initialFrame.height, 1);
+  expect(await Promise.all([
+    page.locator(".preview-toolbar").boundingBox(),
+    page.locator(".settings-panel").boundingBox(),
+    page.locator(".preview-meta").boundingBox(),
+  ])).toEqual(untouched);
+  expect(configPatches).toEqual([]);
+
+  await page.mouse.up();
+  await expect.poll(() => configPatches.length).toBe(1);
+  expect(configPatches).toEqual([{ maxChatHeight: 290 }]);
+  await expect(page.locator("#theme-maxChatHeight")).toHaveValue("290");
+  const stored = await page.evaluate((overlayId) => localStorage.getItem(`chatwerk-source-size:${overlayId}`), identity.overlayId);
+  expect(stored).toContain('"height":290');
+});
+
+test("top-handle press and release without movement restores the preset and saves nothing", async ({ page }) => {
+  const identity = await studio(page);
+  await chooseLimited1080Preset(page);
+  const configPatches = trackConfigPatches(page);
+  const before = await page.evaluate((overlayId) => ({
+    size: localStorage.getItem(`chatwerk-source-size:${overlayId}`),
+    position: localStorage.getItem(`chatwerk-preview-position:${overlayId}`),
+  }), identity.overlayId);
+  const handle = await page.locator("#preview-resize-top").boundingBox();
+  if (!handle) throw new Error("Missing top resize handle");
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await expect.poll(() => frameSize(page)).toEqual({ width: 1_920, height: 300 });
+  await page.mouse.up();
+
+  await expect.poll(() => frameSize(page)).toEqual({ width: 1_920, height: 1_080 });
+  expect(await page.evaluate((overlayId) => ({
+    size: localStorage.getItem(`chatwerk-source-size:${overlayId}`),
+    position: localStorage.getItem(`chatwerk-preview-position:${overlayId}`),
+  }), identity.overlayId)).toEqual(before);
+  expect(configPatches).toEqual([]);
+  await expect(page.locator("#theme-maxChatHeight")).toHaveValue("300");
+});
+
+test("top and corner keyboard resizing start from the saved height limit", async ({ page }) => {
+  await studio(page);
+  await chooseLimited1080Preset(page);
+  const configPatches = trackConfigPatches(page);
+
+  for (const [index, selector] of ["#preview-resize-top", "#preview-resize-corner"].entries()) {
+    if (index > 0) {
+      await expect(page.locator("#status-visible")).toHaveText("Saved, rev 2");
+      await setRange(page, "maxChatHeight", 300);
+      await expect(page.locator("#status-visible")).toHaveText("Saved, rev 3");
+      await page.locator("#preview-size-preset").selectOption("1920x1080");
+      await expect.poll(() => frameSize(page)).toEqual({ width: 1_920, height: 1_080 });
+      configPatches.length = 0;
+    }
+    const initialFrame = await page.locator("#preview-frame-wrap").boundingBox();
+    await page.locator(selector).focus();
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(() => frameSize(page)).toEqual({ width: 1_920, height: 290 });
+    const resizedFrame = await page.locator("#preview-frame-wrap").boundingBox();
+    expect(resizedFrame!.y + resizedFrame!.height).toBeCloseTo(initialFrame!.y + initialFrame!.height, 1);
+    await expect.poll(() => configPatches.length).toBe(1);
+    expect(configPatches).toEqual([{ maxChatHeight: 290 }]);
+    await expect(page.locator("#theme-maxChatHeight")).toHaveValue("290");
+    await expect(page.locator("#status-visible")).toHaveText(`Saved, rev ${index === 0 ? 2 : 4}`);
+  }
+});
+
+test("a zero height limit leaves pointer resize behavior unchanged", async ({ page }) => {
+  await studio(page);
+  await expect(page.locator("#theme-maxChatHeight")).toHaveValue("0");
+  await page.locator("#preview-size-preset").selectOption("1920x1080");
+  await expect.poll(() => frameSize(page)).toEqual({ width: 1_920, height: 1_080 });
+  const configPatches = trackConfigPatches(page);
+  const handle = await page.locator("#preview-resize-top").boundingBox();
+  const scale = await page.locator("#studio-preview").evaluate((frame) =>
+    Number(frame.style.transform.match(/scale\(([\d.]+)\)/u)?.[1]));
+  if (!handle) throw new Error("Missing top resize handle");
+  const x = handle.x + handle.width / 2;
+  const y = handle.y + handle.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await expect.poll(() => frameSize(page)).toEqual({ width: 1_920, height: 1_080 });
+  await page.mouse.move(x, y + Math.round(scale * 10), { steps: 1 });
+  await expect.poll(() => frameSize(page)).toEqual({ width: 1_920, height: 1_070 });
+  await page.mouse.up();
+  await expect.poll(() => configPatches.length).toBe(1);
+  expect(configPatches).toEqual([{ maxChatHeight: 1_070 }]);
 });
