@@ -249,7 +249,7 @@ body {
 }
 
 #chat[data-layout="stack"] .chat-emote {
-  max-width: min(3em, 100%);
+  max-width: 100%;
 }
 
 .chat-name-painted {
@@ -310,7 +310,6 @@ body {
 
 .chat-emote {
   display: inline-block;
-  max-width: 3em;
   object-fit: contain;
   margin-inline-end: var(--t-emote-spacing, 0px);
 }

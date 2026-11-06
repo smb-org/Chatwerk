@@ -1047,7 +1047,7 @@ function setEmoteImageHeight(image: HTMLImageElement, theme: ThemeConfig, gigant
   const height = Math.max(1, Math.round(theme.fontSize * scale));
   image.setAttribute("height", String(height));
   image.style.setProperty("height", `${height}px`);
-  image.style.setProperty("width", "auto");
+  image.style.setProperty("width", image.classList.contains("chat-emote-overlay") ? "100%" : "auto");
   image.style.setProperty("vertical-align", "middle");
 }
 

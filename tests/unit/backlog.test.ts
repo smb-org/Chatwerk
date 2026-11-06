@@ -8,6 +8,16 @@ const line = (id: string, sentAt: number, text = id, extra = ""): string =>
 const response = (messages: string[]): Response => Response.json({ messages, error: null, error_code: null });
 
 describe("recent message backlog", () => {
+  it("preserves bare single-word PRIVMSG text from the backlog wire form", async () => {
+    const fetcher = vi.fn(async () => response([
+      `@id=bare-word;tmi-sent-ts=${now - 1_000};historical=1;display-name=Viewer;user-id=42 :viewer!viewer@host PRIVMSG #room oldiHiThere`,
+    ]));
+
+    const result = await fetchRecentBacklog(["room"], { ...DEFAULTS, lifetime: 10_000 }, { fetcher, now });
+
+    expect(result.map(({ event }) => [event.id, event.text])).toEqual([["bare-word", "oldiHiThere"]]);
+  });
+
   it("keeps only fresh messages, sorts by sent time, and returns their original timestamps", async () => {
     const fetcher = vi.fn(async () => response([
       line("fresh-new", now - 2_000),
