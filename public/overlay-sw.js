@@ -50,12 +50,22 @@ async function updateOverlayPair(request) {
 
   const html = await response.clone().text();
   const assets = referencedAssets(html);
+  const assetResponses = [];
+  for (const asset of assets) {
+    let assetResponse;
+    try {
+      assetResponse = await fetch(asset);
+    } catch {
+      return (await cachedResponse(request)) || response;
+    }
+    if (!assetResponse.ok) return (await cachedResponse(request)) || response;
+    assetResponses.push([asset, assetResponse]);
+  }
+
   const pairName = `${PAIR_PREFIX}${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-  const pair = await caches.open(pairName);
   try {
-    for (const asset of assets) {
-      const assetResponse = await fetch(asset);
-      if (!assetResponse.ok) throw new Error(`Overlay asset returned ${assetResponse.status}`);
+    const pair = await caches.open(pairName);
+    for (const [asset, assetResponse] of assetResponses) {
       await pair.put(asset, assetResponse.clone());
     }
     await pair.put(request, response.clone());
@@ -68,9 +78,9 @@ async function updateOverlayPair(request) {
     return response;
   } catch {
     try { await caches.delete(pairName); } catch { /* The old active pointer remains authoritative. */ }
-    const cached = await cachedResponse(request);
-    return cached || response;
+    // Asset fetches succeeded, so a cache write failure must not replace fresh HTML with an old pair.
   }
+  return response;
 }
 
 async function fetchAssetOrCached(request) {

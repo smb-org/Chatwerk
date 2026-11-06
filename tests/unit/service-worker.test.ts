@@ -9,7 +9,10 @@ type FetchEventLike = { request: Request; respondWith(value: Promise<Response> |
 type MessageEventLike = { data: unknown; waitUntil(value: Promise<unknown>): void };
 type WorkerEventLike = ExtendEventLike | FetchEventLike | MessageEventLike;
 
-function serviceWorkerHarness(fetcher: (request: Request) => Promise<Response>) {
+function serviceWorkerHarness(
+  fetcher: (request: Request) => Promise<Response>,
+  shouldFailCachePut: (cacheName: string, request: Request) => boolean = () => false,
+) {
   const handlers = new Map<string, (event: WorkerEventLike) => void>();
   const stores = new Map<string, Map<string, Response>>();
   const cacheStorage = {
@@ -21,7 +24,10 @@ function serviceWorkerHarness(fetcher: (request: Request) => Promise<Response>) 
       }
       return {
         match: vi.fn(async (request: Request) => entries?.get(request.url)?.clone()),
-        put: vi.fn(async (request: Request, response: Response) => { entries?.set(request.url, response.clone()); }),
+        put: vi.fn(async (request: Request, response: Response) => {
+          if (shouldFailCachePut(name, request)) throw new DOMException("Cache quota exceeded", "QuotaExceededError");
+          entries?.set(request.url, response.clone());
+        }),
         keys: vi.fn(async () => [...(entries?.keys() ?? [])].map((url) => new Request(url))),
         delete: vi.fn(async (request: Request) => entries?.delete(request.url) ?? false),
       };
@@ -110,6 +116,28 @@ describe("overlay service worker cache", () => {
     expect(await (await harness.cached("/overlay"))?.text()).toBe(oldHtml);
     expect(await (await harness.cached("/assets/old.js"))?.text()).toBe("old bundle");
     expect(await harness.cached("/assets/unavailable.js")).toBeUndefined();
+  });
+
+  it.each(["/assets/new.js", "/overlay"])("serves freshly fetched HTML when persisting %s to the cache fails", async (failedPath) => {
+    let deploy: "old" | "new" = "old";
+    let failCacheWrite = false;
+    const oldHtml = '<script src="/assets/old.js"></script>';
+    const newHtml = '<script src="/assets/new.js"></script>';
+    const fetcher = vi.fn(async (request: Request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/overlay") return new Response(deploy === "old" ? oldHtml : newHtml, { status: 200 });
+      return new Response(`${url.pathname} bundle`, { status: 200 });
+    });
+    const harness = serviceWorkerHarness(fetcher, (_cacheName, request) =>
+      failCacheWrite && new URL(request.url).pathname === failedPath);
+    await harness.fetch(new Request("https://chatwerk.test/overlay"));
+    deploy = "new";
+    failCacheWrite = true;
+
+    const response = await harness.fetch(new Request("https://chatwerk.test/overlay"));
+
+    expect(await response?.text()).toBe(newHtml);
+    expect(await (await harness.cached("/overlay"))?.text()).toBe(oldHtml);
   });
 
   it("uses the active HTML pair when the overlay page is offline", async () => {
