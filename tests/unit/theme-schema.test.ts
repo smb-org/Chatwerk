@@ -57,6 +57,15 @@ describe("theme schema", () => {
     ]);
   });
 
+  it("accepts lifetimes through 300 seconds without changing the 120-second default", () => {
+    expect(DEFAULTS.lifetime).toBe(120_000);
+    expect(validateTheme({ ...DEFAULTS, lifetime: 300_000 }).lifetime).toBe(300_000);
+    expect(validateShareableTheme({ lifetime: 300_000 }).lifetime).toBe(300_000);
+    expect(migrate({ schemaVersion: 1, lifetime: 300_000 }).lifetime).toBe(300_000);
+    expect(() => validateTheme({ ...DEFAULTS, lifetime: 301_000 })).toThrow();
+    expect(() => validateShareableTheme({ lifetime: 301_000 })).toThrow();
+  });
+
   it("migrates idempotently and ignores unknown fields", () => {
     const old = { fontSize: 20, retiredField: "ignored" };
     const once = migrate(old);

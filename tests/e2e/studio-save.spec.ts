@@ -35,6 +35,25 @@ function waitForStudioLiveConnection(page: import("@playwright/test").Page): Pro
   });
 }
 
+test("saves the Studio lifetime slider at 300 seconds", async ({ page }) => {
+  const { token } = await seedStudioSession(page);
+  await page.routeWebSocket("wss://irc-ws.chat.twitch.tv/**", (socket) => socket.close());
+  await page.goto("/studio");
+
+  const slider = page.locator("#theme-lifetime");
+  await expect(slider).toHaveAttribute("max", "300000");
+  await setRange(page, "lifetime", 300_000);
+  await expect(slider).toHaveValue("300000");
+  await expect(page.locator("#theme-lifetime-readout")).toHaveText("300s");
+  await expect(page.locator("#status-visible")).toHaveText(/Saved, rev [1-9]\d*/u, { timeout: 5_000 });
+
+  const response = await page.request.get(`${e2eOrigin}/api/overlay/config`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(response.status()).toBe(200);
+  await expect(response.json()).resolves.toMatchObject({ config: { lifetime: 300_000 } });
+});
+
 test("coalesces slider changes while one delayed save is in flight", async ({ page }) => {
   const { overlayId, token } = await seedStudioSession(page);
   await page.goto("/studio");

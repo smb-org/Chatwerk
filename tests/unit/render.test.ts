@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { JSDOM } from "jsdom";
-import { DEFAULTS, ensureReadableNameColor, estimateTextLegibility } from "../../src/shared/theme";
+import { DEFAULTS, ensureReadableNameColor, estimateTextLegibility, validateTheme } from "../../src/shared/theme";
 import { createChatRenderer } from "../../src/renderer/render";
 import { parseIrcLine } from "../../src/renderer/irc-parse";
 import { createEmoteLookup, type EmoteAsset } from "../../src/renderer/emotes";
@@ -241,6 +241,24 @@ describe("text renderer", () => {
     expect(row?.style.getPropertyValue("opacity")).toBe("0");
     vi.advanceTimersByTime(200);
     expect(root.children).toHaveLength(0);
+    renderer.dispose();
+  });
+
+  it("keeps a 300-second message row after 120 seconds", () => {
+    vi.useFakeTimers();
+    const theme = validateTheme({ ...DEFAULTS, lifetime: 300_000 });
+    const renderer = createChatRenderer({
+      root,
+      theme,
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=long-lifetime :viewer!viewer@host PRIVMSG #room :still here")!);
+    const row = root.querySelector<HTMLElement>(".chat-line");
+
+    vi.advanceTimersByTime(120_001);
+
+    expect(row?.isConnected).toBe(true);
+    expect(row?.textContent).toContain("still here");
     renderer.dispose();
   });
 
