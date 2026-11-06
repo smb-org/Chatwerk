@@ -86,6 +86,7 @@ export function parseIrcLine(input: string): IrcEvent | null {
   if (!command) return null;
   const { params, trailing } = parseParams(commandEnd < 0 ? "" : rest.slice(commandEnd + 1));
   const channel = params[0] ?? "";
+  const text = trailing ?? params[1] ?? "";
 
   if (command === "RECONNECT") return { type: "RECONNECT" };
   if (command === "PRIVMSG" || command === "USERNOTICE") {
@@ -103,26 +104,26 @@ export function parseIrcLine(input: string): IrcEvent | null {
       color: tags.color && isValidColor(tags.color) ? tags.color : null,
       badges: parseBadges(tags.badges),
       emotes: parseEmotes(tags.emotes),
-      text: trailing ?? "",
+      text,
       tags,
       ...(tags.historical === "1" ? { historical: true } : {}),
     };
   }
   if (command === "CLEARCHAT") {
     if (!channel) return null;
-    const target = trailing?.trim() || params[1] || null;
+    const target = trailing === null ? params[1] ?? null : trailing.trim() || null;
     return { type: "CLEARCHAT", channel, target, targetUserId: tags["target-user-id"] ?? null, tags };
   }
   if (command === "CLEARMSG") {
     if (!channel) return null;
-    return { type: "CLEARMSG", channel, messageId: tags["target-msg-id"] ?? null, text: trailing ?? "", tags };
+    return { type: "CLEARMSG", channel, messageId: tags["target-msg-id"] ?? null, text, tags };
   }
   if (command === "ROOMSTATE") {
     if (!channel) return null;
     return { type: "ROOMSTATE", channel, tags };
   }
   if (command === "NOTICE") {
-    return { type: "NOTICE", messageId: tags["msg-id"] ?? null, text: trailing ?? "", tags };
+    return { type: "NOTICE", messageId: tags["msg-id"] ?? null, text, tags };
   }
   return null;
 }

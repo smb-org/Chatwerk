@@ -43,6 +43,26 @@ describe("Twitch IRC parser", () => {
       .toMatchObject({ type: "ROOMSTATE", channel: "#room", tags: { slow: "10", "emote-only": "0" } });
   });
 
+  it("reads bare final middle parameters as message text or moderation targets", () => {
+    expect(parseIrcLine("@id=bare;emotes=25:0-4 :viewer!viewer@host PRIVMSG #room Kappa"))
+      .toMatchObject({ type: "PRIVMSG", channel: "#room", text: "Kappa", emotes: [{ id: "25", ranges: [{ start: 0, end: 4 }] }] });
+    expect(parseIrcLine(":tmi.twitch.tv USERNOTICE #room Welcome"))
+      .toMatchObject({ type: "USERNOTICE", channel: "#room", text: "Welcome" });
+    expect(parseIrcLine(":tmi.twitch.tv CLEARMSG #room removed"))
+      .toMatchObject({ type: "CLEARMSG", channel: "#room", text: "removed" });
+    expect(parseIrcLine(":tmi.twitch.tv CLEARCHAT #room user"))
+      .toMatchObject({ type: "CLEARCHAT", channel: "#room", target: "user" });
+    expect(parseIrcLine(":tmi.twitch.tv NOTICE * unavailable"))
+      .toMatchObject({ type: "NOTICE", messageId: null, text: "unavailable" });
+  });
+
+  it("keeps a leading colon in trailing text and leaves absent text empty", () => {
+    expect(parseIrcLine(":viewer!viewer@host PRIVMSG #a ::)"))
+      .toMatchObject({ type: "PRIVMSG", text: ":)" });
+    expect(parseIrcLine(":viewer!viewer@host PRIVMSG #a"))
+      .toMatchObject({ type: "PRIVMSG", text: "" });
+  });
+
   it("parses PING, RECONNECT, NOTICE and ignores malformed or unrelated lines", () => {
     expect(parseIrcLine("PING :token")).toMatchObject({ type: "PING", payload: "token" });
     expect(parseIrcLine(":tmi.twitch.tv RECONNECT")).toMatchObject({ type: "RECONNECT" });
