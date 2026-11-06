@@ -1032,7 +1032,7 @@ test("badge metadata stays on one line beside the name at 400px and wraps above 
       }));
     };
 
-    prepareRow(longRow, "x".repeat(30), "long");
+    prepareRow(longRow, "x".repeat(120), "long");
     prepareRow(shortRow, "hi", "short");
     root.appendChild(shortRow);
   });
@@ -1056,6 +1056,7 @@ test("badge metadata stays on one line beside the name at 400px and wraps above 
     const messageRect = message.getBoundingClientRect();
     return {
       marker: (row as HTMLElement).dataset.badgeWrap,
+      rowLeft: row.getBoundingClientRect().left,
       badgeTops: badges.map((badge) => badge.getBoundingClientRect().top),
       badgeNameGap: name.left - lastBadge.right,
       pronounLineCount: visualLineCount(pronounRange),
@@ -1086,7 +1087,7 @@ test("badge metadata stays on one line beside the name at 400px and wraps above 
   expect(longAt400.badgeNameGap).toBeLessThanOrEqual(shortAt400.badgeNameGap + 2);
   expect(longAt400.pronounLineCount).toBe(1);
   expect(longAt400.messageLineCount).toBeGreaterThanOrEqual(3);
-  expect(longAt400.messageLeft).toBeGreaterThan(longAt400.nameRight);
+  expect(Math.abs(longAt400.messageLeft - longAt400.rowLeft)).toBeLessThanOrEqual(1);
   expect(new Set(longAt150.badgeTops.map((top) => Math.round(top))).size).toBeGreaterThan(1);
   expect(longAt150.messageTop).toBeGreaterThanOrEqual(longAt150.nameBottom - 1);
 });

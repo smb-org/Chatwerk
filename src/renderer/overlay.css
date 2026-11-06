@@ -61,6 +61,12 @@ body {
   flex-direction: column-reverse;
 }
 
+@media (min-width: 241px) {
+  #chat[data-layout="stack"][data-line-order="name-first"] .chat-line:not(.chat-name-own-line) {
+    flex-wrap: wrap;
+  }
+}
+
 .chat-line {
   box-sizing: border-box;
   display: flex;
@@ -339,6 +345,13 @@ body {
   min-width: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+@media (min-width: 241px) {
+  #chat[data-layout="stack"][data-line-order="name-first"] .chat-line:not(.chat-name-own-line) .chat-message {
+    flex-basis: 10em;
+    max-width: max-content;
+  }
 }
 
 .chat-empty {
