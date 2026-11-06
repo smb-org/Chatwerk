@@ -1446,17 +1446,14 @@ function openChannelPopover(): void {
 }
 
 function positionChannelPopover(): void {
-  if (window.innerWidth > 1023) {
-    channelPopover.style.removeProperty("position");
-    channelPopover.style.removeProperty("top");
-    channelPopover.style.removeProperty("left");
-    channelPopover.style.removeProperty("right");
-    channelPopover.style.removeProperty("width");
-    return;
-  }
   const field = channelFieldButton.getBoundingClientRect();
-  const width = Math.min(320, window.innerWidth - 24);
-  const left = Math.max(12, Math.min(field.left, window.innerWidth - width - 12));
+  const previewLeft = window.innerWidth > 1023
+    ? document.querySelector<HTMLElement>(".preview-column")?.getBoundingClientRect().left
+    : undefined;
+  const width = Math.min(320, window.innerWidth - 24, previewLeft === undefined ? Infinity : previewLeft - 24);
+  const left = previewLeft === undefined
+    ? Math.max(12, Math.min(field.left, window.innerWidth - width - 12))
+    : previewLeft - width - 12;
   channelPopover.style.position = "fixed";
   channelPopover.style.top = `${field.bottom + 8}px`;
   channelPopover.style.left = `${left}px`;
