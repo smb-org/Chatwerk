@@ -15,8 +15,10 @@ import {
   type ThemeValues,
 } from "../shared/theme";
 import { featureEnabled } from "../shared/features";
+import { BUILD_ID } from "../shared/build-id";
 import { currentLanguage, saveLanguage, translate, type Language, type TranslationKey } from "../shared/i18n";
 import { applyTranslations } from "./i18n-dom";
+import { countOutdatedOutputs } from "./build-status";
 import { initialLoadRetryDelayMs } from "./retry";
 import { isSettingsFieldEnabled, isSettingsRehearsalEnabled, SETTINGS_TABS, type SettingsTabId } from "./settings-tabs";
 import {
@@ -118,6 +120,7 @@ const statusAnnouncer = $("#status-announcer") as HTMLElement;
 const warningRow = $("#warning-row") as HTMLElement;
 const errorArea = $("#save-error") as HTMLElement;
 const connectionChip = $("#connection-chip") as HTMLElement;
+const connectionCount = $("#connection-count") as HTMLElement;
 const testButton = $("#test-in-obs") as HTMLButtonElement;
 const testHint = $("#test-output-hint") as HTMLElement;
 const toast = $("#toast") as HTMLElement;
@@ -186,6 +189,7 @@ let activePreviewDrag: ActivePreviewDrag | undefined;
 let revision = 0;
 let channel = "";
 let connectedOutputs = 0;
+let outdatedOutputs = 0;
 let counts: ClientCounts = { obs: 0, browser: 0, widget: 0, studio: 0 };
 let socket: WebSocket | undefined;
 let socketAttempt = 0;
@@ -209,6 +213,7 @@ let initializationRetrying = false;
 const updateRequired = false;
 let fontFallback = false;
 let connectionLost = false;
+connectionChip.dataset.buildId = BUILD_ID;
 let oneToOne = false;
 let objectUrl: string | undefined;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -226,7 +231,6 @@ let linkRevokedRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 let linkRevokedRefreshAttempt = 0;
 let publishLimitReached = false;
 let currentPlatform = "obs";
-let lastAnnouncedCount: number | undefined;
 let overlaySelectionVersion = 0;
 let hypeConsentRequest = 0;
 
@@ -361,6 +365,12 @@ function connectStudioSocket(): void {
         studio: safeCount(message.counts.studio),
       };
       counts = next;
+      const clients = Array.isArray(message.clients)
+        ? message.clients.flatMap((client) => isRecord(client) && typeof client.client === "string"
+          ? [{ client: client.client, buildId: client.buildId }]
+          : [])
+        : [];
+      outdatedOutputs = countOutdatedOutputs(clients, BUILD_ID);
       updateClientCount();
       updateTestButton();
       if (connectedOutputs > 0) finishFirstRun();
@@ -410,10 +420,30 @@ function updateClientCount(): void {
   const total = counts.obs + counts.browser + counts.widget;
   connectedOutputs = total;
   connectionChip.dataset.count = String(total);
-  if (lastAnnouncedCount !== total) {
-    lastAnnouncedCount = total;
-    connectionChip.textContent = translate(language, "connectionCount", { count: total });
+  updateConnectionChipStatus();
+}
+
+function updateConnectionChipStatus(): void {
+  const total = connectionChip.dataset.count;
+  if (outdatedOutputs > 0 && total !== undefined) {
+    const chipKey = outdatedOutputs === 1 ? "oldOutputChipOne" : "oldOutputChipMany";
+    const descriptionKey = outdatedOutputs === 1 ? "oldOutputDescriptionOne" : "oldOutputDescriptionMany";
+    const description = translate(language, descriptionKey, { count: outdatedOutputs });
+    const label = translate(language, chipKey, { count: outdatedOutputs });
+    if (connectionCount.textContent !== label) connectionCount.textContent = label;
+    connectionChip.dataset.outdated = "true";
+    connectionChip.title = description;
+    connectionChip.setAttribute("aria-description", description);
+    return;
   }
+
+  const label = total === undefined
+    ? translate(language, "connectionUnknown")
+    : translate(language, "connectionCount", { count: total });
+  if (connectionCount.textContent !== label) connectionCount.textContent = label;
+  connectionChip.removeAttribute("data-outdated");
+  connectionChip.removeAttribute("title");
+  connectionChip.removeAttribute("aria-description");
 }
 
 function applyIncomingConfig(message: { revision: number; config: unknown }): void {
@@ -428,9 +458,9 @@ function applyIncomingConfig(message: { revision: number; config: unknown }): vo
 }
 
 function updateConnectionChipUnknown(): void {
-  lastAnnouncedCount = undefined;
+  outdatedOutputs = 0;
   connectionChip.removeAttribute("data-count");
-  connectionChip.textContent = translate(language, "connectionUnknown");
+  updateConnectionChipStatus();
 }
 
 function updateTestButton(): void {
@@ -1396,9 +1426,7 @@ function applyPageLanguage(): void {
   document.title = `${translate(language, "brand")} · ${translate(language, "studioTitle")}`;
   const urlField = document.querySelector<HTMLInputElement>("#overlay-url");
   if (urlField) urlField.setAttribute("aria-label", translate(language, "overlayLink"));
-  const chipCount = connectionChip.dataset.count;
-  if (chipCount !== undefined) connectionChip.textContent = translate(language, "connectionCount", { count: chipCount });
-  else connectionChip.textContent = translate(language, "connectionUnknown");
+  updateConnectionChipStatus();
   updateHeaderResponsive();
   updateActiveOverlayLabel();
   updateChannelHeader();
@@ -2759,7 +2787,6 @@ async function selectOverlay(next: StudioOverlay): Promise<void> {
   previousSocket?.close();
   counts = { obs: 0, browser: 0, widget: 0, studio: 0 };
   connectedOutputs = 0;
-  lastAnnouncedCount = undefined;
   updateClientCount();
   const wasLive = livePreviewEnabled;
   overlay = next;
