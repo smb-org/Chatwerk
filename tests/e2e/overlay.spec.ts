@@ -36,7 +36,7 @@ const probeProviderConnections = async () => {
     "https://7tv.io/v3/emote-sets/global",
     "https://api.betterttv.net/3/cached/emotes/global",
     "https://api.frankerfacez.com/v1/set/global",
-    "https://pronouns.alejo.io/api/pronouns",
+    "https://api.pronouns.alejo.io/v1/pronouns",
   ].map((url) => fetch(url, { mode: "no-cors" }).catch(() => undefined));
   const socket = new WebSocket("wss://events.7tv.io/v3");
   await new Promise<void>((resolve) => {

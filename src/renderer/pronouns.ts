@@ -16,6 +16,12 @@ interface PronounLookupOptions {
   storage?: Pick<Storage, "getItem" | "setItem"> | null;
 }
 
+class PronounProviderHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`Pronoun provider returned ${status}`);
+  }
+}
+
 export interface PronounLookup {
   lookup(login: string): Promise<string | null>;
   dispose(): void;
@@ -61,7 +67,7 @@ export function createPronounLookup(options: PronounLookupOptions = {}): Pronoun
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetcher(url, { signal: controller.signal, mode: "cors" });
-      if (!response.ok) throw new Error(`Pronoun provider returned ${response.status}`);
+      if (!response.ok) throw new PronounProviderHttpError(response.status);
       return await response.json() as unknown;
     } finally {
       clearTimeout(timeout);
@@ -71,12 +77,14 @@ export function createPronounLookup(options: PronounLookupOptions = {}): Pronoun
 
   const getLabels = (): Promise<Map<string, string>> => {
     if (!labelsPromise) {
-      labelsPromise = fetchJson("https://pronouns.alejo.io/api/pronouns").then((value) => {
+      labelsPromise = fetchJson("https://api.pronouns.alejo.io/v1/pronouns").then((value) => {
         const labels = new Map<string, string>();
-        if (Array.isArray(value)) {
-          for (const item of value) {
-            if (isRecord(item) && typeof item.name === "string" && typeof item.display === "string") {
-              labels.set(item.name, item.display);
+        if (isRecord(value)) {
+          for (const [name, item] of Object.entries(value)) {
+            if (isRecord(item) && item.name === name && typeof item.subject === "string" &&
+              typeof item.object === "string" && typeof item.singular === "boolean") {
+              // Joining both fields preserves the provider's former display labels (including Any/Any).
+              labels.set(name, `${item.subject}/${item.object}`);
             }
           }
         }
@@ -90,16 +98,17 @@ export function createPronounLookup(options: PronounLookupOptions = {}): Pronoun
   };
 
   const fetchPronoun = async (login: string): Promise<string | null> => {
-    const [userResult, labelResult] = await Promise.allSettled([
-      fetchJson(`https://pronouns.alejo.io/api/users/${encodeURIComponent(login)}`),
-      getLabels(),
-    ]);
-    if (userResult.status === "rejected") throw userResult.reason;
-    if (labelResult.status === "rejected") throw labelResult.reason;
-    if (!Array.isArray(userResult.value)) return null;
-    const entry = userResult.value.find((item) => isRecord(item) && typeof item.login === "string" && item.login.toLowerCase() === login);
-    if (!isRecord(entry) || typeof entry.pronoun_id !== "string") return null;
-    return labelResult.value.get(entry.pronoun_id) ?? null;
+    let user: unknown;
+    try {
+      user = await fetchJson(`https://api.pronouns.alejo.io/v1/users/${encodeURIComponent(login)}`);
+    } catch (error) {
+      if (error instanceof PronounProviderHttpError && error.status === 404) return null;
+      throw error;
+    }
+    if (!isRecord(user) || typeof user.channel_id !== "string" || typeof user.channel_login !== "string" ||
+      user.channel_login.toLowerCase() !== login || typeof user.pronoun_id !== "string") return null;
+    const labels = await getLabels();
+    return labels.get(user.pronoun_id) ?? null;
   };
 
   const drain = (): void => {
