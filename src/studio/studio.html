@@ -98,6 +98,7 @@
             </div>
           </div>
           <div class="preview-window" id="preview-window" data-background="checker">
+            <div class="preview-canvas" id="preview-canvas" hidden aria-hidden="true"></div>
             <div class="sample-label preview-mode-chip" role="group" data-i18n-aria-label="previewChatMode">
               <button id="preview-mode-sample" type="button" aria-pressed="true" data-i18n="sampleMode"></button>
               <button id="preview-mode-live" type="button" aria-pressed="false" data-i18n="liveMode"></button>
@@ -106,12 +107,16 @@
             <p class="live-no-channel-message" id="live-no-channel-message" data-i18n="noChannel" hidden></p>
             <div class="preview-frame-wrap" id="preview-frame-wrap">
               <iframe id="studio-preview" width="400" height="600" data-i18n-title="sampleChat" sandbox="allow-scripts" src="/overlay#client=studio" tabindex="-1"></iframe>
+              <button class="preview-move-control" id="preview-move-control" type="button" hidden data-i18n-aria-label="previewMove"></button>
               <output class="preview-size-drag-label" id="preview-size-drag-label" hidden aria-live="off"></output>
               <button class="preview-resize-handle preview-resize-right" id="preview-resize-right" type="button" data-preview-resize-axis="width" data-i18n-aria-label="previewResizeWidth"></button>
               <button class="preview-resize-handle preview-resize-top" id="preview-resize-top" type="button" data-preview-resize-axis="height" data-i18n-aria-label="previewResizeHeight"></button>
               <button class="preview-resize-handle preview-resize-corner" id="preview-resize-corner" type="button" data-preview-resize-axis="both" data-i18n-aria-label="previewResizeBoth"></button>
             </div>
-            <div class="preview-meta"><span id="preview-scale" data-i18n="previewScale" data-percent=""></span></div>
+            <div class="preview-readouts">
+              <div class="preview-position-meta" id="preview-position-meta" hidden aria-live="polite"></div>
+              <div class="preview-meta"><span id="preview-scale" data-i18n="previewScale" data-percent=""></span></div>
+            </div>
           </div>
           <div class="mobile-warning" data-i18n="editingWide"></div>
         </section>

@@ -19,9 +19,18 @@ import { applyTranslations } from "./i18n-dom";
 import { initialLoadRetryDelayMs } from "./retry";
 import { SETTINGS_TABS, type SettingsTabId } from "./settings-tabs";
 import {
+  calculatePreviewCanvasGeometry,
+  clampPreviewPosition,
   DEFAULT_PREVIEW_SOURCE_SIZE,
+  defaultPreviewPosition,
+  isValidPreviewPosition,
   isValidPreviewSourceSize,
+  movePreviewPositionBy,
+  movePreviewPositionFromDrag,
+  PREVIEW_CANVAS_HEIGHT,
+  PREVIEW_CANVAS_WIDTH,
   resizePreviewSourceSizeFromDrag,
+  type PreviewCanvasPosition,
   type PreviewResizeAxis,
   type PreviewSourceSize,
 } from "./preview-sizing";
@@ -87,8 +96,11 @@ const $ = <T = HTMLElement>(selector: string): T => {
 
 const preview = $("#studio-preview") as HTMLIFrameElement;
 const previewWindow = $("#preview-window") as HTMLElement;
+const previewCanvas = $("#preview-canvas") as HTMLElement;
 const previewFrameWrap = $("#preview-frame-wrap") as HTMLElement;
 const previewScale = $("#preview-scale") as HTMLElement;
+const previewPositionMeta = $("#preview-position-meta") as HTMLElement;
+const previewMoveControl = $("#preview-move-control") as HTMLButtonElement;
 const previewSizeDragLabel = $("#preview-size-drag-label") as HTMLOutputElement;
 const previewResizeHandles = [...document.querySelectorAll<HTMLButtonElement>("[data-preview-resize-axis]")];
 const previewSizePreset = $("#preview-size-preset") as HTMLSelectElement;
@@ -142,19 +154,33 @@ let liveChatState: "connecting" | "waiting" | "message" | undefined;
 let liveChatChannel = "";
 let theme: ThemeConfig = DEFAULTS;
 let previewSourceSize: PreviewSourceSize = DEFAULT_PREVIEW_SOURCE_SIZE;
+let previewPosition: PreviewCanvasPosition = defaultPreviewPosition(DEFAULT_PREVIEW_SOURCE_SIZE);
 let lastAppliedPreviewMaxChatHeight: number | undefined;
-let activePreviewResize: {
+type ActivePreviewDrag = {
+  kind: "resize";
   pointerId: number;
-  handle: HTMLButtonElement;
+  capture: HTMLElement;
   axis: PreviewResizeAxis;
   startX: number;
   startY: number;
   startSize: PreviewSourceSize;
+  startPosition: PreviewCanvasPosition;
   scale: number;
+  canvasMode: boolean;
   fixedBottom: number;
   visibleWidth: number;
   visibleHeight: number;
-} | undefined;
+} | {
+  kind: "move";
+  pointerId: number;
+  capture: HTMLElement;
+  startX: number;
+  startY: number;
+  startSize: PreviewSourceSize;
+  startPosition: PreviewCanvasPosition;
+  scale: number;
+};
+let activePreviewDrag: ActivePreviewDrag | undefined;
 let revision = 0;
 let channel = "";
 let connectedOutputs = 0;
@@ -1286,11 +1312,17 @@ function sameChannels(left: string[], right: string[]): boolean {
 }
 
 function applyPreviewTheme(): void {
-  if (!activePreviewResize) {
+  if (!activePreviewDrag) {
     if (theme.layout === "stack" && theme.maxChatHeight >= 100) {
       if (theme.maxChatHeight !== lastAppliedPreviewMaxChatHeight) {
         lastAppliedPreviewMaxChatHeight = theme.maxChatHeight;
         if (previewSourceSize.height !== theme.maxChatHeight) {
+          if (isPreviewCanvasMode()) {
+            previewPosition = clampPreviewPosition({
+              x: previewPosition.x,
+              y: previewPosition.y + previewSourceSize.height - theme.maxChatHeight,
+            }, { ...previewSourceSize, height: theme.maxChatHeight });
+          }
           applyPreviewSourceSize({ ...previewSourceSize, height: theme.maxChatHeight }, true);
         }
       }
@@ -1485,6 +1517,23 @@ function wireStaticControls(): void {
   const resizeObserver = new ResizeObserver(updatePreviewScale);
   resizeObserver.observe(previewWindow);
   previewResizeHandles.forEach(wirePreviewResizeHandle);
+  previewFrameWrap.addEventListener("pointerdown", (event) => {
+    const target = event.target;
+    if (target instanceof Element) {
+      const handle = target.closest<HTMLButtonElement>("[data-preview-resize-axis]");
+      const axis = handle?.dataset.previewResizeAxis;
+      if (handle && (axis === "width" || axis === "height" || axis === "both")) {
+        beginPreviewResize(event, handle, axis);
+        return;
+      }
+    }
+    beginPreviewMove(event);
+  });
+  previewFrameWrap.addEventListener("pointermove", updatePreviewDrag);
+  previewFrameWrap.addEventListener("pointerup", finishPreviewDrag);
+  previewFrameWrap.addEventListener("pointercancel", cancelPreviewDrag);
+  previewMoveControl.addEventListener("keydown", movePreviewFromKeyboard);
+  previewMoveControl.addEventListener("click", (event) => event.preventDefault());
   window.addEventListener("resize", () => {
     updateHeaderResponsive();
     if (!channelPopover.hidden) positionChannelPopover();
@@ -1591,7 +1640,6 @@ function wireStaticControls(): void {
     const radio = document.querySelector<HTMLInputElement>('input[name="preview-background"][value="mine"]');
     if (radio) radio.checked = true;
     setBackground("mine");
-    previewWindow.style.backgroundImage = `url("${objectUrl}")`;
   });
   $("#preview-fit").addEventListener("click", () => setScaleMode(false));
   $("#preview-one-to-one").addEventListener("click", () => setScaleMode(true));
@@ -2244,7 +2292,7 @@ async function reloadAccessibleOverlays(): Promise<void> {
 
 async function handleOverlayAccessLost(): Promise<void> {
   if (accessLossInProgress) return;
-  cancelPreviewResize();
+  cancelPreviewDrag();
   accessLossInProgress = true;
   overlaySelectionVersion += 1;
   activeSave = undefined;
@@ -2835,38 +2883,68 @@ function closeToast(): void {
 }
 
 function setBackground(value: string): void {
+  cancelPreviewDrag();
   previewWindow.dataset.background = value;
   if (value !== "mine") previewWindow.style.backgroundImage = "";
   if (value === "dark") previewWindow.style.backgroundColor = "#17181B";
   else if (value === "light") previewWindow.style.backgroundColor = "#ECE9E2";
   else if (value === "checker") previewWindow.style.backgroundColor = "#222428";
   else if (objectUrl) previewWindow.style.backgroundImage = `url("${objectUrl}")`;
+  updatePreviewScale();
 }
 
 function setScaleMode(enabled: boolean): void {
+  cancelPreviewDrag();
   oneToOne = enabled;
   $("#preview-one-to-one").setAttribute("aria-pressed", String(enabled));
   $("#preview-fit").setAttribute("aria-pressed", String(!enabled));
   updatePreviewScale();
 }
 
+function isPreviewCanvasMode(): boolean {
+  return previewWindow.dataset.background === "mine" && Boolean(objectUrl) && !oneToOne;
+}
+
+function getPreviewCanvasGeometry(): ReturnType<typeof calculatePreviewCanvasGeometry> {
+  const style = getComputedStyle(previewWindow);
+  return calculatePreviewCanvasGeometry(previewWindow.clientWidth, previewWindow.clientHeight, {
+    top: Number.parseFloat(style.paddingTop) || 0,
+    right: Number.parseFloat(style.paddingRight) || 0,
+    bottom: Number.parseFloat(style.paddingBottom) || 0,
+    left: Number.parseFloat(style.paddingLeft) || 0,
+  });
+}
+
 function updatePreviewScale(): void {
-  if (!previewWindow || !previewFrameWrap || !previewScale || activePreviewResize) return;
+  if (!previewWindow || !previewFrameWrap || !previewScale || activePreviewDrag) return;
+  const canvasMode = isPreviewCanvasMode();
   const stageStyle = getComputedStyle(previewWindow);
   const horizontalPadding = (Number.parseFloat(stageStyle.paddingLeft) || 0) + (Number.parseFloat(stageStyle.paddingRight) || 0);
   const verticalPadding = (Number.parseFloat(stageStyle.paddingTop) || 0) + (Number.parseFloat(stageStyle.paddingBottom) || 0);
   const availableWidth = Math.max(0, previewWindow.clientWidth - horizontalPadding);
   const availableHeight = Math.max(0, previewWindow.clientHeight - verticalPadding);
-  const scale = oneToOne ? 1 : Math.max(0.05, Math.min(
-    1,
-    availableWidth / previewSourceSize.width,
-    availableHeight / previewSourceSize.height,
-  ));
+  const scale = canvasMode
+    ? getPreviewCanvasGeometry().scale
+    : oneToOne ? 1 : Math.max(0.05, Math.min(
+      1,
+      availableWidth / previewSourceSize.width,
+      availableHeight / previewSourceSize.height,
+    ));
   setPreviewFrameGeometry(scale);
   previewScale.textContent = translate(language, "previewScale", { percent: Math.round(scale * 100) });
+  updatePreviewPositionReadout();
 }
 
 function setPreviewFrameGeometry(scale: number): void {
+  const canvasMode = isPreviewCanvasMode();
+  const image = objectUrl ? `url("${objectUrl}")` : "";
+  previewWindow.dataset.canvasMode = String(canvasMode);
+  previewCanvas.hidden = !canvasMode;
+  previewMoveControl.hidden = !canvasMode;
+  previewFrameWrap.dataset.movable = String(canvasMode);
+  previewFrameWrap.dataset.moving = String(activePreviewDrag?.kind === "move");
+  previewCanvas.style.backgroundImage = image;
+  previewWindow.style.backgroundImage = canvasMode ? "" : previewWindow.dataset.background === "mine" ? image : "";
   preview.width = String(previewSourceSize.width);
   preview.height = String(previewSourceSize.height);
   preview.style.width = `${previewSourceSize.width}px`;
@@ -2874,21 +2952,60 @@ function setPreviewFrameGeometry(scale: number): void {
   previewFrameWrap.style.width = `${previewSourceSize.width * scale}px`;
   previewFrameWrap.style.height = `${previewSourceSize.height * scale}px`;
   preview.style.transform = `scale(${scale})`;
+  if (canvasMode) {
+    const geometry = getPreviewCanvasGeometry();
+    let canvasLeft = geometry.left;
+    let canvasTop = geometry.top;
+    if (!activePreviewDrag) {
+      previewCanvas.style.left = `${geometry.left}px`;
+      previewCanvas.style.top = `${geometry.top}px`;
+      previewCanvas.style.width = `${geometry.width}px`;
+      previewCanvas.style.height = `${geometry.height}px`;
+    } else {
+      const frozenLeft = Number.parseFloat(previewCanvas.style.left);
+      const frozenTop = Number.parseFloat(previewCanvas.style.top);
+      if (Number.isFinite(frozenLeft)) canvasLeft = frozenLeft;
+      if (Number.isFinite(frozenTop)) canvasTop = frozenTop;
+    }
+    previewFrameWrap.style.position = "absolute";
+    previewFrameWrap.style.left = `${canvasLeft + previewPosition.x * scale}px`;
+    previewFrameWrap.style.top = `${canvasTop + previewPosition.y * scale}px`;
+  } else if (!activePreviewDrag) {
+    const stageStyle = getComputedStyle(previewWindow);
+    const paddingLeft = Number.parseFloat(stageStyle.paddingLeft) || 0;
+    const paddingRight = Number.parseFloat(stageStyle.paddingRight) || 0;
+    const paddingTop = Number.parseFloat(stageStyle.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(stageStyle.paddingBottom) || 0;
+    const availableWidth = Math.max(0, previewWindow.clientWidth - paddingLeft - paddingRight);
+    const availableHeight = Math.max(0, previewWindow.clientHeight - paddingTop - paddingBottom);
+    const frameWidth = previewSourceSize.width * scale;
+    const frameHeight = previewSourceSize.height * scale;
+    previewFrameWrap.style.position = "";
+    previewFrameWrap.style.left = availableWidth < frameWidth ? `${(availableWidth - frameWidth) / 2}px` : "";
+    previewFrameWrap.style.top = availableHeight < frameHeight ? `${(availableHeight - frameHeight) / 2}px` : "";
+  }
+}
+
+function updatePreviewPositionReadout(): void {
+  previewPositionMeta.hidden = !isPreviewCanvasMode();
+  previewPositionMeta.textContent = `X ${previewPosition.x}  Y ${previewPosition.y}  ${previewSourceSize.width} x ${previewSourceSize.height}`;
 }
 
 function wirePreviewResizeHandle(handle: HTMLButtonElement): void {
   const axis = handle.dataset.previewResizeAxis;
-  if (axis !== "width" && axis !== "height" && axis !== "both") return;
-  handle.addEventListener("pointerdown", (event) => beginPreviewResize(event, handle, axis));
-  handle.addEventListener("pointermove", updatePreviewResize);
-  handle.addEventListener("pointerup", finishPreviewResize);
-  handle.addEventListener("pointercancel", (event) => cancelPreviewResize(event));
-  handle.addEventListener("keydown", (event) => resizePreviewFromKeyboard(event, axis));
+  if (axis === "width" || axis === "height" || axis === "both") {
+    handle.addEventListener("keydown", (event) => resizePreviewFromKeyboard(event, axis));
+  }
+}
+
+function currentPreviewScale(): number {
+  return Number.parseFloat(preview.style.transform.match(/scale\(([\d.]+)\)/u)?.[1] ?? "1");
 }
 
 function beginPreviewResize(event: PointerEvent, handle: HTMLButtonElement, axis: PreviewResizeAxis): void {
-  if (activePreviewResize || (event.pointerType === "mouse" && event.button !== 0)) return;
+  if (activePreviewDrag || (event.pointerType === "mouse" && event.button !== 0)) return;
   event.preventDefault();
+  previewPositionMeta.setAttribute("aria-live", "off");
   const frame = previewFrameWrap.getBoundingClientRect();
   const stage = previewWindow.getBoundingClientRect();
   const stageStyle = getComputedStyle(previewWindow);
@@ -2897,18 +3014,29 @@ function beginPreviewResize(event: PointerEvent, handle: HTMLButtonElement, axis
   const borderTop = Number.parseFloat(stageStyle.borderTopWidth) || 0;
   const paddingTop = Number.parseFloat(stageStyle.paddingTop) || 0;
   const paddingRight = Number.parseFloat(stageStyle.paddingRight) || 0;
-  const scale = Number.parseFloat(preview.style.transform.match(/scale\(([\d.]+)\)/u)?.[1] ?? "1");
-  activePreviewResize = {
+  const scale = currentPreviewScale();
+  const canvasMode = isPreviewCanvasMode();
+  const fixedBottom = canvasMode
+    ? Math.min(previewPosition.y + previewSourceSize.height, PREVIEW_CANVAS_HEIGHT)
+    : frame.bottom - stage.top - borderTop;
+  activePreviewDrag = {
+    kind: "resize",
     pointerId: event.pointerId,
-    handle,
+    capture: handle,
     axis,
     startX: event.clientX,
     startY: event.clientY,
     startSize: { ...previewSourceSize },
+    startPosition: { ...previewPosition },
     scale,
-    fixedBottom: frame.bottom - stage.top - borderTop,
-    visibleWidth: Math.max(100, (stage.right - borderRight - paddingRight - frame.left - 7) / scale),
-    visibleHeight: Math.max(100, (frame.bottom - stage.top - borderTop - paddingTop - 7) / scale),
+    canvasMode,
+    fixedBottom,
+    visibleWidth: canvasMode
+      ? Math.max(previewSourceSize.width, Math.max(100, PREVIEW_CANVAS_WIDTH - previewPosition.x))
+      : Math.max(100, (stage.right - borderRight - paddingRight - frame.left - 7) / scale),
+    visibleHeight: canvasMode
+      ? Math.max(100, Math.min(fixedBottom, PREVIEW_CANVAS_HEIGHT))
+      : Math.max(100, (frame.bottom - stage.top - borderTop - paddingTop - 7) / scale),
   };
   previewFrameWrap.style.position = "absolute";
   previewFrameWrap.style.left = `${frame.left - stage.left - borderLeft}px`;
@@ -2918,9 +3046,40 @@ function beginPreviewResize(event: PointerEvent, handle: HTMLButtonElement, axis
   handle.setPointerCapture(event.pointerId);
 }
 
-function updatePreviewResize(event: PointerEvent): void {
-  const drag = activePreviewResize;
+function beginPreviewMove(event: PointerEvent): void {
+  if (!isPreviewCanvasMode() || activePreviewDrag || (event.pointerType === "mouse" && event.button !== 0)) return;
+  if (event.target === previewMoveControl) previewMoveControl.focus();
+  event.preventDefault();
+  previewPositionMeta.setAttribute("aria-live", "off");
+  activePreviewDrag = {
+    kind: "move",
+    pointerId: event.pointerId,
+    capture: previewFrameWrap,
+    startX: event.clientX,
+    startY: event.clientY,
+    startSize: { ...previewSourceSize },
+    startPosition: { ...previewPosition },
+    scale: currentPreviewScale(),
+  };
+  previewFrameWrap.dataset.moving = "true";
+  previewFrameWrap.setPointerCapture(event.pointerId);
+}
+
+function updatePreviewDrag(event: PointerEvent): void {
+  const drag = activePreviewDrag;
   if (!drag || drag.pointerId !== event.pointerId) return;
+  if (drag.kind === "move") {
+    previewPosition = movePreviewPositionFromDrag(
+      drag.startPosition,
+      drag.startSize,
+      event.clientX - drag.startX,
+      event.clientY - drag.startY,
+      drag.scale,
+    );
+    setPreviewFrameGeometry(drag.scale);
+    updatePreviewPositionReadout();
+    return;
+  }
   const size = resizePreviewSourceSizeFromDrag(
     drag.startSize,
     event.clientX - drag.startX,
@@ -2931,17 +3090,32 @@ function updatePreviewResize(event: PointerEvent): void {
     drag.axis,
   );
   applyPreviewSourceSize(size, false, false);
+  if (drag.canvasMode) {
+    previewPosition = clampPreviewPosition({
+      x: drag.startPosition.x,
+      y: drag.axis === "height" || drag.axis === "both" ? drag.fixedBottom - size.height : drag.startPosition.y,
+    }, size);
+  }
   setPreviewFrameGeometry(drag.scale);
-  if (drag.axis === "height" || drag.axis === "both") {
+  if (!drag.canvasMode && (drag.axis === "height" || drag.axis === "both")) {
     previewFrameWrap.style.top = `${drag.fixedBottom - size.height * drag.scale}px`;
   }
   previewSizeDragLabel.value = `${size.width} × ${size.height}`;
+  updatePreviewPositionReadout();
 }
 
-function finishPreviewResize(event: PointerEvent): void {
-  const drag = activePreviewResize;
+function finishPreviewDrag(event: PointerEvent): void {
+  const drag = activePreviewDrag;
   if (!drag || drag.pointerId !== event.pointerId) return;
-  activePreviewResize = undefined;
+  activePreviewDrag = undefined;
+  if (drag.capture.hasPointerCapture(drag.pointerId)) drag.capture.releasePointerCapture(drag.pointerId);
+  previewFrameWrap.dataset.moving = "false";
+  previewPositionMeta.setAttribute("aria-live", "polite");
+  if (drag.kind === "move") {
+    savePreviewPosition();
+    updatePreviewScale();
+    return;
+  }
   previewFrameWrap.style.position = "";
   previewFrameWrap.style.left = "";
   previewFrameWrap.style.top = "";
@@ -2951,25 +3125,46 @@ function finishPreviewResize(event: PointerEvent): void {
 }
 
 function resizePreviewFromKeyboard(event: KeyboardEvent, axis: PreviewResizeAxis): void {
-  if (activePreviewResize) return;
+  if (activePreviewDrag) return;
   const step = event.shiftKey ? 50 : 10;
   const previousHeight = previewSourceSize.height;
   const next = { ...previewSourceSize };
-  if ((axis === "width" || axis === "both") && event.key === "ArrowRight") next.width = Math.min(3840, next.width + step);
+  const canvasMode = isPreviewCanvasMode();
+  const canvasWidthLimit = Math.max(100, Math.floor((PREVIEW_CANVAS_WIDTH - previewPosition.x) / 10) * 10);
+  const maxWidth = canvasMode ? Math.max(previewSourceSize.width, canvasWidthLimit) : 3840;
+  const fixedBottom = Math.min(previewPosition.y + previewSourceSize.height, PREVIEW_CANVAS_HEIGHT);
+  const maxHeight = canvasMode ? Math.max(100, Math.floor(fixedBottom / 10) * 10) : 2160;
+  if ((axis === "width" || axis === "both") && event.key === "ArrowRight") next.width = Math.min(maxWidth, next.width + step);
   else if ((axis === "width" || axis === "both") && event.key === "ArrowLeft") next.width = Math.max(100, next.width - step);
   else if ((axis === "height" || axis === "both") && event.key === "ArrowUp") next.height += step;
   else if ((axis === "height" || axis === "both") && event.key === "ArrowDown") next.height -= step;
   else return;
   event.preventDefault();
   if ((axis === "height" || axis === "both") && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
-    next.height = Math.min(2160, Math.max(100, Math.round(next.height / 10) * 10));
+    next.height = Math.min(maxHeight, Math.max(100, Math.round(next.height / 10) * 10));
+    if (canvasMode) previewPosition = clampPreviewPosition({ x: previewPosition.x, y: fixedBottom - next.height }, next);
   }
   applyPreviewSourceSize(next, true);
   if (next.height !== previousHeight) savePreviewHeightToTheme(next.height);
 }
 
+function movePreviewFromKeyboard(event: KeyboardEvent): void {
+  if (!isPreviewCanvasMode() || activePreviewDrag) return;
+  const step = event.shiftKey ? 50 : 10;
+  const movement = event.key === "ArrowLeft" ? { x: -step, y: 0 }
+    : event.key === "ArrowRight" ? { x: step, y: 0 }
+      : event.key === "ArrowUp" ? { x: 0, y: -step }
+        : event.key === "ArrowDown" ? { x: 0, y: step }
+          : undefined;
+  if (!movement) return;
+  event.preventDefault();
+  previewPosition = movePreviewPositionBy(previewPosition, previewSourceSize, movement.x, movement.y);
+  updatePreviewScale();
+  savePreviewPosition();
+}
+
 function loadPreviewSourceSize(overlayId: string): void {
-  cancelPreviewResize();
+  cancelPreviewDrag();
   try {
     const stored = localStorage.getItem(`chatwerk-source-size:${overlayId}`);
     const parsed: unknown = stored ? JSON.parse(stored) as unknown : DEFAULT_PREVIEW_SOURCE_SIZE;
@@ -2977,22 +3172,43 @@ function loadPreviewSourceSize(overlayId: string): void {
   } catch {
     previewSourceSize = DEFAULT_PREVIEW_SOURCE_SIZE;
   }
+  previewPosition = loadPreviewPosition(overlayId, previewSourceSize);
   previewSizeError.hidden = true;
   updatePreviewSizeControl();
   updateSourceSizeHint();
   updatePreviewScale();
 }
 
-function cancelPreviewResize(event?: PointerEvent): void {
-  const drag = activePreviewResize;
+function loadPreviewPosition(overlayId: string, size: PreviewSourceSize): PreviewCanvasPosition {
+  try {
+    const stored = localStorage.getItem(`chatwerk-preview-position:${overlayId}`);
+    const parsed: unknown = stored ? JSON.parse(stored) as unknown : undefined;
+    return isValidPreviewPosition(parsed) ? clampPreviewPosition(parsed, size) : defaultPreviewPosition(size);
+  } catch {
+    return defaultPreviewPosition(size);
+  }
+}
+
+function savePreviewPosition(): void {
+  if (!overlay) return;
+  try { localStorage.setItem(`chatwerk-preview-position:${overlay.id}`, JSON.stringify(previewPosition)); }
+  catch { /* Canvas placement is a local Studio convenience. */ }
+}
+
+function cancelPreviewDrag(event?: PointerEvent): void {
+  const drag = activePreviewDrag;
   if (!drag || (event && drag.pointerId !== event.pointerId)) return;
-  activePreviewResize = undefined;
-  if (drag.handle.hasPointerCapture(drag.pointerId)) drag.handle.releasePointerCapture(drag.pointerId);
+  activePreviewDrag = undefined;
+  if (drag.capture.hasPointerCapture(drag.pointerId)) drag.capture.releasePointerCapture(drag.pointerId);
+  previewFrameWrap.dataset.moving = "false";
+  previewPositionMeta.setAttribute("aria-live", "polite");
+  previewSizeDragLabel.hidden = true;
+  previewPosition = drag.startPosition;
   previewFrameWrap.style.position = "";
   previewFrameWrap.style.left = "";
   previewFrameWrap.style.top = "";
-  previewSizeDragLabel.hidden = true;
-  applyPreviewSourceSize(drag.startSize, false);
+  if (drag.kind === "resize") applyPreviewSourceSize(drag.startSize, false);
+  else updatePreviewScale();
 }
 
 function savePreviewHeightToTheme(height: number): void {
@@ -3004,12 +3220,15 @@ function savePreviewHeightToTheme(height: number): void {
 
 function applyPreviewSourceSize(size: PreviewSourceSize, persist: boolean, updateScale = true): void {
   previewSourceSize = size;
+  previewPosition = clampPreviewPosition(previewPosition, size);
   previewSizeError.hidden = true;
   updatePreviewSizeControl();
   updateSourceSizeHint();
   if (updateScale) updatePreviewScale();
+  else updatePreviewPositionReadout();
   if (persist && overlay) {
     try { localStorage.setItem(`chatwerk-source-size:${overlay.id}`, JSON.stringify(size)); } catch { /* This setting is a local Studio convenience. */ }
+    savePreviewPosition();
   }
 }
 

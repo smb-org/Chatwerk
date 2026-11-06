@@ -149,9 +149,18 @@ a.button:not([hidden]) { display: inline-flex; align-items: center; justify-cont
 .preview-window[data-background="checker"] { background-color: #222428; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'%3E%3Cpath fill='%23303439' d='M0 0h16v16H0zm16 16h16v16H16z'/%3E%3C/svg%3E"); }
 .preview-window[data-background="light"] { background-color: #ECE9E2; }
 .preview-window[data-background="mine"] { background-repeat: no-repeat; background-position: center; background-size: cover; }
+.preview-canvas { position: absolute; z-index: 0; background-repeat: no-repeat; background-position: center; background-size: cover; pointer-events: none; }
+.preview-canvas[hidden] { display: none; }
 .preview-frame-wrap { position: relative; flex: 0 0 auto; width: 0; height: 0; }
 .preview-frame-wrap { outline: 1px solid var(--ui-line); }
+.preview-frame-wrap[data-movable="true"] { z-index: 1; cursor: grab; touch-action: none; }
+.preview-frame-wrap[data-moving="true"] { cursor: grabbing; }
 .preview-frame-wrap iframe { position: absolute; top: 0; left: 0; display: block; width: 400px; height: 600px; border: 0; color-scheme: normal; background: transparent; transform-origin: top left; }
+.preview-window[data-canvas-mode="true"] .preview-frame-wrap iframe { pointer-events: none; }
+.preview-move-control { position: absolute; top: 7px; left: 7px; z-index: 2; display: grid; width: 22px; height: 22px; place-items: center; padding: 0; color: var(--ui-fg); background: var(--ui-surface); border: 1px solid var(--ui-line); border-radius: 4px; cursor: grab; opacity: .9; }
+.preview-move-control::after { content: "✥"; font-size: 13px; line-height: 1; }
+.preview-move-control[hidden] { display: none; }
+.preview-move-control:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
 .preview-size-drag-label { position: absolute; top: 6px; right: 6px; z-index: 2; padding: 2px 5px; color: var(--ui-fg); background: var(--ui-surface); border: 1px solid var(--ui-line); border-radius: 4px; font-family: var(--ui-font-data); font-size: 11px; line-height: 16px; pointer-events: none; }
 .preview-size-drag-label[hidden] { display: none; }
 .preview-resize-handle { position: absolute; z-index: 3; display: block; min-width: 0; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 5px; background: transparent; opacity: .9; touch-action: none; user-select: none; }
@@ -166,7 +175,12 @@ a.button:not([hidden]) { display: inline-flex; align-items: center; justify-cont
 .preview-resize-top::after { top: 5px; left: 50%; width: 32px; height: 4px; transform: translateX(-50%); }
 .preview-resize-corner { right: -8px; top: -8px; width: 16px; height: 16px; cursor: nesw-resize; }
 .preview-resize-corner::after { right: 2px; top: 2px; width: 8px; height: 8px; border-radius: 50%; }
-.preview-meta { position: absolute; right: 16px; bottom: 14px; z-index: 4; display: flex; gap: 10px; align-items: center; padding: 3px 7px; color: var(--ui-fg); background: var(--ui-surface); border: 1px solid var(--ui-line); border-radius: 4px; font-family: var(--ui-font-data); font-size: 11px; pointer-events: none; }
+.preview-readouts { position: absolute; right: 16px; bottom: 14px; z-index: 4; display: flex; gap: 6px; align-items: center; pointer-events: none; }
+.preview-meta, .preview-position-meta { display: flex; gap: 10px; align-items: center; min-height: 22px; box-sizing: border-box; padding: 3px 7px; color: var(--ui-fg); background: var(--ui-surface); border: 1px solid var(--ui-line); border-radius: 4px; font-family: var(--ui-font-data); font-size: 11px; white-space: nowrap; }
+.preview-meta { position: absolute; right: 16px; bottom: 14px; z-index: 4; }
+.preview-readouts .preview-meta, .preview-readouts .preview-position-meta { position: static; z-index: auto; }
+.preview-position-meta { width: 220px; justify-content: center; }
+.preview-meta[hidden], .preview-position-meta[hidden] { display: none; }
 .sample-label { position: absolute; top: 10px; left: 14px; z-index: 1; padding: 3px 7px; color: var(--ui-muted); background: var(--ui-bg); border: 1px solid var(--ui-line); border-radius: 4px; font-size: 12px; }
 .preview-mode-chip { display: inline-flex; gap: 2px; padding: 2px; }
 .preview-mode-chip button { min-height: 24px; padding: 0 7px; color: var(--ui-muted); background: transparent; border: 0; border-radius: 3px; font-size: 11px; }
