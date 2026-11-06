@@ -582,6 +582,100 @@ test("all default stack messages move below their names at 150px without horizon
   expect(rows.every((row) => row.lineScrollWidth <= row.lineWidth && row.messageScrollWidth <= row.messageWidth && row.documentWidth <= 150)).toBe(true);
 });
 
+test("badge metadata stays on one line beside the name at 400px and wraps above the message at 150px", async ({ page }) => {
+  await mkdir(".tmp/shots", { recursive: true });
+  await studio(page);
+  await page.locator("#preview-size-preset").selectOption("400x600");
+  await expect.poll(() => frameSize(page)).toEqual({ width: 400, height: 600 });
+
+  const chat = page.frameLocator("#studio-preview").locator("#chat");
+  await chat.locator(".chat-line").first().evaluate((renderedRow) => {
+    const root = renderedRow.ownerDocument.querySelector<HTMLElement>("#chat")!;
+    const rows = [...root.querySelectorAll<HTMLElement>(".chat-line")];
+    const longRow = rows[0]!;
+    rows.slice(1).forEach((row) => row.remove());
+    const shortRow = longRow.cloneNode(true) as HTMLElement;
+
+    const prepareRow = (row: HTMLElement, messageText: string, marker: string) => {
+      row.dataset.badgeWrap = marker;
+      row.querySelector<HTMLElement>(".chat-name")!.textContent = "Viewer";
+      row.querySelector<HTMLElement>(".chat-pronouns")!.textContent = "they/them";
+      row.querySelector<HTMLElement>(".chat-source-room")!.textContent = "via s";
+      row.querySelector<HTMLElement>(".chat-source-room")!.setAttribute("aria-label", "Shared chat source room shared-stream");
+      row.querySelector<HTMLElement>(".chat-message")!.textContent = messageText;
+
+      const badges = row.querySelector<HTMLElement>(".chat-badges")!;
+      const colors = ["e76f51", "2a9d8f", "457b9d", "e9c46a"];
+      badges.replaceChildren(...Array.from({ length: 9 }, (_, index) => {
+        const badge = row.ownerDocument.createElement("img");
+        badge.className = "chat-badge";
+        badge.width = 18;
+        badge.height = 18;
+        badge.alt = `Fixture badge ${index + 1}`;
+        badge.src = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"><circle cx="9" cy="9" r="8" fill="#${colors[index % colors.length]}"/></svg>`)}`;
+        return badge;
+      }));
+    };
+
+    prepareRow(longRow, "x".repeat(30), "long");
+    prepareRow(shortRow, "hi", "short");
+    root.appendChild(shortRow);
+  });
+
+  const longRow = chat.locator('.chat-line[data-badge-wrap="long"]');
+  const shortRow = chat.locator('.chat-line[data-badge-wrap="short"]');
+  await expect(longRow.locator("img.chat-badge")).toHaveCount(9);
+  await expect(shortRow.locator("img.chat-badge")).toHaveCount(9);
+
+  const measureRows = async () => chat.locator(".chat-line[data-badge-wrap]").evaluateAll((rows) => rows.map((row) => {
+    const badges = [...row.querySelectorAll<HTMLImageElement>("img.chat-badge")];
+    const lastBadge = badges.at(-1)!.getBoundingClientRect();
+    const name = row.querySelector<HTMLElement>(".chat-name")!.getBoundingClientRect();
+    const pronouns = row.querySelector<HTMLElement>(".chat-pronouns")!;
+    const pronounRange = document.createRange();
+    pronounRange.selectNodeContents(pronouns);
+    const message = row.querySelector<HTMLElement>(".chat-message")!;
+    const messageRange = document.createRange();
+    messageRange.selectNodeContents(message);
+    const visualLineCount = (range: Range) => new Set([...range.getClientRects()].map((rect) => Math.round(rect.top))).size;
+    const messageRect = message.getBoundingClientRect();
+    return {
+      marker: (row as HTMLElement).dataset.badgeWrap,
+      badgeTops: badges.map((badge) => badge.getBoundingClientRect().top),
+      badgeNameGap: name.left - lastBadge.right,
+      pronounLineCount: visualLineCount(pronounRange),
+      messageLineCount: visualLineCount(messageRange),
+      messageLeft: messageRect.left,
+      messageTop: messageRect.top,
+      nameRight: name.right,
+      nameBottom: name.bottom,
+    };
+  }));
+
+  const rowsAt400 = await measureRows();
+  const longAt400 = rowsAt400.find((row) => row.marker === "long")!;
+  const shortAt400 = rowsAt400.find((row) => row.marker === "short")!;
+  await page.locator("#studio-preview").screenshot({ path: ".tmp/shots/badge-wrap-400.png" });
+
+  await page.locator("#preview-size-preset").selectOption("custom");
+  await page.locator("#preview-custom-width").fill("150");
+  await page.locator("#preview-custom-height").fill("600");
+  await page.locator("#preview-custom-apply").click();
+  await expect.poll(() => frameSize(page)).toEqual({ width: 150, height: 600 });
+  const longAt150 = (await measureRows()).find((row) => row.marker === "long")!;
+  await page.locator("#studio-preview").screenshot({ path: ".tmp/shots/badge-wrap-150.png" });
+
+  expect(longAt400.badgeTops.every((top) => Math.abs(top - longAt400.badgeTops[0]!) <= 1), JSON.stringify({ longAt400, shortAt400 })).toBe(true);
+  expect(shortAt400.badgeTops.every((top) => Math.abs(top - shortAt400.badgeTops[0]!) <= 1)).toBe(true);
+  expect(longAt400.badgeNameGap).toBeGreaterThanOrEqual(-2);
+  expect(longAt400.badgeNameGap).toBeLessThanOrEqual(shortAt400.badgeNameGap + 2);
+  expect(longAt400.pronounLineCount).toBe(1);
+  expect(longAt400.messageLineCount).toBeGreaterThanOrEqual(3);
+  expect(longAt400.messageLeft).toBeGreaterThan(longAt400.nameRight);
+  expect(new Set(longAt150.badgeTops.map((top) => Math.round(top))).size).toBeGreaterThan(1);
+  expect(longAt150.messageTop).toBeGreaterThanOrEqual(longAt150.nameBottom - 1);
+});
+
 test("captures wide, narrow, and short resize screenshots", async ({ page }) => {
   await mkdir(".tmp/shots", { recursive: true });
   await studio(page);
