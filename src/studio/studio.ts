@@ -165,6 +165,7 @@ type ActivePreviewDrag = {
   startX: number;
   startY: number;
   startSize: PreviewSourceSize;
+  originalSize: PreviewSourceSize;
   startPosition: PreviewCanvasPosition;
   scale: number;
   canvasMode: boolean;
@@ -3023,6 +3024,11 @@ function currentPreviewScale(): number {
   return Number.parseFloat(preview.style.transform.match(/scale\(([\d.]+)\)/u)?.[1] ?? "1");
 }
 
+function previewHeightLimitForResize(): number | undefined {
+  if (theme.layout !== "stack" || theme.maxChatHeight < 100 || theme.maxChatHeight >= previewSourceSize.height) return undefined;
+  return theme.maxChatHeight;
+}
+
 function beginPreviewResize(event: PointerEvent, handle: HTMLButtonElement, axis: PreviewResizeAxis): void {
   if (activePreviewDrag || (event.pointerType === "mouse" && event.button !== 0)) return;
   event.preventDefault();
@@ -3037,8 +3043,12 @@ function beginPreviewResize(event: PointerEvent, handle: HTMLButtonElement, axis
   const paddingRight = Number.parseFloat(stageStyle.paddingRight) || 0;
   const scale = currentPreviewScale();
   const canvasMode = isPreviewCanvasMode();
+  const originalSize = { ...previewSourceSize };
+  const startPosition = { ...previewPosition };
+  const heightLimit = axis === "height" || axis === "both" ? previewHeightLimitForResize() : undefined;
+  const startSize = heightLimit === undefined ? originalSize : { ...originalSize, height: heightLimit };
   const fixedBottom = canvasMode
-    ? Math.min(previewPosition.y + previewSourceSize.height, PREVIEW_CANVAS_HEIGHT)
+    ? Math.min(startPosition.y + originalSize.height, PREVIEW_CANVAS_HEIGHT)
     : frame.bottom - stage.top - borderTop;
   activePreviewDrag = {
     kind: "resize",
@@ -3047,8 +3057,9 @@ function beginPreviewResize(event: PointerEvent, handle: HTMLButtonElement, axis
     axis,
     startX: event.clientX,
     startY: event.clientY,
-    startSize: { ...previewSourceSize },
-    startPosition: { ...previewPosition },
+    startSize,
+    originalSize,
+    startPosition,
     scale,
     canvasMode,
     fixedBottom,
@@ -3062,8 +3073,23 @@ function beginPreviewResize(event: PointerEvent, handle: HTMLButtonElement, axis
   previewFrameWrap.style.position = "absolute";
   previewFrameWrap.style.left = `${frame.left - stage.left - borderLeft}px`;
   previewFrameWrap.style.top = `${frame.top - stage.top - borderTop}px`;
+  if (startSize.height !== originalSize.height) {
+    applyPreviewSourceSize(startSize, false, false);
+    if (canvasMode) {
+      previewPosition = clampPreviewPosition({
+        x: startPosition.x,
+        y: fixedBottom - startSize.height,
+      }, startSize);
+      setPreviewFrameGeometry(scale);
+      updatePreviewPositionReadout();
+    } else {
+      setPreviewFrameGeometry(scale);
+      previewFrameWrap.style.top = `${fixedBottom - startSize.height * scale}px`;
+      updatePreviewPositionReadout();
+    }
+  }
   previewSizeDragLabel.hidden = false;
-  previewSizeDragLabel.value = `${previewSourceSize.width} × ${previewSourceSize.height}`;
+  previewSizeDragLabel.value = `${startSize.width} × ${startSize.height}`;
   handle.setPointerCapture(event.pointerId);
 }
 
@@ -3141,6 +3167,12 @@ function finishPreviewDrag(event: PointerEvent): void {
   previewFrameWrap.style.left = "";
   previewFrameWrap.style.top = "";
   previewSizeDragLabel.hidden = true;
+  const resized = previewSourceSize.width !== drag.startSize.width || previewSourceSize.height !== drag.startSize.height;
+  if (!resized) {
+    previewPosition = drag.startPosition;
+    applyPreviewSourceSize(drag.originalSize, false);
+    return;
+  }
   applyPreviewSourceSize(previewSourceSize, true);
   if (previewSourceSize.height !== drag.startSize.height) savePreviewHeightToTheme(previewSourceSize.height);
 }
@@ -3148,12 +3180,24 @@ function finishPreviewDrag(event: PointerEvent): void {
 function resizePreviewFromKeyboard(event: KeyboardEvent, axis: PreviewResizeAxis): void {
   if (activePreviewDrag) return;
   const step = event.shiftKey ? 50 : 10;
-  const previousHeight = previewSourceSize.height;
-  const next = { ...previewSourceSize };
+  const originalSize = { ...previewSourceSize };
+  const startPosition = { ...previewPosition };
   const canvasMode = isPreviewCanvasMode();
+  const heightKey = (axis === "height" || axis === "both") && (event.key === "ArrowUp" || event.key === "ArrowDown");
+  const heightLimit = heightKey ? previewHeightLimitForResize() : undefined;
+  const startSize = heightLimit === undefined ? originalSize : { ...originalSize, height: heightLimit };
+  const next = { ...startSize };
   const canvasWidthLimit = Math.max(100, Math.floor((PREVIEW_CANVAS_WIDTH - previewPosition.x) / 10) * 10);
   const maxWidth = canvasMode ? Math.max(previewSourceSize.width, canvasWidthLimit) : 3840;
-  const fixedBottom = Math.min(previewPosition.y + previewSourceSize.height, PREVIEW_CANVAS_HEIGHT);
+  const frame = previewFrameWrap.getBoundingClientRect();
+  const stage = previewWindow.getBoundingClientRect();
+  const stageStyle = getComputedStyle(previewWindow);
+  const borderLeft = Number.parseFloat(stageStyle.borderLeftWidth) || 0;
+  const borderTop = Number.parseFloat(stageStyle.borderTopWidth) || 0;
+  const scale = currentPreviewScale();
+  const fixedBottom = canvasMode
+    ? Math.min(startPosition.y + originalSize.height, PREVIEW_CANVAS_HEIGHT)
+    : frame.bottom - stage.top - borderTop;
   const maxHeight = canvasMode ? Math.max(100, Math.floor(fixedBottom / 10) * 10) : 2160;
   if ((axis === "width" || axis === "both") && event.key === "ArrowRight") next.width = Math.min(maxWidth, next.width + step);
   else if ((axis === "width" || axis === "both") && event.key === "ArrowLeft") next.width = Math.max(100, next.width - step);
@@ -3161,12 +3205,23 @@ function resizePreviewFromKeyboard(event: KeyboardEvent, axis: PreviewResizeAxis
   else if ((axis === "height" || axis === "both") && event.key === "ArrowDown") next.height -= step;
   else return;
   event.preventDefault();
-  if ((axis === "height" || axis === "both") && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+  if (heightKey) {
     next.height = Math.min(maxHeight, Math.max(100, Math.round(next.height / 10) * 10));
-    if (canvasMode) previewPosition = clampPreviewPosition({ x: previewPosition.x, y: fixedBottom - next.height }, next);
+    if (canvasMode) previewPosition = clampPreviewPosition({ x: startPosition.x, y: fixedBottom - next.height }, next);
+    applyPreviewSourceSize(next, true, false);
+    if (canvasMode) {
+      setPreviewFrameGeometry(scale);
+    } else {
+      setPreviewFrameGeometry(scale);
+      previewFrameWrap.style.position = "absolute";
+      previewFrameWrap.style.left = `${frame.left - stage.left - borderLeft}px`;
+      previewFrameWrap.style.top = `${fixedBottom - next.height * scale}px`;
+    }
+    updatePreviewPositionReadout();
+    if (next.height !== startSize.height) savePreviewHeightToTheme(next.height);
+    return;
   }
   applyPreviewSourceSize(next, true);
-  if (next.height !== previousHeight) savePreviewHeightToTheme(next.height);
 }
 
 function movePreviewFromKeyboard(event: KeyboardEvent): void {
@@ -3228,7 +3283,7 @@ function cancelPreviewDrag(event?: PointerEvent): void {
   previewFrameWrap.style.position = "";
   previewFrameWrap.style.left = "";
   previewFrameWrap.style.top = "";
-  if (drag.kind === "resize") applyPreviewSourceSize(drag.startSize, false);
+  if (drag.kind === "resize") applyPreviewSourceSize(drag.originalSize, false);
   else updatePreviewScale();
 }
 
