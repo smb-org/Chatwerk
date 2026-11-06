@@ -29,6 +29,7 @@
   "previewResizeWidth": "Vorschau-Breite ändern",
   "previewResizeHeight": "Vorschau-Höhe ändern",
   "previewResizeBoth": "Vorschau-Breite und -Höhe ändern",
+  "previewMove": "Vorschaurahmen verschieben",
   "previewSourceSize": "Quellgröße",
   "sourceSize400x600": "400 x 600",
   "sourceSize300x900": "300 x 900",
