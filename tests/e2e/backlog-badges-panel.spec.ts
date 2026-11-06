@@ -191,13 +191,13 @@ test("Studio Live preview loads backlog and all badge sources from its opaque or
       padding: style.paddingTop,
     };
   });
-  expect(geometry.frame).toEqual({ width: 400, height: 600 });
-  expect(geometry.box).toEqual({ top: 400, bottom: 600, height: 200, width: 400 });
+  expect(geometry.frame).toEqual({ width: 400, height: 200 });
+  expect(geometry.box).toEqual({ top: 0, bottom: 200, height: 200, width: 400 });
   expect(geometry.border).toBe("4px");
   expect(geometry.padding).toBe("12px");
   expect(geometry.lines.length).toBeGreaterThan(0);
   expect(geometry.lines.every((line) => line.top >= geometry.innerTop - 0.5 && line.bottom <= geometry.innerBottom + 0.5)).toBe(true);
-  expect(geometry.layer).toEqual({ top: 0, bottom: 600, width: 400, height: 600 });
+  expect(geometry.layer).toEqual({ top: 0, bottom: 200, width: 400, height: 200 });
 
   const configSave = page.waitForResponse((response) =>
     response.request().method() === "PUT" && new URL(response.url()).pathname.endsWith("/config"));
@@ -208,7 +208,7 @@ test("Studio Live preview loads backlog and all badge sources from its opaque or
 
   const shots = path.resolve(".tmp/shots");
   await mkdir(shots, { recursive: true });
-  await preview.locator("body").screenshot({ path: path.join(shots, "overlay-panel-backlog-400x600.png") });
+  await preview.locator("body").screenshot({ path: path.join(shots, "overlay-panel-backlog-400x200.png") });
   await badgeLine.screenshot({ path: path.join(shots, "third-party-badges-line.png") });
 });
 
