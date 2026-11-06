@@ -1166,6 +1166,19 @@ When the Studio preview uses a custom background image in Fit mode, the image si
 
 To restore either feature, set its value to `true` in `src/shared/features.json` and build and deploy the application. No runtime URL or environment setting is needed; test-only overrides do not affect production builds.
 
+## Deployment
+
+`pnpm run deploy` builds the production site once, applies remote D1 migrations, and deploys the Worker with Wrangler. Migration and deploy commands retry only transient Cloudflare failures (D1 API errors, HTTP 5xx responses, `no healthy upstream`, and malformed API responses), for at most six attempts with delays of 4, 8, 16, 32, and 60 seconds. Build errors and non-transient Cloudflare errors stop immediately and keep the command's failure exit code.
+
+After Wrangler reports a successful deploy, the script waits up to 60 seconds for `/overlay` to reference the JavaScript asset produced by that build and for that hashed asset to return 200. It then checks that `/overlay` returns 200 without `frame-ancestors` or `X-Frame-Options`, an unsigned `POST /webhooks/twitch` returns 403, and `/studio` redirects with 302 to `/login`. A failed live readiness or smoke check exits non-zero and reports that the deploy itself went through. `pnpm run deploy --dry-run` runs the production build and skips migrations, Wrangler, and all live-site requests.
+
+`.github/workflows/deploy.yml` runs on pushes to `main` and on manual dispatch. It installs the locked dependencies, runs `pnpm check`, and then runs the deploy script. E2E tests remain outside the workflow for now; the deploy script performs only the small live smoke check above. The workflow needs these repository secrets:
+
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+
+Use a scoped API token with account-level **Workers Scripts: Edit** and **D1: Edit** permissions. Because `wrangler.jsonc` binds `chatwerk.esembe.app` as a custom domain, Cloudflare also requires **Workers Routes: Edit** (API permission `Workers Routes Write`) scoped to the `esembe.app` zone when Wrangler creates or changes that route. These scopes follow Cloudflare's [Workers permissions guidance](https://developers.cloudflare.com/workers/authorization/workers/) and [D1 API permission requirements](https://developers.cloudflare.com/api/resources/d1/subresources/database/methods/list/).
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
