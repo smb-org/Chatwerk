@@ -1,4 +1,5 @@
 import type { ThemeConfig, ThemeFieldName } from "../shared/theme";
+import { featureEnabled } from "../shared/features";
 import { isAllowedImageUrl } from "../shared/hosts";
 import type { CommonMessage, ParsedReactionEvent, ReactionType } from "./irc-parse";
 import type { EmoteLookup } from "./emotes";
@@ -86,7 +87,21 @@ const DEFAULT_RAIN = [
 ];
 const LEGACY_EFFECT_KINDS = ["raid", "sub", "bits"] as const;
 
+const NO_REACTION_EFFECTS: ReactionEffects = {
+  handleHypeTrain() {},
+  enqueue() {},
+  cancelAlias() {},
+  clearRoom() {},
+  clearUser() {},
+  attachLine() {},
+  detachLine() {},
+  setTheme() {},
+  clear() {},
+  dispose() {},
+};
+
 export function createReactionEffects(options: ReactionEffectsOptions): ReactionEffects {
+  if (!featureEnabled("reactions")) return NO_REACTION_EFFECTS;
   const { root } = options;
   const document = root.ownerDocument;
   const fetcher = options.fetcher ?? fetch;
@@ -478,6 +493,7 @@ export function createReactionEffects(options: ReactionEffectsOptions): Reaction
 
   return {
     handleHypeTrain(message) {
+      if (!featureEnabled("hypeTrain")) return;
       if (disposed || !message.id || message.id.length > 256 || !message.trainId || message.trainId.length > 256 ||
         !rememberHypeMessageId(message.id)) return;
       if (message.phase === "end") {

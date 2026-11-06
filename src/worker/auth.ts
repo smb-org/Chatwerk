@@ -5,6 +5,7 @@ import {
   getAppAccessToken,
   type TwitchEventSubEnvironment,
 } from "./twitch-eventsub";
+import { featureEnabled } from "../shared/features";
 
 const encoder = new TextEncoder();
 const SESSION_COOKIE = "session";
@@ -42,6 +43,7 @@ export async function handleAuthRequest(
     return beginLogin(request, env);
   }
   if (request.method === "GET" && url.pathname === "/auth/hype-train") {
+    if (!featureEnabled("hypeTrain")) return Response.redirect(new URL("/studio", url.origin), 302);
     if (!hasSecrets(env)) return unavailable();
     return beginHypeTrainConsent(request, env);
   }

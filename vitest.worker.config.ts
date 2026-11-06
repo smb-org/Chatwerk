@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 const migrations = await readD1Migrations(resolve("migrations"));
 
 export default defineConfig({
+  define: { __CHATWERK_TEST_FEATURES__: JSON.stringify({ reactions: true, hypeTrain: true }) },
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
@@ -19,6 +20,7 @@ export default defineConfig({
   ],
   test: {
     include: ["tests/worker/**/*.test.ts"],
+    exclude: ["tests/worker/features-off.test.ts"],
     setupFiles: ["./tests/worker/setup.ts"],
   },
 });

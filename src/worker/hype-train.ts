@@ -1,5 +1,6 @@
 import { isSameOriginMutation, sessionForRequest, verifySessionCookie } from "./auth";
 import { getOverlayAccess } from "./db";
+import { featureEnabled } from "../shared/features";
 import {
   deleteHypeTrainSubscriptionsForUser,
   deriveEventSubSecret,
@@ -57,7 +58,10 @@ export async function handleHypeTrainRequest(
     return handleWebhook(request, env, ctx, fetcher);
   }
   if (url.pathname === "/api/hype-train") {
-    if (request.method === "GET") return getConsentStatus(request, env);
+    if (request.method === "GET") {
+      if (!featureEnabled("hypeTrain")) return Response.json({ error: "Hype Train is disabled" }, { status: 404 });
+      return getConsentStatus(request, env);
+    }
     return new Response(null, { status: 405, headers: { Allow: "GET" } });
   }
   if (url.pathname === "/api/hype-train/disconnect") {
