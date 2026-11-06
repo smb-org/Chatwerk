@@ -1,8 +1,13 @@
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
-import { buildWidgetExport } from "../../src/studio/widget-export";
+import { buildWidgetExport, buildWidgetOverlayUrl } from "../../src/studio/widget-export";
 
 describe("StreamElements and SoundAlerts widget output", () => {
+  it("builds the widget overlay link with the existing client and placement parameters", () => {
+    expect(buildWidgetOverlayUrl("https://chatwerk.test", "a".repeat(43)))
+      .toBe("https://chatwerk.test/overlay#token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&client=widget&placement=origin");
+  });
+
   it("keeps the three exported blocks stable and points the widget at the full token URL", () => {
     const blocks = buildWidgetExport("https://chatwerk.test", "a".repeat(43), "en");
     expect(blocks).toMatchInlineSnapshot(`

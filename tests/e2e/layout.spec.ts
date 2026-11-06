@@ -53,6 +53,7 @@ test("loads an existing Main overlay through / with defaults at revision zero", 
 test("renders theme controls without Channels and links Themes", async ({ page }) => {
   const { login } = await seedStudioSession(page);
   await page.goto("/studio");
+  await expect(page.locator("#first-run")).toHaveClass(/is-visible/u);
 
   await selectSettingsTabForField(page, "emoteScale");
   const messages = page.locator('.settings-group[data-group="Messages"]');
@@ -99,21 +100,21 @@ test("lists owned overlays from the account API", async ({ page }) => {
     .toHaveAttribute("aria-pressed", "true");
 });
 
-test("opens Widget export from Account and protects the direct export asset", async ({ page }) => {
-  await seedStudioSession(page);
+test("opens Setup from Studio navigation and protects the direct setup asset", async ({ page }) => {
+  await seedStudioSession(page, { channel: "" });
   await page.goto("/studio");
-  await page.locator("#account-menu summary").click();
+  await expect(page.locator(".studio-header .top-nav a[href='/studio/export']")).toHaveText("Setup");
 
-  const [exportResponse] = await Promise.all([
+  const [setupResponse] = await Promise.all([
     page.waitForResponse((response) => new URL(response.url()).pathname === "/studio/export"),
-    page.locator("#export-link").click(),
+    page.locator(".studio-header .top-nav a[href='/studio/export']").click(),
   ]);
-  expect(exportResponse.status()).toBe(200);
-  await expect(page.locator("#export-url")).toHaveValue(new RegExp(`${e2eOrigin.replaceAll(".", "\\.")}\\/overlay#token=.+&client=widget&placement=origin`, "u"));
-  await expect(page.locator("#code-html")).toContainText('sandbox="allow-scripts"');
-  expect(exportResponse.headers()["x-frame-options"]).toBe("SAMEORIGIN");
-  expect(exportResponse.headers()["content-security-policy"]).toContain("frame-ancestors");
-  expect(exportResponse.headers()["cache-control"]).toBe("no-cache");
+  expect(setupResponse.status()).toBe(200);
+  await expect(page.locator("#setup-url-streamelements")).toHaveValue(new RegExp(`${e2eOrigin.replaceAll(".", "\\.")}\\/overlay#token=.+&client=widget&placement=origin`, "u"));
+  await expect(page.locator("#code-html-streamelements")).toContainText('sandbox="allow-scripts"');
+  expect(setupResponse.headers()["x-frame-options"]).toBe("SAMEORIGIN");
+  expect(setupResponse.headers()["content-security-policy"]).toContain("frame-ancestors");
+  expect(setupResponse.headers()["cache-control"]).toBe("no-cache");
 
   await page.context().clearCookies();
   await page.goto("/export.html");

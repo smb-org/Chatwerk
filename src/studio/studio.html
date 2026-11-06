@@ -13,6 +13,7 @@
         <nav class="top-nav" data-i18n-aria-label="primaryNavigation">
           <a href="/studio" aria-current="page" data-i18n="studioTitle">Studio</a>
           <a href="/themes" data-i18n="themes"></a>
+          <a href="/studio/export" data-i18n="setup"></a>
         </nav>
         <span class="active-overlay-label" id="active-overlay-name">
           <span id="active-overlay-text"></span>
@@ -37,7 +38,6 @@
           <div class="account-popover">
             <button type="button" id="open-overlays" data-i18n="overlays"></button>
             <button type="button" id="open-looks" data-i18n="myLooks"></button>
-            <a id="export-link" href="/studio/export" data-i18n="widgetExport"></a>
             <span class="visually-hidden" id="language-label" data-i18n="language"></span>
             <button type="button" id="language-en" data-i18n="english"></button>
             <button type="button" id="language-de" data-i18n="german"></button>
@@ -134,6 +134,7 @@
               <button type="button" data-platform="soundalerts" aria-pressed="false" data-i18n="firstRunSoundAlerts"></button>
             </div>
           </div>
+          <a class="small-button first-run-setup-link" id="first-run-setup" href="/studio/export?platform=obs" data-i18n="firstRunSetup"></a>
           <span class="first-run-text first-run-step" data-i18n="firstRunCopy"></span>
           <span class="first-run-text" data-i18n="firstRunConnect"></span>
           <button class="button" id="first-run-done" type="button" data-i18n="firstRunDone"></button>
