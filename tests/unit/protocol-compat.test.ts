@@ -28,6 +28,19 @@ describe("additive config protocol", () => {
     });
   });
 
+  it("applies a lifetime above the former 120-second maximum without clamping the config", () => {
+    const result = decideConfigUpdate(DEFAULTS, {
+      schemaVersion: 1,
+      lifetime: 121_000,
+      fontSize: 24,
+    });
+    expect(result).toMatchObject({
+      status: "applied",
+      config: { schemaVersion: 1, lifetime: 121_000, fontSize: 24 },
+      shouldReload: false,
+    });
+  });
+
   it("keeps the last config for a higher schema without throwing or reloading", () => {
     const result = decideConfigUpdate(DEFAULTS, {
       schemaVersion: DEFAULTS.schemaVersion + 1,
