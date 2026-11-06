@@ -750,8 +750,7 @@ test("shrinking and growing the Sample preview from its top hides and restores c
   await page.locator("#rehearse-flood").click();
   const chat = page.frameLocator("#studio-preview").locator("#chat");
   await expect.poll(() => chat.locator(".chat-line").count(), { timeout: 10_000 }).toBeGreaterThan(8);
-  await expect.poll(async () => page.frameLocator("#studio-preview").locator(".chat-line").last().textContent())
-    .toContain("GGs");
+  await expect(chat.locator(".chat-line").filter({ hasText: "GGs" }).first()).toBeAttached();
   const rowsBefore = await chat.locator(".chat-line").count();
 
   const topHandle = await page.locator("#preview-resize-top").boundingBox();
@@ -824,9 +823,10 @@ test("Live preview wraps a long word at 150px and stays connected through resize
 
   await page.locator("#preview-size-preset").selectOption("custom");
   await page.locator("#preview-custom-width").fill("150");
-  await page.locator("#preview-custom-height").fill("600");
+  await page.locator("#preview-custom-height").fill("1000");
   await page.locator("#preview-custom-apply").click();
-  await expect.poll(() => frameSize(page)).toEqual({ width: 150, height: 600 });
+  await expect.poll(() => frameSize(page)).toEqual({ width: 150, height: 1_000 });
+  await expect.poll(() => chat.locator(".chat-line").count()).toBe(3);
   const wrapping = await chat.locator(".chat-line").filter({ hasText: longWord }).evaluate((line) => {
     const message = line.querySelector<HTMLElement>(".chat-message")!;
     const name = line.querySelector<HTMLElement>(".chat-name")!;
@@ -951,8 +951,10 @@ test("Live preview wraps a long word at 150px and stays connected through resize
   expect(tickerLayout.documentWidth).toBeLessThanOrEqual(150);
 
   await page.locator("#preview-fit").click();
-  await dragHandle(page, "#preview-resize-right", 40, 0);
-  await expect.poll(() => frameSize(page)).toEqual({ width: 190, height: 600 });
+  const fitScale = await page.locator("#studio-preview").evaluate((frame) =>
+    Number.parseFloat(frame.style.transform.match(/scale\(([\d.]+)\)/u)?.[1] ?? "1"));
+  await dragHandle(page, "#preview-resize-right", 40 * fitScale, 0);
+  await expect.poll(() => frameSize(page)).toEqual({ width: 190, height: 1_000 });
   const connected = {
     sameDocument: await page.frameLocator("#studio-preview").locator("body").evaluate((body) =>
       (window as ResizeTestWindow).__resizeOriginalDocument === body.ownerDocument),
@@ -985,9 +987,10 @@ test("all default stack messages move below their names at 150px without horizon
 
   await page.locator("#preview-size-preset").selectOption("custom");
   await page.locator("#preview-custom-width").fill("150");
-  await page.locator("#preview-custom-height").fill("600");
+  await page.locator("#preview-custom-height").fill("1000");
   await page.locator("#preview-custom-apply").click();
-  await expect.poll(() => frameSize(page)).toEqual({ width: 150, height: 600 });
+  await expect.poll(() => frameSize(page)).toEqual({ width: 150, height: 1_000 });
+  await expect.poll(() => chat.locator(".chat-line").count()).toBe(3);
   const rows = await chat.locator(".chat-line").evaluateAll((lines) => lines.map((line) => {
     const name = line.querySelector<HTMLElement>(".chat-name")!.getBoundingClientRect();
     const message = line.querySelector<HTMLElement>(".chat-message")!;

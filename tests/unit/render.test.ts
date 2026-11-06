@@ -27,6 +27,35 @@ function rect(top: number, height: number, width: number): DOMRect {
 }
 
 describe("text renderer", () => {
+  it("refreshes backlog rows when channel emotes arrive for messages without a room id", () => {
+    let publishChannelEmotes!: (assets: EmoteAsset[]) => void;
+    const emotes = createEmoteLookup({ providers: [{
+      name: "7TV",
+      loadGlobal() {
+        return new Promise<EmoteAsset[]>(() => undefined);
+      },
+      loadChannel(_channelId, onUpdate) {
+        publishChannelEmotes = onUpdate;
+        return new Promise<EmoteAsset[]>(() => undefined);
+      },
+    }] });
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, emotes7tv: true },
+      emotes,
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=backlog-emote;historical=1 :viewer!viewer@host PRIVMSG #room :Pog")!);
+    const row = root.querySelector<HTMLElement>(".chat-line")!;
+    emotes.setChannelIds(["10"]);
+
+    expect(row.querySelector("img.chat-emote")).toBeNull();
+    publishChannelEmotes([{ name: "Pog", url: "https://cdn.7tv.app/emote/pog/2x.webp", provider: "7TV" }]);
+
+    expect(row.querySelector('img.chat-emote[alt="Pog"]')).not.toBeNull();
+    renderer.dispose();
+  });
+
   it("re-tokenizes only matching existing rows after emote assets arrive without extending their lifetime", () => {
     vi.useFakeTimers();
     let publish!: (assets: EmoteAsset[]) => void;

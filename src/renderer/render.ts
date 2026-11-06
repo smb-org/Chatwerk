@@ -872,7 +872,8 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
 
   function refreshEmotes(channelIds: Set<string>, allRooms: boolean): void {
     for (const line of lines) {
-      if (!allRooms && !channelIds.has(emoteRoomIdFor(line.event) ?? "")) continue;
+      const roomId = emoteRoomIdFor(line.event);
+      if (!allRooms && roomId && !channelIds.has(roomId)) continue;
       const parts = splitEventMessage(line.event, options.emotes);
       if (!hasNewEmoteCoverage(line.messageParts, parts)) continue;
       line.message.replaceChildren();
