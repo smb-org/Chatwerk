@@ -47,6 +47,12 @@ test("updates a backlog row when its delayed 7TV emote set arrives without movin
   await page.route("https://cdn.7tv.app/**", async (route) => {
     await route.fulfill({ status: 200, contentType: "image/svg+xml", body: squareSvg });
   });
+  await page.route("https://api.betterttv.net/**", async (route) => {
+    await route.fulfill({ json: {} });
+  });
+  await page.route("https://api.frankerfacez.com/**", async (route) => {
+    await route.fulfill({ json: {} });
+  });
   await page.routeWebSocket("wss://events.7tv.io/v3", (socket) => {
     socket.onMessage(() => undefined);
     socket.send(JSON.stringify({ op: 1, d: { heartbeat_interval: 30_000, session_id: "delayed-emote" } }));
