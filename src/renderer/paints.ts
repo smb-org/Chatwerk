@@ -50,7 +50,7 @@ const MAX_BATCH_SIZE = 25;
 const BATCH_COLLECT_MS = 1_500;
 const REQUEST_INTERVAL_MS = 2_000;
 const MIN_TIMEOUT_MS = 30_000;
-const PAINT_QUERY = `query($ids: [String!]!) { cosmetics(list: $ids) { paints { id name color kind gradients { function canvas_repeat canvas_size at stops { at color } image_url shape angle repeat } shadows { x_offset y_offset radius color } } } }`;
+const PAINT_QUERY = `query($ids: [String!]!) { cosmetics(list: $ids) { paints { id name color kind function repeat angle shape image_url stops { at color } gradients { function canvas_repeat canvas_size at stops { at color } image_url shape angle repeat } shadows { x_offset y_offset radius color } } } }`;
 const BADGE_QUERY = `query($ids: [String!]!) { cosmetics(list: $ids) { badges { id name tooltip host { url } } } }`;
 
 export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup {

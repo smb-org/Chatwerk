@@ -5,9 +5,111 @@ import type { SevenTvEvent } from "../../src/renderer/seventv-events";
 const json = (value: unknown): Response => new Response(JSON.stringify(value), { status: 200 });
 const changeMap = (id: string, object: unknown) => ({ id, kind: 0, actor: { id: "actor" }, updated: [], pushed: [], pulled: [], object });
 
+const uraniumPaint = {
+  id: "01G9DJJ40G00044BJY7M3198HC",
+  name: "Uranium",
+  color: null,
+  kind: "PAINT",
+  function: "RADIAL_GRADIENT",
+  repeat: false,
+  angle: 0,
+  shape: "circle",
+  image_url: "",
+  stops: [
+    { at: 0, color: -285277953 },
+    { at: 0.5, color: -1493237505 },
+    { at: 1, color: 1573063167 },
+  ],
+  shadows: [
+    { x_offset: 0, y_offset: 0, radius: 0.5, color: 624034303 },
+    { x_offset: 0, y_offset: 0, radius: 4, color: -1109325313 },
+  ],
+  gradients: [],
+};
+
+const ghoulishPaint = {
+  id: "01M3QBESQ89Z6DDENSWNYJDB1D",
+  name: "Ghoulish",
+  color: null,
+  kind: "PAINT",
+  function: "LINEAR_GRADIENT",
+  repeat: false,
+  angle: 90,
+  shape: "circle",
+  image_url: "",
+  stops: [
+    { at: 0.15, color: -1992243969 },
+    { at: 0.45, color: 1495449599 },
+    { at: 0.65, color: 16712959 },
+  ],
+  shadows: [{ x_offset: 0, y_offset: 0, radius: 0.1, color: 1140916223 }],
+  gradients: [],
+};
+
 afterEach(() => vi.useRealTimers());
 
 describe("7TV paints", () => {
+  it("builds gradients from the verbatim top-level Uranium and Ghoulish paint fields", () => {
+    expect(buildPaintStyle(uraniumPaint)).toEqual({
+      type: "gradient",
+      value: "radial-gradient(circle, #eeff00ff 0%, #a6ff00ff 50%, #5dc309ff 100%)",
+      filter: "drop-shadow(0px 0px 0.5px #253201ff) drop-shadow(0px 0px 4px #bde109ff)",
+    });
+    expect(buildPaintStyle(ghoulishPaint)).toEqual({
+      type: "gradient",
+      value: "linear-gradient(90deg, #8940c4ff 15%, #5922bfff 45%, #00ff04ff 65%)",
+      filter: "drop-shadow(0px 0px 0.1px #4400ffff)",
+    });
+  });
+
+  it("rejects an empty URL image while accepting the allowlisted 7TV paint host", () => {
+    expect(buildPaintStyle({ function: "URL", image_url: "" })).toBeNull();
+    expect(buildPaintStyle({ function: "URL", image_url: "https://cdn.7tv.app/paint/paint/1x.webp" }))
+      .toEqual({ type: "image", value: 'url("https://cdn.7tv.app/paint/paint/1x.webp")' });
+  });
+
+  it("requests and resolves top-level fields for a first paint lookup", async () => {
+    vi.useFakeTimers();
+    let paintQuery = "";
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { query: string };
+      if (request.query.includes("userByConnection")) {
+        return json({ data: { u0: { id: "7tv-user", style: { paint_id: uraniumPaint.id } } } });
+      }
+
+      paintQuery = request.query;
+      const hasTopLevelPaintFields = request.query.includes(
+        "paints { id name color kind function repeat angle shape image_url stops { at color } gradients",
+      );
+      const { id, name, color, kind, shadows, gradients } = uraniumPaint;
+      const paint = {
+        id, name, color, kind, shadows, gradients,
+        ...(hasTopLevelPaintFields ? {
+          function: uraniumPaint.function,
+          repeat: uraniumPaint.repeat,
+          angle: uraniumPaint.angle,
+          shape: uraniumPaint.shape,
+          image_url: uraniumPaint.image_url,
+          stops: uraniumPaint.stops,
+        } : {}),
+      };
+      return json({ data: { cosmetics: { paints: [paint] } } });
+    });
+    const paints = createPaintLookup({ fetcher });
+
+    void paints.load("42");
+    await vi.advanceTimersByTimeAsync(1_500);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(paintQuery).toContain("paints { id name color kind function repeat angle shape image_url stops { at color } gradients");
+    expect(paints.resolve("42")).toEqual({
+      type: "gradient",
+      value: "radial-gradient(circle, #eeff00ff 0%, #a6ff00ff 50%, #5dc309ff 100%)",
+      filter: "drop-shadow(0px 0px 0.5px #253201ff) drop-shadow(0px 0px 4px #bde109ff)",
+    });
+    paints.dispose();
+  });
+
   it("loads 7TV badges through the shared cosmetics query and entitlement events", async () => {
     vi.useFakeTimers();
     const callbacks = new Map<string, (event: SevenTvEvent) => void>();

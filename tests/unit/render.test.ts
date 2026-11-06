@@ -1079,7 +1079,15 @@ describe("text renderer", () => {
     expect(name.classList.contains("chat-name-painted")).toBe(true);
     expect(buildPaintStyle({ function: "URL", image_url: "https://cdn.7tv.app/paint/paint/1x.webp" }))
       .toMatchObject({ type: "image" });
+    expect(buildPaintStyle({ function: "URL", image_url: "" })).toBeNull();
     expect(buildPaintStyle({ function: "URL", image_url: "https://evil.example/paint.png" })).toBeNull();
+
+    for (const image_url of ["", "https://evil.example/paint.png"]) {
+      paints.set("42", { function: "URL", image_url });
+      expect(name.classList.contains("chat-name-painted")).toBe(false);
+      expect(name.style.getPropertyValue("background-image")).toBe("");
+      expect(name.style.getPropertyValue("color")).toBe("rgb(0, 255, 0)");
+    }
     renderer.dispose();
   });
 
