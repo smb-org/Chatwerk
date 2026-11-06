@@ -28,10 +28,13 @@ probe.listen(port, "127.0.0.1", () => {
       ? ["TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET", "SESSION_KEY"]
         .flatMap((name) => process.env[name] ? ["--var", `${name}:${process.env[name]}`] : [])
       : [];
+    const testFeatureDefine = process.env.CHATWERK_TEST_FEATURES === "1"
+      ? ["--define", '__CHATWERK_TEST_FEATURES__: {"reactions":true,"hypeTrain":true}']
+      : [];
     const protocol = process.env.CHATWERK_E2E === "1" ? "https" : "http";
     const child = spawn(
       "pnpm",
-      ["exec", "wrangler", "dev", "--ip", "127.0.0.1", "--port", String(port), "--local-protocol", protocol, ...bindings],
+      ["exec", "wrangler", "dev", "--ip", "127.0.0.1", "--port", String(port), "--local-protocol", protocol, ...bindings, ...testFeatureDefine],
       {
         stdio: "inherit",
         env: {

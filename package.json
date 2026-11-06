@@ -12,13 +12,14 @@
   "scripts": {
     "dev": "pnpm run build && node scripts/wrangler-dev.mjs 17173",
     "build": "vite build && node scripts/render-headers.mjs ${CLOUDFLARE_ENV:-local}",
+    "build:test": "vite build --mode test && node scripts/render-headers.mjs local",
     "build:production": "vite build && node scripts/render-headers.mjs production",
     "deploy": "PUBLIC_ORIGIN=https://chatwerk.esembe.app pnpm run build:production && pnpm exec wrangler d1 migrations apply chatwerk --remote && pnpm exec wrangler deploy",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run --config vitest.config.ts",
-    "test:worker": "pnpm run build && mkdir -p .wrangler/logs && WRANGLER_LOG_PATH=.wrangler/logs/wrangler.log WRANGLER_REGISTRY_PATH=.wrangler/registry MINIFLARE_REGISTRY_PATH=$PWD/.wrangler/registry vitest run --config vitest.worker.config.ts",
-    "test:e2e": "playwright test",
+    "test": "vitest run --config vitest.config.ts && vitest run --config vitest.features-off.config.ts",
+    "test:worker": "pnpm run build && mkdir -p .wrangler/logs && WRANGLER_LOG_PATH=.wrangler/logs/wrangler.log WRANGLER_REGISTRY_PATH=.wrangler/registry MINIFLARE_REGISTRY_PATH=$PWD/.wrangler/registry vitest run --config vitest.worker.config.ts && WRANGLER_LOG_PATH=.wrangler/logs/wrangler.log WRANGLER_REGISTRY_PATH=.wrangler/registry MINIFLARE_REGISTRY_PATH=$PWD/.wrangler/registry vitest run --config vitest.worker.flags-off.config.ts",
+    "test:e2e": "node scripts/test-e2e.mjs",
     "check": "pnpm run build && pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run test:worker"
   },
   "devDependencies": {

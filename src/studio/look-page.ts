@@ -1,5 +1,7 @@
 import "./studio.css";
 import { THEME_FIELDS, getShareableThemeKeys, validateShareableTheme, validateTheme, isValidColor, type ThemeConfig, type ThemeFieldName } from "../shared/theme";
+import { featureEnabled } from "../shared/features";
+import { isSettingsRehearsalEnabled } from "./settings-tabs";
 import { currentLanguage, translate, type Language, type TranslationKey } from "../shared/i18n";
 import { applyTranslations } from "./i18n-dom";
 import { PUBLIC_PREVIEW_SOURCE_SIZE, calculatePreviewScale } from "./preview-sizing";
@@ -74,6 +76,7 @@ let pendingCopy: CopyAttempt | undefined;
 applyTranslations(document, language);
 document.documentElement.lang = language;
 document.title = `${translate(language, "brand")} · ${translate(language, isGallery ? "themes" : "lookPageTitle")}`;
+applyFeatureGates();
 wirePreview();
 wireScenarios();
 wireActions();
@@ -286,6 +289,8 @@ function renderValues(theme: ThemeConfig): void {
   const strip = $("#look-values");
   strip.replaceChildren();
   for (const key of getShareableThemeKeys()) {
+    if (key.startsWith("reaction") && !featureEnabled("reactions")) continue;
+    if (key === "reactionHypeTrain" && !featureEnabled("hypeTrain")) continue;
     const row = document.createElement("div");
     const label = document.createElement("dt");
     label.textContent = translate(language, fieldTranslationKey(key));
@@ -304,6 +309,12 @@ function renderValues(theme: ThemeConfig): void {
     row.appendChild(label);
     row.appendChild(value);
     strip.appendChild(row);
+  }
+}
+
+function applyFeatureGates(): void {
+  for (const button of document.querySelectorAll<HTMLButtonElement>(".look-rehearse [data-scenario]")) {
+    if (!isSettingsRehearsalEnabled(button.dataset.scenario ?? "")) button.remove();
   }
 }
 

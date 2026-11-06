@@ -1,9 +1,14 @@
 import { defineConfig } from "vite";
 import { resolve } from "node:path";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   root: "src/studio",
   publicDir: "../../public",
+  define: {
+    __CHATWERK_TEST_FEATURES__: mode === "test" && process.env.CHATWERK_TEST_FEATURES === "1"
+      ? JSON.stringify({ reactions: true, hypeTrain: true })
+      : "undefined",
+  },
   build: {
     target: "chrome95",
     outDir: "../../dist/client",
@@ -19,4 +24,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

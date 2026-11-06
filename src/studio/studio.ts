@@ -14,10 +14,11 @@ import {
   type ThemeUiGroup,
   type ThemeValues,
 } from "../shared/theme";
+import { featureEnabled } from "../shared/features";
 import { currentLanguage, saveLanguage, translate, type Language, type TranslationKey } from "../shared/i18n";
 import { applyTranslations } from "./i18n-dom";
 import { initialLoadRetryDelayMs } from "./retry";
-import { SETTINGS_TABS, type SettingsTabId } from "./settings-tabs";
+import { isSettingsFieldEnabled, isSettingsRehearsalEnabled, SETTINGS_TABS, type SettingsTabId } from "./settings-tabs";
 import {
   calculatePreviewCanvasGeometry,
   clampPreviewPosition,
@@ -228,6 +229,7 @@ let lastAnnouncedCount: number | undefined;
 let overlaySelectionVersion = 0;
 let hypeConsentRequest = 0;
 
+applyFeatureGates();
 applyPageLanguage();
 renderThemeControls();
 wireStaticControls();
@@ -289,7 +291,7 @@ async function initialize(): Promise<void> {
     setStatus("savedRevision", { revision });
     setupFirstRun();
     processStudioQuery();
-    void refreshHypeTrainConsent();
+    if (featureEnabled("hypeTrain")) void refreshHypeTrainConsent();
     updateTestButton();
     updateHeaderResponsive();
   } catch {
@@ -469,7 +471,8 @@ function renderThemeControls(): void {
 
     for (const group of THEME_UI_GROUPS) {
       if (!(tab.groups as readonly ThemeUiGroup[]).includes(group)) continue;
-      const fields = Object.entries(THEME_FIELDS).filter(([, definition]) => definition.ui.group === group)
+      const fields = Object.entries(THEME_FIELDS).filter(([name, definition]) =>
+        definition.ui.group === group && isSettingsFieldEnabled(name))
         .sort((left, right) => left[1].ui.order - right[1].ui.order);
       if (fields.length === 0) continue;
 
@@ -494,7 +497,14 @@ function renderThemeControls(): void {
   }
   updateSettingsTabState();
   syncControlAvailability();
-  void refreshHypeTrainConsent();
+  if (featureEnabled("hypeTrain")) void refreshHypeTrainConsent();
+}
+
+function applyFeatureGates(): void {
+  for (const button of document.querySelectorAll<HTMLButtonElement>(".scenario-button")) {
+    const scenario = button.id === "rehearse-hype-train" ? "hype-train" : button.dataset.scenario;
+    if (scenario && !isSettingsRehearsalEnabled(scenario)) button.remove();
+  }
 }
 
 function settingsTabLabel(id: SettingsTabId): string {
@@ -765,6 +775,7 @@ function translateHypeTrainConsent(): void {
 }
 
 async function refreshHypeTrainConsent(): Promise<void> {
+  if (!featureEnabled("hypeTrain")) return;
   const box = document.querySelector<HTMLElement>("#hype-train-consent");
   if (!box) return;
   const status = box.querySelector<HTMLElement>(".hype-consent-status");
@@ -1263,6 +1274,7 @@ function isHypeTrainOwnChannel(): boolean {
 }
 
 function updateHypeTrainAvailability(): void {
+  if (!featureEnabled("hypeTrain")) return;
   const ownChannel = isHypeTrainOwnChannel();
   const control = controlsRoot.querySelector<HTMLElement>('[data-theme-field="reactionHypeTrain"]');
   const checkbox = control?.querySelector<HTMLInputElement>("#theme-reactionHypeTrain");
@@ -1759,12 +1771,15 @@ function processStudioQuery(): void {
   const expiresAt = Number(params.get("until"));
   const lookName = params.get("lookName") ?? "";
   const shouldPublish = params.get("publish") === "1";
-  const hypeTrainStatus = params.get("hypeTrain");
+  const handlesHypeTrain = featureEnabled("reactions") && featureEnabled("hypeTrain");
+  const hypeTrainStatus = handlesHypeTrain ? params.get("hypeTrain") : null;
   if (snapshotId && /^[0-9a-f-]{36}$/iu.test(snapshotId) && Number.isSafeInteger(expectedRevision) &&
     expectedRevision === revision && Number.isSafeInteger(expiresAt) && expiresAt > Date.now()) {
     showUndoOffer(snapshotId, expectedRevision, expiresAt, lookName);
   }
-  if (["undo", "rev", "until", "look", "lookName", "overlay", "publish", "invite", "hypeTrain"].some((key) => params.has(key))) {
+  const handledQueryKeys = ["undo", "rev", "until", "look", "lookName", "overlay", "publish", "invite"];
+  if (handlesHypeTrain) handledQueryKeys.push("hypeTrain");
+  if (handledQueryKeys.some((key) => params.has(key))) {
     window.history.replaceState(window.history.state, "", window.location.pathname);
   }
   const statusKeys: Partial<Record<string, TranslationKey>> = {

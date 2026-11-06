@@ -1160,6 +1160,12 @@ When the Studio preview uses a custom background image in Fit mode, the image si
 
 `/studio/export` remains the route and is titled Setup (Einrichten in German). The Studio navigation and first-run output flow link to OBS, StreamElements or SoundAlerts instructions. The page uses the active overlay selection already stored by Studio. OBS gets the regular token link; widget tabs use the existing HTML, JS and Fields export, whose Fields block sets the full widget URL. The token remains in the URL fragment. Width comes from the per-overlay local source size; height uses saved `maxChatHeight` when it is at least 100px, then the local source height, then the 400×600 default. The OBS steps explain source properties, transform reset, dragging inside the red box and why the Browser source need not be 1920×1080. Widget steps leave CSS empty. SoundAlerts remains unmeasured and the no-Cloudflare notice stays visible. This page introduces no schema change.
 
+## Build-time feature flags
+
+`src/shared/features.json` is the single source for the `reactions` and `hypeTrain` build-time switches. It controls whether Studio renders the related settings, rehearsal and connection controls, whether overlays run reaction effects, and whether the Worker starts Hype Train OAuth or serves consent status. Saved theme values and schema version 1 remain unchanged. The EventSub webhook and disconnect route stay enabled so existing consent and subscriptions can still be revoked.
+
+To restore either feature, set its value to `true` in `src/shared/features.json` and build and deploy the application. No runtime URL or environment setting is needed; test-only overrides do not affect production builds.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
