@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { addStudioOverlay, e2eOrigin, seedStudioSession } from "./studio-session";
+import { addStudioOverlay, e2eOrigin, fillThemeControl, seedStudioSession } from "./studio-session";
 
 test("updates an existing highlighted row when the live theme color changes", async ({ page }) => {
   await seedStudioSession(page);
@@ -23,7 +23,7 @@ test("updates an existing highlighted row when the live theme color changes", as
   const backgroundColor = () => highlighted.evaluate((row) => getComputedStyle(row).backgroundColor);
   await expect.poll(backgroundColor).toBe("rgb(255, 230, 128)");
 
-  await page.locator("#theme-highlightBackgroundColor-hex").fill("#123456");
+  await fillThemeControl(page, "highlightBackgroundColor", "#123456", ".hex-control");
   await expect.poll(backgroundColor).toBe("rgb(18, 52, 86)");
 });
 

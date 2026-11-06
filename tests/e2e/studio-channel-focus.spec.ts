@@ -10,7 +10,7 @@ test("keeps the channel add input value and focus when another control saves", a
   const addInput = page.locator("[data-channel-new]");
   await addInput.focus();
   await addInput.fill("second");
-  await setRange(page, "tickerSpeed", 140);
+  await setRange(page, "fontSize", 22);
 
   await expect(page.locator("#status-visible")).toHaveText("Saved, rev 1", { timeout: 5_000 });
   await expect(addInput).toHaveValue("second");

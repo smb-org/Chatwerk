@@ -873,14 +873,15 @@ Selbst entschieden (globale Vorgabe, kein echter Trade-off): erster Start mit so
 /overlay#token=... (OBS und Widget, ohne Chrome)     /studio/export (Widget-Code)
 
 Studio (1440)
-+ Kopf 56 ------------------------------------------------------------------------+
+ Kopf 56 ------------------------------------------------------------------------+
 | NAME  Studio Themes   | https://.../overlay#... [Copy] | OBS: 1 verbunden | Konto |
-+ Vorschau -------------------------------------+ Aside "Einstellungen" 320 -------+
-| Leiste 40: Hintergrund Karo|Dunkel|Hell|Eigen  | Statuszeile 32: Gespeichert, rev |
-| Overlay im sandbox-iframe, 16:9 skaliert       | TEXT  FARBEN  LAYOUT  NACHRICHTEN|
-| Etikett "Vorschau 62 %" unten rechts           | KANÄLE  FILTER  ERWEITERT        |
-+ Fuß 64 ----------------------------------------+----------------------------------+
-| Probe: Ruhig | Flut | Raid  o Live-Chat         [Test in OBS] [Look teilen]       |
++ Aside "Einstellungen" 720 (max) -------------+ Vorschau --------------------------------+
+| Statuszeile 32: Gespeichert, rev               | Leiste 40: Hintergrund Karo|Dunkel|Hell… |
+| AUSSEHEN | LAYOUT | NACHRICHTEN …              | Overlay im sandbox-iframe, Fit im Rest   |
+| Warnung 32 (fester Platz, kein Einschub)       | Etikett "Vorschau … %" unten rechts       |
+| Aktiver Tab: Regler in 2 Spalten               | Sample | Live                            |
++-----------------------------------------------+------------------------------------------+
+| Fuß 64: Probe, Live-Chat                   [Test in OBS] [Look teilen]                   |
 +----------------------------------------------------------------------------------+
 
 Galerie /themes (Login nötig)
@@ -893,13 +894,13 @@ Galerie /themes (Login nötig)
 /t/:slug: dieselbe rechte Seite in voller Breite, ohne Liste.
 ```
 
-Rangfolge: Studio zeigt zuerst Vorschau, dann Link mit Kopieren, dann OBS-Status. Galerie zeigt zuerst den Look, dann Autor und Herkunft, dann "Auf mein Overlay". Login zeigt Twitch-Knopf und einen Satz dazu, was gespeichert wird.
+Studio stellt die Einstellungen links und die Vorschau rechts dar. Der Einstellungstrack bleibt `minmax(400px, min(50%, 720px))`; die Vorschau nimmt den übrigen Platz ein. Der Trenner sitzt am rechten Rand des Einstellungsfelds. Unter 1024 px bleibt die vorhandene Vorschau-Ansicht ohne Einstellungsfeld bestehen. Der Status steht über den Tabs, die direkt darunter liegen. Die feste 32-px-Warnzeile folgt auf die Tabs und liegt vor den Reglern, damit Warnungen keinen Inhalt verschieben. Galerie zeigt zuerst den Look, dann Autor und Herkunft, dann "Auf mein Overlay". Login zeigt Twitch-Knopf und einen Satz dazu, was gespeichert wird.
 
-`shared/theme.ts` trägt je Feld `ui: {group, order, label, control}`, die Einstellungen werden daraus erzeugt. Reihenfolge: Text, Farben, Layout (Anker, Breite, Abstände, Richtung, Laufband), Nachrichten (Lebensdauer, Badges, Pronomen), Kanäle, Filter, Erweitert (CSS, Link neu erzeugen).
+`shared/theme.ts` trägt je Feld `ui: {group, order, label, control}`, die Studio-Einstellungen werden daraus erzeugt. Sechs feste Tabs: Aussehen (Text, Farben und Panel, jeweils mit Unterüberschrift), Layout, Messages, Emotes & Effects, Reactions und Filters. Einzeln gruppierte Tabs wiederholen ihre Überschrift nicht. Controls folgen `ui.order` und stehen in zwei CSS-Grid-Spalten; Textareas und große Controls belegen beide Spalten. Channels bleibt im Channel-Popover und ist kein Tab. Die Tab-Gruppierung wird gegen alle UI-Gruppen geprüft; nur Channels und Advanced ohne Felder sind ausgenommen. Schema und `ui.group` bleiben unverändert.
 
 ### 2. Zustände
 
-Feste Orte: Statuszeile für Speicherstand und Rückgängig, darunter eine feste Warnzeile für die wichtigste anhaltende Warnung (Sitzung vor Update vor Lesbarkeit vor Schrift), Kopf-Chip für Verbindungen, Toast unten links über der Vorschau (eines, 4 s, Fehler bleiben bis zum Schließen), sonst tauscht jeder Bereich seinen Inhalt in der eigenen festen Fläche. Nichts wird eingeschoben. Texte hier auf Englisch, Deutsch kommt 1:1 in dieselbe Textdatei.
+Feste Orte: Statuszeile für Speicherstand und Rückgängig, feste Warnzeile nach den Tabs und vor den Reglern für die wichtigste anhaltende Warnung (Sitzung vor Update vor Lesbarkeit vor Schrift), Kopf-Chip für Verbindungen, Toast unten links über der Vorschau (eines, 4 s, Fehler bleiben bis zum Schließen), sonst tauscht jeder Bereich seinen Inhalt in der eigenen festen Fläche. Nichts wird eingeschoben. Texte hier auf Englisch, Deutsch kommt 1:1 in dieselbe Textdatei.
 
 | Bereich | Laden | Leer | Fehler | Erfolg | Teilweise |
 |---|---|---|---|---|---|
@@ -980,10 +981,10 @@ Trennung: Chrome nutzt nur `--ui-*` in `studio.css`, Themes nur `--t-*`, gesetzt
 
 | Breite | Verhalten |
 |---|---|
-| 1920 | Aside 360, Vorschau rund 78 % |
-| 1440 | Aside 320, Vorschau rund 62 %, Referenz |
-| 1280 | Aside 300, Teilen ohne Icon |
-| 1024 | Aside 280, Link in der Mitte gekürzt, Probeknöpfe mit Kurzlabel |
+| 1920 | Aside 720 max, Vorschau bekommt den Rest |
+| 1440 | Aside 720, Vorschau 720, Referenz |
+| 1280 | Aside 640, Vorschau 640, Teilen ohne Icon |
+| 1024 | Aside 512, Vorschau 512 (mindestens 400), Link in der Mitte gekürzt, Probeknöpfe mit Kurzlabel |
 | unter 1024 | Studio ohne Aside: Link kopieren, Chip, Vorschau, feste Zeile "Editing needs a wider window." Galerie: Vorschau fest oben, begrenzte Liste darunter, Hauptaktion in fester Fußzeile. Look-Seite, Kopieren und Export voll nutzbar, Ziele 44 px |
 | Fensterhöhe unter 700 | Kopf und Fuß bleiben fest, Vorschau schrumpft, Aside scrollt innen |
 

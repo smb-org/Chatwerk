@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 import { DEFAULTS } from "../../src/shared/theme";
 import { addStudioLook, addStudioOverlay, e2eOrigin, seedStudioSession, setRange, type StudioIdentity } from "./studio-session";
+import { fillThemeControl, setThemeChoice } from "./studio-session";
 
 const publicLook = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -244,7 +245,7 @@ test("theme height changes sync the frame on load, undo and slider edits without
   await expect.poll(() => frameSize(page)).toEqual({ width: 1_920, height: 1_080 });
   await expect(page.frameLocator("#studio-preview").locator("#chat")).toHaveCSS("max-height", "300px");
   expect(configPatches).toEqual([]);
-  await page.locator("#theme-textColor-hex").fill("#fdf2ee");
+  await fillThemeControl(page, "textColor", "#fdf2ee", ".hex-control");
   await expect.poll(() => frameSize(page)).toEqual({ width: 1_920, height: 1_080 });
   await expect.poll(() => configPatches.length).toBe(1);
   expect(configPatches).toEqual([{ textColor: "#fdf2ee" }]);
@@ -546,7 +547,7 @@ test("pointercancel restores the drag-start size without persisting or saving", 
 
 test("height drag stays preview-only when the maxChatHeight control is disabled", async ({ page }) => {
   const identity = await studio(page);
-  await page.locator('input[name="theme-layout"][value="ticker"]').check();
+  await setThemeChoice(page, "layout", "ticker");
   await expect(page.locator("#status-visible")).toHaveText("Saved, rev 1");
   await expect(page.locator("#theme-maxChatHeight")).toBeDisabled();
   const configPatches = trackConfigPatches(page);
@@ -929,7 +930,7 @@ test("Live preview wraps a long word at 150px and stays connected through resize
     expect(layout.documentWidth, JSON.stringify(layout)).toBeLessThanOrEqual(150);
   }
 
-  await page.locator('input[name="theme-layout"][value="ticker"]').check();
+  await setThemeChoice(page, "layout", "ticker");
   const tickerLine = chat.locator(".ticker-line").filter({ hasText: longWord });
   await expect(tickerLine).toBeVisible();
   const tickerLayout = await tickerLine.evaluate((line) => ({

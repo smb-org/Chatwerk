@@ -17,6 +17,7 @@ import {
 import { currentLanguage, saveLanguage, translate, type Language, type TranslationKey } from "../shared/i18n";
 import { applyTranslations } from "./i18n-dom";
 import { initialLoadRetryDelayMs } from "./retry";
+import { SETTINGS_TABS, type SettingsTabId } from "./settings-tabs";
 import {
   DEFAULT_PREVIEW_SOURCE_SIZE,
   isValidPreviewSourceSize,
@@ -66,6 +67,18 @@ interface ThemeFieldDefinition {
   range?: { min: number; max: number; step: number; unit: string };
 }
 
+const SETTINGS_TAB_STORAGE_KEY = "chatwerk-studio-settings-tab";
+const DEFAULT_SETTINGS_TAB = SETTINGS_TABS[0].id;
+
+function readSettingsTab(): SettingsTabId {
+  try {
+    const saved = localStorage.getItem(SETTINGS_TAB_STORAGE_KEY);
+    return SETTINGS_TABS.some((tab) => tab.id === saved) ? saved as SettingsTabId : DEFAULT_SETTINGS_TAB;
+  } catch {
+    return DEFAULT_SETTINGS_TAB;
+  }
+}
+
 const $ = <T = HTMLElement>(selector: string): T => {
   const element = document.querySelector(selector) as unknown as T | null;
   if (!element) throw new Error(`Missing Studio element ${selector}`);
@@ -85,6 +98,8 @@ const previewCustomHeight = $("#preview-custom-height") as HTMLInputElement;
 const previewSizeError = $("#preview-size-error") as HTMLElement;
 const obsSizeHint = $("#obs-size-hint") as HTMLElement;
 const controlsRoot = $("#theme-controls") as HTMLElement;
+const settingsTabsRoot = $("#settings-tabs") as HTMLElement;
+const settingsScroll = $("#settings-scroll") as HTMLElement;
 const statusVisible = $("#status-visible") as HTMLElement;
 const statusAnnouncer = $("#status-announcer") as HTMLElement;
 const warningRow = $("#warning-row") as HTMLElement;
@@ -119,6 +134,7 @@ const previewModeSample = $("#preview-mode-sample") as HTMLButtonElement;
 const previewModeLive = $("#preview-mode-live") as HTMLButtonElement;
 
 let language: Language = currentLanguage();
+let selectedSettingsTab: SettingsTabId = readSettingsTab();
 let overlay: StudioOverlay | undefined;
 let overlays: StudioOverlay[] = [];
 let livePreviewEnabled = false;
@@ -395,27 +411,91 @@ function updateTestButton(): void {
 
 function renderThemeControls(): void {
   controlsRoot.replaceChildren();
-  for (const group of THEME_UI_GROUPS) {
-    if (group === "Channels") continue;
-    const fields = Object.entries(THEME_FIELDS).filter(([, definition]) => definition.ui.group === group)
-      .sort((left, right) => left[1].ui.order - right[1].ui.order);
-    if (fields.length === 0) continue;
+  settingsTabsRoot.replaceChildren();
 
-    const groupRoot = document.createElement("fieldset");
-    groupRoot.className = "settings-group";
-    groupRoot.dataset.group = group;
-    const legend = document.createElement("legend");
-    legend.textContent = translate(language, groupKey(group));
-    groupRoot.appendChild(legend);
-    for (const [rawName, rawDefinition] of fields) {
-      const name = rawName as ThemeFieldName;
-      const definition = rawDefinition as ThemeFieldDefinition;
-      groupRoot.appendChild(makeThemeControl(name, definition));
+  for (const tab of SETTINGS_TABS) {
+    const tabButton = document.createElement("button");
+    tabButton.type = "button";
+    tabButton.id = `settings-tab-${tab.id}`;
+    tabButton.setAttribute("role", "tab");
+    tabButton.setAttribute("aria-controls", `settings-tabpanel-${tab.id}`);
+    tabButton.textContent = settingsTabLabel(tab.id);
+    tabButton.addEventListener("click", () => selectSettingsTab(tab.id, true));
+    tabButton.addEventListener("keydown", (event) => {
+      const currentIndex = SETTINGS_TABS.findIndex((item) => item.id === tab.id);
+      let nextIndex: number | undefined;
+      if (event.key === "ArrowRight") nextIndex = (currentIndex + 1) % SETTINGS_TABS.length;
+      else if (event.key === "ArrowLeft") nextIndex = (currentIndex - 1 + SETTINGS_TABS.length) % SETTINGS_TABS.length;
+      else if (event.key === "Home") nextIndex = 0;
+      else if (event.key === "End") nextIndex = SETTINGS_TABS.length - 1;
+      if (nextIndex === undefined) return;
+      event.preventDefault();
+      selectSettingsTab(SETTINGS_TABS[nextIndex]!.id, true);
+    });
+    settingsTabsRoot.appendChild(tabButton);
+
+    const panel = document.createElement("section");
+    panel.id = `settings-tabpanel-${tab.id}`;
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", tabButton.id);
+    panel.dataset.groups = tab.groups.join(",");
+    panel.hidden = tab.id !== selectedSettingsTab;
+
+    for (const group of THEME_UI_GROUPS) {
+      if (!(tab.groups as readonly ThemeUiGroup[]).includes(group)) continue;
+      const fields = Object.entries(THEME_FIELDS).filter(([, definition]) => definition.ui.group === group)
+        .sort((left, right) => left[1].ui.order - right[1].ui.order);
+      if (fields.length === 0) continue;
+
+      const groupRoot = document.createElement("fieldset");
+      groupRoot.className = "settings-group";
+      groupRoot.dataset.group = group;
+      if (tab.id === "appearance") {
+        const legend = document.createElement("legend");
+        legend.textContent = translate(language, groupKey(group));
+        groupRoot.appendChild(legend);
+      }
+      for (const [rawName, rawDefinition] of fields) {
+        const name = rawName as ThemeFieldName;
+        const definition = rawDefinition as ThemeFieldDefinition;
+        const control = makeThemeControl(name, definition);
+        if (definition.ui.control === "list" || name === "reactionHypeTrain") control.dataset.span = "full";
+        groupRoot.appendChild(control);
+      }
+      panel.appendChild(groupRoot);
     }
-    controlsRoot.appendChild(groupRoot);
+    controlsRoot.appendChild(panel);
   }
+  updateSettingsTabState();
   syncControlAvailability();
   void refreshHypeTrainConsent();
+}
+
+function settingsTabLabel(id: SettingsTabId): string {
+  if (id === "appearance") return translate(language, "settingsAppearance");
+  const tab = SETTINGS_TABS.find((item) => item.id === id)!;
+  return translate(language, groupKey(tab.groups[0]!));
+}
+
+function selectSettingsTab(id: SettingsTabId, focusTab = false): void {
+  selectedSettingsTab = id;
+  updateSettingsTabState();
+  settingsScroll.scrollTop = 0;
+  try { localStorage.setItem(SETTINGS_TAB_STORAGE_KEY, id); } catch { /* Tab choice is still kept in memory. */ }
+  if (focusTab) settingsTabsRoot.querySelector<HTMLButtonElement>(`#settings-tab-${id}`)?.focus();
+}
+
+function updateSettingsTabState(): void {
+  for (const tab of SETTINGS_TABS) {
+    const selected = tab.id === selectedSettingsTab;
+    const button = settingsTabsRoot.querySelector<HTMLButtonElement>(`#settings-tab-${tab.id}`);
+    if (button) {
+      button.setAttribute("aria-selected", String(selected));
+      button.tabIndex = selected ? 0 : -1;
+    }
+    const panel = controlsRoot.querySelector<HTMLElement>(`#settings-tabpanel-${tab.id}`);
+    if (panel) panel.hidden = !selected;
+  }
 }
 
 function makeThemeControl(name: ThemeFieldName, definition: ThemeFieldDefinition): HTMLElement {
@@ -1574,6 +1654,7 @@ function setupFirstRun(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-platform]").forEach((item) => {
     item.setAttribute("aria-pressed", String(item === button));
   });
+  selectSettingsTab("appearance");
   $("#first-run").classList.add("is-visible");
   $("#rehearse-tools").setAttribute("hidden", "true");
 }
@@ -1635,7 +1716,10 @@ function processStudioQuery(): void {
     "session-expired": "hypeTrainSessionExpired",
   };
   const statusKey = hypeTrainStatus ? statusKeys[hypeTrainStatus] : undefined;
-  if (statusKey) showToast(statusKey, hypeTrainStatus !== "connected");
+  if (statusKey) {
+    selectSettingsTab("reactions");
+    showToast(statusKey, hypeTrainStatus !== "connected");
+  }
   if (shouldPublish) void openPublishDialog($("#share-look"));
   if (inviteToken !== null) openInviteDialog(inviteToken);
 }

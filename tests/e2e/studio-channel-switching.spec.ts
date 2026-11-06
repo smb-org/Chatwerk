@@ -86,6 +86,9 @@ test("tokened overlays join on initial config and receive a header channel edit 
   await expect.poll(() => irc.joins).toContain("secondroom");
   expect(overlayPage.url()).toBe(overlayUrl);
 
+  // The open channel popover covers the preview's Live switch in the settings-left layout.
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#channel-popover")).toBeHidden();
   await page.locator("#preview-mode-live").click();
   await expect(page.locator("#preview-mode-live")).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator("#rehearse-quiet")).toBeDisabled();

@@ -124,10 +124,43 @@ function localWranglerEnvironment(): NodeJS.ProcessEnv {
 }
 
 export async function setRange(page: Page, field: string, value: number): Promise<void> {
+  await selectSettingsTabForField(page, field);
   await page.locator(`#theme-${field}`).evaluate((element, nextValue) => {
     const input = element as HTMLInputElement;
     input.value = String(nextValue);
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }, value);
+}
+
+export async function selectSettingsTabForField(page: Page, field: string): Promise<void> {
+  await page.locator(`[data-theme-field="${field}"]`).evaluate((control) => {
+    const panel = control.closest<HTMLElement>("[role='tabpanel']");
+    if (!panel || !panel.hidden) return;
+    const tab = [...document.querySelectorAll<HTMLButtonElement>("#settings-tabs [role='tab']")]
+      .find((button) => button.getAttribute("aria-controls") === panel.id);
+    tab?.click();
+  });
+}
+
+export async function setThemeChecked(page: Page, field: string, checked = true): Promise<void> {
+  await selectSettingsTabForField(page, field);
+  const control = page.locator(`#theme-${field}`);
+  if (checked) await control.check();
+  else await control.uncheck();
+}
+
+export async function setThemeChoice(page: Page, field: string, value: string): Promise<void> {
+  await selectSettingsTabForField(page, field);
+  await page.locator(`input[name="theme-${field}"][value="${value}"]`).check();
+}
+
+export async function fillThemeControl(
+  page: Page,
+  field: string,
+  value: string,
+  selector = "textarea",
+): Promise<void> {
+  await selectSettingsTabForField(page, field);
+  await page.locator(`[data-theme-field="${field}"] ${selector}`).fill(value);
 }

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { e2eOrigin, seedStudioSession, setRange } from "./studio-session";
+import { e2eOrigin, fillThemeControl, seedStudioSession, selectSettingsTabForField, setRange } from "./studio-session";
 
 async function writeFromAnotherEditor(
   page: import("@playwright/test").Page,
@@ -118,6 +118,7 @@ test("uses a local object URL for Mine without sending a network request", async
   page.on("request", (request) => requests.push(request.url()));
   await page.goto("/studio");
   await expect(page.locator("#status-visible")).toContainText("Saved");
+  await selectSettingsTabForField(page, "emotes7tv");
   const effects = page.locator('.settings-group[data-group="Emotes & Effects"]');
   await expect(effects.getByRole("checkbox", { name: "7TV emotes" })).not.toBeChecked();
   await expect(effects.getByRole("checkbox", { name: "BTTV emotes" })).not.toBeChecked();
@@ -139,7 +140,7 @@ test("keeps an uncommitted filter list through an incoming config and saves it o
   await expect(page.locator("#status-visible")).toHaveText("Saved, rev 0");
   await liveReady;
   const field = page.locator('textarea[data-list-field="filterWords"]');
-  await field.fill("spoiler\nscam");
+  await fillThemeControl(page, "filterWords", "spoiler\nscam");
 
   await writeFromAnotherEditor(page, overlayId, 0, { tickerSpeed: 145 });
   await expect(page.locator("#status-visible")).toHaveText("Saved, rev 1");
@@ -158,14 +159,14 @@ test("keeps a half-typed hex value through an incoming config and saves the comp
   await expect(page.locator("#status-visible")).toHaveText("Saved, rev 0");
   await liveReady;
   const field = page.locator("#theme-highlightBackgroundColor-hex");
-  await field.fill("#ABC");
+  await fillThemeControl(page, "highlightBackgroundColor", "#ABC", ".hex-control");
 
   await writeFromAnotherEditor(page, overlayId, 0, { tickerSpeed: 145 });
   await expect(page.locator("#status-visible")).toHaveText("Saved, rev 1");
   await expect(field).toHaveValue("#ABC");
   await expect(field).toBeFocused();
 
-  await field.fill("#123456");
+  await fillThemeControl(page, "highlightBackgroundColor", "#123456", ".hex-control");
   await expect(page.locator("#status-visible")).toHaveText("Saved, rev 2", { timeout: 5_000 });
   await expect.poll(() => readLinkedConfig(page, token)).toMatchObject({ highlightBackgroundColor: "#123456" });
 });
