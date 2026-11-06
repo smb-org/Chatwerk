@@ -24,15 +24,17 @@ import { isSettingsFieldEnabled, isSettingsRehearsalEnabled, SETTINGS_TABS, type
 import {
   calculatePreviewCanvasGeometry,
   clampPreviewPosition,
+  DEFAULT_PREVIEW_CANVAS_SIZE,
   DEFAULT_PREVIEW_SOURCE_SIZE,
   defaultPreviewPosition,
   isValidPreviewPosition,
   isValidPreviewSourceSize,
   movePreviewPositionBy,
   movePreviewPositionFromDrag,
-  PREVIEW_CANVAS_HEIGHT,
-  PREVIEW_CANVAS_WIDTH,
+  parsePreviewCanvasSize,
+  previewCanvasSizeValue,
   resizePreviewSourceSizeFromDrag,
+  type PreviewCanvasSize,
   type PreviewCanvasPosition,
   type PreviewResizeAxis,
   type PreviewSourceSize,
@@ -81,6 +83,7 @@ interface ThemeFieldDefinition {
 
 const SETTINGS_TAB_STORAGE_KEY = "chatwerk-studio-settings-tab";
 const DEFAULT_SETTINGS_TAB = SETTINGS_TABS[0].id;
+const PREVIEW_CANVAS_SIZE_STORAGE_KEY = "chatwerk-preview-canvas-size";
 
 function readSettingsTab(): SettingsTabId {
   try {
@@ -88,6 +91,14 @@ function readSettingsTab(): SettingsTabId {
     return SETTINGS_TABS.some((tab) => tab.id === saved) ? saved as SettingsTabId : DEFAULT_SETTINGS_TAB;
   } catch {
     return DEFAULT_SETTINGS_TAB;
+  }
+}
+
+function readPreviewCanvasSize(): PreviewCanvasSize {
+  try {
+    return parsePreviewCanvasSize(localStorage.getItem(PREVIEW_CANVAS_SIZE_STORAGE_KEY));
+  } catch {
+    return DEFAULT_PREVIEW_CANVAS_SIZE;
   }
 }
 
@@ -103,6 +114,8 @@ const previewCanvas = $("#preview-canvas") as HTMLElement;
 const previewFrameWrap = $("#preview-frame-wrap") as HTMLElement;
 const previewScale = $("#preview-scale") as HTMLElement;
 const previewPositionMeta = $("#preview-position-meta") as HTMLElement;
+const previewCanvasSizeControl = $("#preview-canvas-size-control") as HTMLElement;
+const previewCanvasSizeSelect = $("#preview-canvas-size") as HTMLSelectElement;
 const previewMoveControl = $("#preview-move-control") as HTMLButtonElement;
 const previewSizeDragLabel = $("#preview-size-drag-label") as HTMLOutputElement;
 const previewResizeHandles = [...document.querySelectorAll<HTMLButtonElement>("[data-preview-resize-axis]")];
@@ -158,7 +171,8 @@ let liveChatState: "connecting" | "waiting" | "message" | undefined;
 let liveChatChannel = "";
 let theme: ThemeConfig = DEFAULTS;
 let previewSourceSize: PreviewSourceSize = DEFAULT_PREVIEW_SOURCE_SIZE;
-let previewPosition: PreviewCanvasPosition = defaultPreviewPosition(DEFAULT_PREVIEW_SOURCE_SIZE);
+let previewCanvasSize = readPreviewCanvasSize();
+let previewPosition: PreviewCanvasPosition = defaultPreviewPosition(DEFAULT_PREVIEW_SOURCE_SIZE, previewCanvasSize);
 let lastAppliedPreviewMaxChatHeight: number | undefined;
 type ActivePreviewDrag = {
   kind: "resize";
@@ -1364,7 +1378,7 @@ function applyPreviewTheme(): void {
             previewPosition = clampPreviewPosition({
               x: previewPosition.x,
               y: previewPosition.y + previewSourceSize.height - theme.maxChatHeight,
-            }, { ...previewSourceSize, height: theme.maxChatHeight });
+            }, { ...previewSourceSize, height: theme.maxChatHeight }, previewCanvasSize);
           }
           applyPreviewSourceSize({ ...previewSourceSize, height: theme.maxChatHeight }, true);
         }
@@ -1540,6 +1554,7 @@ function updateLiveChatStatus(): void {
 }
 
 function wireStaticControls(): void {
+  previewCanvasSizeSelect.value = previewCanvasSizeValue(previewCanvasSize);
   window.addEventListener("message", (event: MessageEvent<unknown>) => {
     if (event.source !== preview.contentWindow || !isRecord(event.data) || event.data.type !== "chatwerk:studio-chat-state") return;
     if (event.data.state !== "connecting" && event.data.state !== "waiting" && event.data.state !== "message") return;
@@ -1610,6 +1625,15 @@ function wireStaticControls(): void {
     previewCustomSize.hidden = true;
     const [width, height] = previewSizePreset.value.split("x").map(Number);
     applyPreviewSourceSize({ width: width!, height: height! }, true);
+  });
+  previewCanvasSizeSelect.addEventListener("change", () => {
+    cancelPreviewDrag();
+    previewCanvasSize = parsePreviewCanvasSize(previewCanvasSizeSelect.value);
+    previewCanvasSizeSelect.value = previewCanvasSizeValue(previewCanvasSize);
+    previewPosition = clampPreviewPosition(previewPosition, previewSourceSize, previewCanvasSize);
+    savePreviewCanvasSize();
+    savePreviewPosition();
+    updatePreviewScale();
   });
   $("#preview-custom-apply").addEventListener("click", () => {
     const candidate = { width: previewCustomWidth.valueAsNumber, height: previewCustomHeight.valueAsNumber };
@@ -2961,7 +2985,7 @@ function getPreviewCanvasGeometry(): ReturnType<typeof calculatePreviewCanvasGeo
     right: Number.parseFloat(style.paddingRight) || 0,
     bottom: Number.parseFloat(style.paddingBottom) || 0,
     left: Number.parseFloat(style.paddingLeft) || 0,
-  });
+  }, previewCanvasSize);
 }
 
 function updatePreviewScale(): void {
@@ -3036,7 +3060,10 @@ function setPreviewFrameGeometry(scale: number): void {
 }
 
 function updatePreviewPositionReadout(): void {
-  previewPositionMeta.hidden = !isPreviewCanvasMode();
+  const canvasMode = isPreviewCanvasMode();
+  previewPositionMeta.hidden = !canvasMode;
+  previewCanvasSizeControl.hidden = !canvasMode;
+  previewCanvasSizeSelect.value = previewCanvasSizeValue(previewCanvasSize);
   previewPositionMeta.textContent = `X ${previewPosition.x}  Y ${previewPosition.y}  ${previewSourceSize.width} x ${previewSourceSize.height}`;
 }
 
@@ -3075,7 +3102,7 @@ function beginPreviewResize(event: PointerEvent, handle: HTMLButtonElement, axis
   const heightLimit = axis === "height" || axis === "both" ? previewHeightLimitForResize() : undefined;
   const startSize = heightLimit === undefined ? originalSize : { ...originalSize, height: heightLimit };
   const fixedBottom = canvasMode
-    ? Math.min(startPosition.y + originalSize.height, PREVIEW_CANVAS_HEIGHT)
+    ? Math.min(startPosition.y + originalSize.height, previewCanvasSize.height)
     : frame.bottom - stage.top - borderTop;
   activePreviewDrag = {
     kind: "resize",
@@ -3091,10 +3118,10 @@ function beginPreviewResize(event: PointerEvent, handle: HTMLButtonElement, axis
     canvasMode,
     fixedBottom,
     visibleWidth: canvasMode
-      ? Math.max(previewSourceSize.width, Math.max(100, PREVIEW_CANVAS_WIDTH - previewPosition.x))
+      ? Math.max(previewSourceSize.width, Math.max(100, previewCanvasSize.width - previewPosition.x))
       : Math.max(100, (stage.right - borderRight - paddingRight - frame.left - 7) / scale),
     visibleHeight: canvasMode
-      ? Math.max(100, Math.min(fixedBottom, PREVIEW_CANVAS_HEIGHT))
+      ? Math.max(100, Math.min(fixedBottom, previewCanvasSize.height))
       : Math.max(100, (frame.bottom - stage.top - borderTop - paddingTop - 7) / scale),
   };
   previewFrameWrap.style.position = "absolute";
@@ -3106,7 +3133,7 @@ function beginPreviewResize(event: PointerEvent, handle: HTMLButtonElement, axis
       previewPosition = clampPreviewPosition({
         x: startPosition.x,
         y: fixedBottom - startSize.height,
-      }, startSize);
+      }, startSize, previewCanvasSize);
       setPreviewFrameGeometry(scale);
       updatePreviewPositionReadout();
     } else {
@@ -3149,6 +3176,7 @@ function updatePreviewDrag(event: PointerEvent): void {
       event.clientX - drag.startX,
       event.clientY - drag.startY,
       drag.scale,
+      previewCanvasSize,
     );
     setPreviewFrameGeometry(drag.scale);
     updatePreviewPositionReadout();
@@ -3168,7 +3196,7 @@ function updatePreviewDrag(event: PointerEvent): void {
     previewPosition = clampPreviewPosition({
       x: drag.startPosition.x,
       y: drag.axis === "height" || drag.axis === "both" ? drag.fixedBottom - size.height : drag.startPosition.y,
-    }, size);
+    }, size, previewCanvasSize);
   }
   setPreviewFrameGeometry(drag.scale);
   if (!drag.canvasMode && (drag.axis === "height" || drag.axis === "both")) {
@@ -3214,7 +3242,7 @@ function resizePreviewFromKeyboard(event: KeyboardEvent, axis: PreviewResizeAxis
   const heightLimit = heightKey ? previewHeightLimitForResize() : undefined;
   const startSize = heightLimit === undefined ? originalSize : { ...originalSize, height: heightLimit };
   const next = { ...startSize };
-  const canvasWidthLimit = Math.max(100, Math.floor((PREVIEW_CANVAS_WIDTH - previewPosition.x) / 10) * 10);
+  const canvasWidthLimit = Math.max(100, Math.floor((previewCanvasSize.width - previewPosition.x) / 10) * 10);
   const maxWidth = canvasMode ? Math.max(previewSourceSize.width, canvasWidthLimit) : 3840;
   const frame = previewFrameWrap.getBoundingClientRect();
   const stage = previewWindow.getBoundingClientRect();
@@ -3223,7 +3251,7 @@ function resizePreviewFromKeyboard(event: KeyboardEvent, axis: PreviewResizeAxis
   const borderTop = Number.parseFloat(stageStyle.borderTopWidth) || 0;
   const scale = currentPreviewScale();
   const fixedBottom = canvasMode
-    ? Math.min(startPosition.y + originalSize.height, PREVIEW_CANVAS_HEIGHT)
+    ? Math.min(startPosition.y + originalSize.height, previewCanvasSize.height)
     : frame.bottom - stage.top - borderTop;
   const maxHeight = canvasMode ? Math.max(100, Math.floor(fixedBottom / 10) * 10) : 2160;
   if ((axis === "width" || axis === "both") && event.key === "ArrowRight") next.width = Math.min(maxWidth, next.width + step);
@@ -3234,7 +3262,7 @@ function resizePreviewFromKeyboard(event: KeyboardEvent, axis: PreviewResizeAxis
   event.preventDefault();
   if (heightKey) {
     next.height = Math.min(maxHeight, Math.max(100, Math.round(next.height / 10) * 10));
-    if (canvasMode) previewPosition = clampPreviewPosition({ x: startPosition.x, y: fixedBottom - next.height }, next);
+    if (canvasMode) previewPosition = clampPreviewPosition({ x: startPosition.x, y: fixedBottom - next.height }, next, previewCanvasSize);
     applyPreviewSourceSize(next, true, false);
     if (canvasMode) {
       setPreviewFrameGeometry(scale);
@@ -3261,7 +3289,7 @@ function movePreviewFromKeyboard(event: KeyboardEvent): void {
           : undefined;
   if (!movement) return;
   event.preventDefault();
-  previewPosition = movePreviewPositionBy(previewPosition, previewSourceSize, movement.x, movement.y);
+  previewPosition = movePreviewPositionBy(previewPosition, previewSourceSize, movement.x, movement.y, previewCanvasSize);
   updatePreviewScale();
   savePreviewPosition();
 }
@@ -3286,9 +3314,11 @@ function loadPreviewPosition(overlayId: string, size: PreviewSourceSize): Previe
   try {
     const stored = localStorage.getItem(`chatwerk-preview-position:${overlayId}`);
     const parsed: unknown = stored ? JSON.parse(stored) as unknown : undefined;
-    return isValidPreviewPosition(parsed) ? clampPreviewPosition(parsed, size) : defaultPreviewPosition(size);
+    return isValidPreviewPosition(parsed, previewCanvasSize)
+      ? clampPreviewPosition(parsed, size, previewCanvasSize)
+      : defaultPreviewPosition(size, previewCanvasSize);
   } catch {
-    return defaultPreviewPosition(size);
+    return defaultPreviewPosition(size, previewCanvasSize);
   }
 }
 
@@ -3296,6 +3326,11 @@ function savePreviewPosition(): void {
   if (!overlay) return;
   try { localStorage.setItem(`chatwerk-preview-position:${overlay.id}`, JSON.stringify(previewPosition)); }
   catch { /* Canvas placement is a local Studio convenience. */ }
+}
+
+function savePreviewCanvasSize(): void {
+  try { localStorage.setItem(PREVIEW_CANVAS_SIZE_STORAGE_KEY, previewCanvasSizeValue(previewCanvasSize)); }
+  catch { /* Canvas resolution is a local Studio convenience. */ }
 }
 
 function cancelPreviewDrag(event?: PointerEvent): void {
@@ -3323,7 +3358,7 @@ function savePreviewHeightToTheme(height: number): void {
 
 function applyPreviewSourceSize(size: PreviewSourceSize, persist: boolean, updateScale = true): void {
   previewSourceSize = size;
-  previewPosition = clampPreviewPosition(previewPosition, size);
+  previewPosition = clampPreviewPosition(previewPosition, size, previewCanvasSize);
   previewSizeError.hidden = true;
   updatePreviewSizeControl();
   updateSourceSizeHint();
