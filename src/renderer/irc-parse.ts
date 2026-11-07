@@ -22,6 +22,8 @@ export interface CommonMessage {
   id: string | null;
   roomId: string | null;
   sourceRoomId: string | null;
+  sourceRoomName?: string;
+  sourceRoomLogo?: string | null;
   sourceId: string | null;
   displayName: string | null;
   color: string | null;

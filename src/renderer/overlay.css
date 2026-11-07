@@ -332,11 +332,56 @@ body {
   opacity: 0.85;
 }
 
+.chat-source-room[data-style="pill"] {
+  opacity: 1;
+}
+
+.chat-source-pill {
+  display: inline-block;
+  padding-inline: 0.4em;
+  border-radius: 999px;
+  background-color: var(--t-highlight-background-color, #ffe680);
+  white-space: nowrap;
+}
+
+.chat-source-room[data-style="avatar"],
+.chat-source-room[data-style="avatar-pill"] {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15em;
+  line-height: 1;
+}
+
+.chat-source-avatar-slot {
+  box-sizing: border-box;
+  display: inline-flex;
+  flex: 0 0 1.25em;
+  align-items: center;
+  justify-content: center;
+  width: 1.25em;
+  height: 1.25em;
+  overflow: hidden;
+  border-radius: 50%;
+  background-color: var(--t-panel-background, rgba(0, 0, 0, 0.5));
+  color: var(--t-text-color, #ffffff);
+}
+
+.chat-source-avatar {
+  display: block;
+  max-width: none;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
 .chat-badges:empty,
 .chat-pronouns:empty,
 .chat-source-room:empty,
 .chat-source-channel:empty,
 .chat-source-channel[hidden] {
+  display: none;
+}
+
+.chat-source-room[hidden] {
   display: none;
 }
 

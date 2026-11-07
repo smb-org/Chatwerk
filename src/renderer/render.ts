@@ -22,6 +22,7 @@ import type { PaintLookup, PaintStyle } from "./paints";
 import type { PronounLookup } from "./pronouns";
 import type { ThirdPartyBadgeLookup } from "./third-party-badges";
 import type { SevenTvBadge } from "./paints";
+import { roomNameLookup, type RoomNameLookup } from "./room-names";
 
 export interface ChatRendererOptions {
   root: HTMLElement;
@@ -35,6 +36,7 @@ export interface ChatRendererOptions {
   paints?: PaintLookup;
   pronouns?: PronounLookup;
   thirdPartyBadges?: ThirdPartyBadgeLookup;
+  roomNames?: RoomNameLookup;
 }
 
 interface PendingMessage {
@@ -57,6 +59,12 @@ interface RenderedLine {
   channel: string;
   aliases: Map<string, MessageAlias>;
   channelMarker: HTMLElement;
+  badges: HTMLElement;
+  metadata: HTMLElement;
+  sourceRoom: HTMLElement;
+  sourceRoomName: string | null;
+  sourceRoomLogo: string | null;
+  sourceLookupStarted: boolean;
   event: CommonMessage;
   receivedAt: number;
   tickerWidth: number;
@@ -86,6 +94,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
   const limit = Math.min(MAX_NODE_LIMIT, Math.max(1, Math.floor(options.nodeLimit ?? DEFAULT_NODE_LIMIT)));
   const schedule = options.scheduler ?? ((callback: () => void) => setTimeout(callback, 16));
   const cancel = options.cancelScheduled ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+  const roomNames = options.roomNames ?? roomNameLookup;
   let theme = options.theme ?? DEFAULTS;
   let pending: PendingMessage[] = [];
   let localMessageId = 0;
@@ -195,10 +204,12 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       updateChannelMarker(line);
     }
     for (const line of lines) {
+      resolveSourceRoomName(line);
       const badgeContainer = line.node.querySelector<HTMLElement>(".chat-badges");
       if (badgeContainer) {
         appendBadgeImages(badgeContainer, line.event, theme, options.badges, options.paints, options.thirdPartyBadges, true);
       }
+      applySourceRoomStyle(line);
       watchLineImages(line.node);
       const pronounContainer = line.node.querySelector<HTMLElement>(".chat-pronouns");
       if ((!theme.showPronouns || theme.hideNames) && pronounContainer) pronounContainer.textContent = "";
@@ -224,6 +235,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
         line.node.style.setProperty("opacity", "1");
         line.node.style.setProperty("transform", "translateY(0)");
       }
+      remeasureTickerWidth(line);
     }
     if (theme.layout === "stack") enforceLineLimit();
     if (lines.size > 0) scheduleHeightPrune();
@@ -265,6 +277,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       const event = item.event;
       const line = buildLine(event, root.ownerDocument, theme, item.receivedAt);
       lines.add(line.record);
+      resolveSourceRoomName(line.record);
       addLineAliases(line.record, item.aliases);
       for (const key of item.aliases.keys()) reactionEffects.attachLine(key, line.node);
       if (line.record.sourceId) linesBySourceId.set(line.record.sourceId, line.record);
@@ -342,6 +355,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     line.node.classList.add("ticker-line");
     line.record.node = line.node;
     lines.add(line.record);
+    resolveSourceRoomName(line.record);
     addLineAliases(line.record, item.aliases);
     for (const key of item.aliases.keys()) reactionEffects.attachLine(key, line.node);
     if (line.record.sourceId) linesBySourceId.set(line.record.sourceId, line.record);
@@ -378,6 +392,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     line.node.classList.add("ticker-line", "ticker-static");
     line.record.node = line.node;
     lines.add(line.record);
+    resolveSourceRoomName(line.record);
     addLineAliases(line.record, latest.aliases);
     for (const key of latest.aliases.keys()) reactionEffects.attachLine(key, line.node);
     if (line.record.sourceId) linesBySourceId.set(line.record.sourceId, line.record);
@@ -390,6 +405,91 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     const viewportWidth = root.ownerDocument.defaultView?.innerWidth ?? 1920;
     const seconds = Math.max(0.05, (viewportWidth + line.tickerWidth) / speed);
     line.node.style.setProperty("--ticker-duration", `${seconds}s`);
+  }
+
+  function remeasureTickerWidth(line: RenderedLine): void {
+    if (!line.node.classList.contains("ticker-line")) return;
+    const displayName = line.node.querySelector<HTMLElement>(".chat-name")?.textContent ?? "";
+    line.tickerWidth = measureTickerWidth(
+      line.event,
+      theme,
+      line.messageParts,
+      displayName,
+      line.badges,
+      line.sourceRoom,
+      line.channelMarker,
+      root.ownerDocument,
+    );
+    updateTickerDuration(line);
+  }
+
+  function resolveSourceRoomName(line: RenderedLine): void {
+    const roomId = line.event.sourceRoomId;
+    if (!roomId || !line.event.roomId || roomId === line.event.roomId || theme.sharedChatLabel === "hidden" ||
+      line.sourceRoomName || line.sourceLookupStarted) return;
+    line.sourceLookupStarted = true;
+    void roomNames.lookup(roomId).then((details) => {
+      if (!details || disposed || !lines.has(line)) return;
+      line.sourceRoomName = details.displayName;
+      line.sourceRoomLogo = details.logo;
+      applySourceRoomStyle(line);
+      if (!tickerAnimationStarted(line)) remeasureTickerWidth(line);
+      scheduleHeightPrune();
+    }).catch(() => undefined);
+  }
+
+  function tickerAnimationStarted(line: RenderedLine): boolean {
+    if (!line.node.classList.contains("ticker-line") || line.node.classList.contains("ticker-static")) return false;
+    return line.node.getAnimations?.().some((animation) => animation.playState !== "idle") ?? false;
+  }
+
+  function applySourceRoomStyle(line: RenderedLine): void {
+    const { sourceRoom, badges, metadata, channelMarker, event } = line;
+    const roomId = event.sourceRoomId;
+    const foreignRoom = Boolean(roomId && event.roomId && roomId !== event.roomId);
+    const style = theme.sharedChatLabel;
+    const name = line.sourceRoomName ?? roomId ?? "";
+    sourceRoom.replaceChildren();
+    sourceRoom.className = "chat-source-room";
+    sourceRoom.dataset.style = style;
+    sourceRoom.hidden = !foreignRoom || style === "hidden";
+    if (foreignRoom && roomId) sourceRoom.dataset.roomId = roomId;
+    else delete sourceRoom.dataset.roomId;
+    if (foreignRoom) sourceRoom.setAttribute("aria-label", `Shared chat source room ${name}`);
+    else sourceRoom.removeAttribute("aria-label");
+
+    if (foreignRoom && style !== "hidden") {
+      if (style === "text") {
+        sourceRoom.textContent = theme.sharedChatPrefix ? `${theme.sharedChatPrefix} ${name}` : name;
+      } else if (style === "pill" || style === "avatar-pill") {
+        const pill = sourceRoom.ownerDocument.createElement("span");
+        pill.className = "chat-source-pill";
+        pill.textContent = name;
+        pill.style.setProperty("color", ensureReadableNameColor(theme.highlightTextColor, theme.highlightBackgroundColor));
+        sourceRoom.appendChild(pill);
+      }
+
+      if (style === "avatar" || style === "avatar-pill") {
+        const slot = sourceRoom.ownerDocument.createElement("span");
+        slot.className = "chat-source-avatar-slot";
+        if (line.sourceRoomName && line.sourceRoomLogo && isAllowedImageUrl(line.sourceRoomLogo)) {
+          const avatar = sourceRoom.ownerDocument.createElement("img");
+          avatar.className = "chat-source-avatar";
+          avatar.src = line.sourceRoomLogo;
+          avatar.alt = line.sourceRoomName;
+          avatar.setAttribute("decoding", "async");
+          avatar.style.setProperty("height", `${theme.fontSize}px`);
+          avatar.style.setProperty("width", `${theme.fontSize}px`);
+          slot.appendChild(avatar);
+        } else if (line.sourceRoomName) {
+          slot.setAttribute("aria-hidden", "true");
+          slot.textContent = Array.from(line.sourceRoomName)[0] ?? "";
+        }
+        sourceRoom.insertBefore(slot, sourceRoom.firstChild);
+        badges.appendChild(sourceRoom);
+      }
+    }
+    if (style !== "avatar" && style !== "avatar-pill") metadata.insertBefore(sourceRoom, channelMarker);
   }
 
   function changeLayout(nextLayout: ThemeConfig["layout"]): void {
@@ -844,14 +944,22 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       channel: event.channel.toLowerCase(),
       aliases: new Map(),
       channelMarker,
+      badges,
+      metadata,
+      sourceRoom,
+      sourceRoomName: event.sourceRoomName ?? null,
+      sourceRoomLogo: event.sourceRoomLogo ?? null,
+      sourceLookupStarted: false,
       event,
       receivedAt,
-      tickerWidth: measureTickerWidth(event, config, parts, displayName, badges, sourceRoom, channelMarker, document),
+      tickerWidth: 0,
       userLogin: event.userLogin ?? "",
       userId: event.tags["user-id"] ?? null,
       lifetimeTimer: undefined,
       removalTimer: undefined,
     };
+    applySourceRoomStyle(record);
+    record.tickerWidth = measureTickerWidth(event, config, parts, displayName, badges, sourceRoom, channelMarker, document);
     if (config.showPronouns && !config.hideNames && options.pronouns && event.userLogin) {
       void options.pronouns.lookup(event.userLogin).then((value) => {
         if (value && lines.has(record) && !theme.hideNames) pronouns.textContent = ` (${value})`;
@@ -879,24 +987,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       line.message.replaceChildren();
       appendMessageParts(line.message, parts, theme, isGigantified(line.event));
       line.messageParts = parts;
-      if (line.node.classList.contains("ticker-line")) {
-        const displayName = line.node.querySelector<HTMLElement>(".chat-name")?.textContent ?? "";
-        const badges = line.node.querySelector<HTMLElement>(".chat-badges");
-        const sourceRoom = line.node.querySelector<HTMLElement>(".chat-source-room");
-        if (badges && sourceRoom) {
-          line.tickerWidth = measureTickerWidth(
-            line.event,
-            theme,
-            parts,
-            displayName,
-            badges,
-            sourceRoom,
-            line.channelMarker,
-            root.ownerDocument,
-          );
-          updateTickerDuration(line);
-        }
-      }
+      remeasureTickerWidth(line);
       watchLineImages(line.node);
       scheduleHeightPrune();
     }
@@ -940,12 +1031,21 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       if (part.type === "text") messageWidth += measure(part.value);
       else messageWidth += emoteHeight + config.emoteSpacing;
     }
-    const badgeCount = badges.querySelectorAll(".chat-badge").length;
+    const badgeCount = badges.querySelectorAll(":scope > .chat-badge").length;
     const badgeWidth = badgeCount * config.fontSize + Math.max(0, badgeCount - 1) * config.fontSize * 0.15;
     const visibleWidths = [messageWidth];
     if (!config.hideNames) visibleWidths.push(measure(displayName));
+    const sourceInBadges = sourceRoom.parentElement === badges;
     if (badgeCount > 0) visibleWidths.push(badgeWidth);
-    if (sourceRoom.textContent) visibleWidths.push(measure(sourceRoom.textContent));
+    if (!sourceRoom.hidden && sourceRoom.querySelector(".chat-source-avatar-slot")) {
+      const pill = sourceRoom.querySelector<HTMLElement>(".chat-source-pill");
+      const avatarAndPillWidth = config.fontSize + (pill ? measure(pill.textContent ?? "") + config.fontSize * 0.95 : 0);
+      if (sourceInBadges && badgeCount > 0) visibleWidths[visibleWidths.length - 1] = (visibleWidths.at(-1) ?? 0) + avatarAndPillWidth + config.fontSize * 0.15;
+      else visibleWidths.push(avatarAndPillWidth);
+    } else if (!sourceRoom.hidden && sourceRoom.textContent && !sourceInBadges) {
+      const pill = sourceRoom.querySelector(".chat-source-pill");
+      visibleWidths.push(measure(sourceRoom.textContent) + (pill ? config.fontSize * 0.8 : 0));
+    }
     if (!channelMarker.hidden) visibleWidths.push(measure(channelMarker.textContent ?? ""));
     if (config.showPronouns && !config.hideNames && event.userLogin) visibleWidths.push(measure(` (${event.userLogin})`));
     return Math.ceil(visibleWidths.reduce((sum, width) => sum + width, 0) + Math.max(0, visibleWidths.length - 1) * config.spacing);
@@ -970,8 +1070,12 @@ function appendBadgeImages(
   thirdPartyBadges: ThirdPartyBadgeLookup | undefined,
   replace = false,
 ): void {
+  const sourceRoom = replace ? container.querySelector<HTMLElement>(".chat-source-room") : null;
   if (replace) container.replaceChildren();
-  if (!theme.showBadges) return;
+  if (!theme.showBadges) {
+    if (sourceRoom) container.appendChild(sourceRoom);
+    return;
+  }
   const broadcasterId = event.sourceRoomId && event.sourceRoomId !== event.roomId ? event.sourceRoomId : event.roomId;
   const append = (name: string, url: string, source: string): void => {
     if (!isAllowedImageUrl(url)) return;
@@ -1001,6 +1105,7 @@ function appendBadgeImages(
       : badge.provider === "badgesChatterino" ? "fourtf.com" : "cdn.chatterinohomies.com";
     if (isExpectedBadgeHost(badge.url, host)) append(badge.name, badge.url, badge.provider);
   }
+  if (sourceRoom) container.appendChild(sourceRoom);
 }
 
 function splitEventMessage(event: CommonMessage, emotes: EmoteLookup | undefined): MessagePart[] {

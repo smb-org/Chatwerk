@@ -139,11 +139,11 @@ if (chat) {
     chatStatus = "idle";
   };
 
-  const showScenario = (scenario: ScenarioName): void => {
+  const showScenario = (scenario: ScenarioName, includeSharedChat = false): void => {
     stopScenario?.();
     renderer.clear();
     renderer.setTheme(currentTheme);
-    stopScenario = runScenario(scenario, (message) => renderer.handle(message), liveLocation.channel ?? "sample");
+    stopScenario = runScenario(scenario, (message) => renderer.handle(message), liveLocation.channel ?? "sample", includeSharedChat);
   };
 
   if (liveLocation.client === "studio" && !liveLocation.token) {
@@ -162,7 +162,7 @@ if (chat) {
         return;
       }
       if (event.data.type === "chatwerk:studio-scenario" && isScenarioName(event.data.scenario)) {
-        showScenario(event.data.scenario);
+        showScenario(event.data.scenario, event.data.includeSharedChat === true);
         return;
       }
       if (event.data.type === "chatwerk:studio-hype-train-scenario") {
@@ -193,7 +193,7 @@ if (chat) {
           stopIrc();
           renderer.clear();
           renderer.setTheme(currentTheme);
-          showScenario("quiet");
+          showScenario("quiet", true);
         }
       }
     });

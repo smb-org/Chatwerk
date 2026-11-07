@@ -16,7 +16,7 @@ export const THEME_UI_GROUPS = [
 ] as const;
 
 export type ThemeUiGroup = (typeof THEME_UI_GROUPS)[number];
-export type ThemeControl = "select" | "range" | "color" | "segmented" | "toggle" | "list" | "channels";
+export type ThemeControl = "select" | "range" | "color" | "segmented" | "toggle" | "list" | "channels" | "text";
 
 export const FONT_FAMILIES = [
   "Arial",
@@ -30,6 +30,7 @@ export type NameColorMode = "tag" | "text";
 export type LineOrder = "name-first" | "message-first";
 export type Motion = "fade" | "none";
 export type MessageLayout = "stack" | "ticker";
+export type SharedChatLabel = "text" | "pill" | "avatar" | "avatar-pill" | "hidden";
 export type ChannelLogin = string;
 export const DEFAULT_BOT_NAMES = [
   "nightbot", "streamlabs", "streamelements", "moobot", "fossabot",
@@ -214,8 +215,19 @@ export const THEME_FIELDS = {
     { group: "Filters", order: 3, label: "Message prefixes", control: "list" }),
   hideBots: field(false, (value): value is boolean => typeof value === "boolean", (value) => String(value),
     { group: "Filters", order: 4, label: "Hide bots", control: "toggle" }),
+  showSharedChat: field(true, (value): value is boolean => typeof value === "boolean", (value) => String(value),
+    { group: "Filters", order: 5, label: "Show shared chat messages", control: "toggle" }),
+  sharedChatLabel: field<SharedChatLabel>("text", (value): value is SharedChatLabel =>
+    value === "text" || value === "pill" || value === "avatar" || value === "avatar-pill" || value === "hidden",
+  (value) => value, { group: "Messages", order: 18, label: "Shared Chat source label", control: "select" }),
+  sharedChatPrefix: field("via", (value): value is string =>
+    typeof value === "string" && Array.from(value).length <= 12 && !Array.from(value).some((character) => {
+      const codePoint = character.codePointAt(0)!;
+      return codePoint < 0x20 || (codePoint >= 0x7f && codePoint <= 0x9f);
+    }),
+  (value) => value, { group: "Messages", order: 19, label: "Text label prefix", control: "text" }),
   botNames: field<string[]>([...DEFAULT_BOT_NAMES], isValidBotNameList, (value) => JSON.stringify(value),
-    { group: "Filters", order: 5, label: "Bot names", control: "list" }),
+    { group: "Filters", order: 6, label: "Bot names", control: "list" }),
 } as const;
 
 export type ThemeFieldName = keyof typeof THEME_FIELDS;
@@ -287,6 +299,9 @@ export const DEFAULTS: ThemeConfig = {
   filterWords: [],
   filterPrefixes: [],
   hideBots: false,
+  showSharedChat: true,
+  sharedChatLabel: "text",
+  sharedChatPrefix: "via",
   botNames: [...DEFAULT_BOT_NAMES],
 };
 
@@ -341,7 +356,7 @@ export function themeCssVariables(theme: ThemeConfig): Record<`--t-${string}`, s
 }
 
 const PRIVATE_THEME_FIELDS = new Set<ThemeFieldName>([
-  "channels", "hideNumbers", "filterWords", "filterPrefixes", "hideBots", "botNames",
+  "channels", "hideNumbers", "filterWords", "filterPrefixes", "hideBots", "showSharedChat", "botNames",
 ]);
 
 /** Shareable appearance keys for gallery looks; overlay-local routing and filtering never cross this boundary. */

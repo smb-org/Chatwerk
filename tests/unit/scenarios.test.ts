@@ -5,11 +5,15 @@ import { parseReactionEvent } from "../../src/renderer/irc-parse";
 describe("Studio rehearsal scenarios", () => {
   it("creates quiet, flood, raid, sub, and bits samples using ordinary renderer messages", () => {
     const quiet = createScenarioMessages("quiet", "sample");
+    const studioQuiet = createScenarioMessages("quiet", "sample", true);
     const flood = createScenarioMessages("flood", "sample");
     const raid = createScenarioMessages("raid", "sample");
     const sub = createScenarioMessages("sub", "sample");
     const bits = createScenarioMessages("bits", "sample");
     expect(quiet.length).toBeGreaterThan(0);
+    expect(studioQuiet.at(-1)).toMatchObject({ sourceRoomId: "10002", roomId: "10001", sourceRoomName: "LunaLive", sourceRoomLogo: null });
+    expect(quiet).toHaveLength(3);
+    expect(studioQuiet).toHaveLength(4);
     expect(flood).toHaveLength(100);
     expect(raid.every((message) => message.type === "USERNOTICE" || message.type === "PRIVMSG")).toBe(true);
     expect([...quiet, ...flood, ...raid, ...sub, ...bits].every((message) => message.channel === "#sample")).toBe(true);

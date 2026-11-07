@@ -56,6 +56,19 @@ describe("Studio translations", () => {
     }
   });
 
+  it("localizes the Shared Chat filter label", () => {
+    expect(load("en").fieldShowSharedChat).toBe("Show shared chat messages");
+    expect(load("de").fieldShowSharedChat).toBe("Nachrichten aus geteiltem Chat anzeigen");
+  });
+
+  it("localizes the Shared Chat source label controls", () => {
+    for (const key of ["fieldSharedChatLabel", "fieldSharedChatPrefix", "valueSharedChatLabelText", "valueSharedChatLabelPill", "valueSharedChatLabelAvatar", "valueSharedChatLabelAvatarPill", "valueSharedChatLabelHidden"]) {
+      expect(load("en")[key], `English translation missing ${key}`).toBeTruthy();
+      expect(load("de")[key], `German translation missing ${key}`).toBeTruthy();
+    }
+    expect(load("de").fieldSharedChatPrefix).toBe("Präfix für Textstil");
+  });
+
   it("provides truthful initial-load retry status in both languages", () => {
     expect(load("en").couldNotLoadRetrying).toBe("Could not load. Retrying...");
     expect(load("de").couldNotLoadRetrying).toBe("Laden fehlgeschlagen. Neuer Versuch …");

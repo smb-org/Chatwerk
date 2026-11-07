@@ -634,6 +634,32 @@ function makeThemeControl(name: ThemeFieldName, definition: ThemeFieldDefinition
   if (definition.ui.control === "list") return makeListEditor(name, labelText);
   if (definition.ui.control === "channels") return makeChannelsEditor(name, labelText);
 
+  if (definition.ui.control === "text") {
+    const label = document.createElement("label");
+    label.className = "control-label";
+    label.htmlFor = `theme-${name}`;
+    label.textContent = labelText;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.id = `theme-${name}`;
+    input.className = "text-control";
+    input.dataset.field = name;
+    input.value = String(theme[name]);
+    input.maxLength = 12;
+    input.setAttribute("aria-label", labelText);
+    input.addEventListener("input", () => {
+      if (setThemeField(name, input.value)) {
+        input.removeAttribute("aria-invalid");
+        errorArea.textContent = "";
+      } else {
+        input.setAttribute("aria-invalid", "true");
+      }
+    });
+    control.appendChild(label);
+    control.appendChild(input);
+    return control;
+  }
+
   if (definition.ui.control === "color") {
     const head = document.createElement("div");
     head.className = "control-head";
@@ -1092,6 +1118,7 @@ function fieldOptions(name: ThemeFieldName): string[] {
   if (name === "lineOrder") return ["name-first", "message-first"];
   if (name === "motion") return ["fade", "none"];
   if (name === "layout") return ["stack", "ticker"];
+  if (name === "sharedChatLabel") return ["text", "pill", "avatar", "avatar-pill", "hidden"];
   return [];
 }
 
@@ -1099,6 +1126,7 @@ function valueLabel(name: ThemeFieldName, value: string): string {
   const key = name === "layout" ? (value === "ticker" ? "valueTicker" : "valueStack")
     : name === "nameColorMode" ? (value === "tag" ? "valueNameTag" : "valueNameText")
     : name === "lineOrder" ? (value === "name-first" ? "valueNameFirst" : "valueMessageFirst")
+      : name === "sharedChatLabel" ? `valueSharedChatLabel${value.split("-").map((part) => part[0]!.toUpperCase() + part.slice(1)).join("")}` as TranslationKey
       : value === "fade" ? "valueFade" : "valueNone";
   return translate(language, key);
 }
@@ -1278,6 +1306,8 @@ function syncControls(previousChannels: string[]): void {
     if (hex && typeof value === "string" && document.activeElement !== hex) hex.value = value.toUpperCase();
     const select = document.querySelector(`select#theme-${name}`) as HTMLSelectElement | null;
     if (select) select.value = String(value);
+    const text = document.querySelector<HTMLInputElement>(`input#theme-${name}[type=text]`);
+    if (text && typeof value === "string" && document.activeElement !== text) text.value = value;
     document.querySelectorAll<HTMLInputElement>(`input[name="theme-${name}"]`).forEach((radio) => {
       radio.checked = radio.value === String(value);
       radio.tabIndex = radio.checked ? 0 : -1;
@@ -1303,6 +1333,7 @@ function syncControlAvailability(): void {
     ["panelBorderColor", !theme.panelEnabled],
     ["panelRadius", !theme.panelEnabled],
     ["panelPadding", !theme.panelEnabled],
+    ["sharedChatPrefix", theme.sharedChatLabel !== "text"],
   ];
   for (const [name, disabled] of disabledFields) {
     const control = controlsRoot.querySelector<HTMLElement>(`[data-theme-field="${name}"]`);
@@ -1564,7 +1595,7 @@ function wireStaticControls(): void {
   });
   preview.addEventListener("load", () => {
     applyPreviewTheme();
-    if (!livePreviewEnabled) postPreviewMessage({ type: "chatwerk:studio-scenario", scenario: "quiet" });
+    if (!livePreviewEnabled) postPreviewMessage({ type: "chatwerk:studio-scenario", scenario: "quiet", includeSharedChat: true });
     updatePreviewScale();
   });
   const resizeObserver = new ResizeObserver(updatePreviewScale);
@@ -1679,7 +1710,7 @@ function wireStaticControls(): void {
       document.querySelectorAll<HTMLButtonElement>(".scenario-button").forEach((item) => {
         item.setAttribute("aria-pressed", String(item === button));
       });
-      try { postPreviewMessage({ type: "chatwerk:studio-scenario", scenario }); }
+      try { postPreviewMessage({ type: "chatwerk:studio-scenario", scenario, includeSharedChat: true }); }
       catch { showToast("scenarioFailed", true); }
     });
   });

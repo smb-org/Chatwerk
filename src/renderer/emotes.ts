@@ -700,7 +700,7 @@ function stringField(value: Record<string, unknown> | null, field: string): stri
   return typeof result === "string" ? result : null;
 }
 
-async function fetchJson(fetcher: typeof fetch, url: string, signal?: AbortSignal): Promise<unknown> {
+export async function fetchJson(fetcher: typeof fetch, url: string, signal?: AbortSignal): Promise<unknown> {
   const response = await fetcher(url, { signal, mode: "cors" });
   if (!response.ok) throw new ProviderHttpError(response.status, parseRetryAfter(response.headers.get("retry-after")));
   return response.json() as Promise<unknown>;

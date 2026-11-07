@@ -162,7 +162,7 @@ test("captures the requested Studio and Themes preview screenshots", async ({ pa
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/studio");
   await expect(page.locator("#preview-size-preset")).toHaveValue("400x600");
-  await expect(page.frameLocator("#studio-preview").locator(".chat-line")).toHaveCount(3);
+  await expect(page.frameLocator("#studio-preview").locator(".chat-line")).toHaveCount(4);
   if (await page.locator("#first-run-done").isVisible()) await page.locator("#first-run-done").click();
   await page.screenshot({ path: ".tmp/shots/studio-1440x900.png" });
 

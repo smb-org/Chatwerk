@@ -150,6 +150,7 @@ describe("deployment headers", () => {
     expect(ALLOWED_CONNECT_ORIGINS).toContain("https://api.chatterino.com");
     expect(ALLOWED_CONNECT_ORIGINS).toContain("https://chatterinohomies.com");
     expect(ALLOWED_CONNECT_ORIGINS).toContain("https://recent-messages.robotty.de");
+    expect(ALLOWED_CONNECT_ORIGINS).toContain("https://api.ivr.fi");
     expect(ALLOWED_IMAGE_HOSTS).toContain("fourtf.com");
     expect(ALLOWED_IMAGE_HOSTS).toContain("cdn.chatterinohomies.com");
     for (const path of ["/", "/login", "/export.html"]) {

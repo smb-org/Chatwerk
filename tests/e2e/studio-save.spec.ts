@@ -193,7 +193,9 @@ test("keeps a half-typed hex value through an incoming config and saves the comp
 test("keeps a typed existing channel through an incoming channel refresh and saves it on blur", async ({ page }) => {
   const { overlayId, token, login } = await seedStudioSession(page);
   await writeFromAnotherEditor(page, overlayId, 0, { channels: [login, "secondroom"] });
+  const liveReady = waitForStudioLiveConnection(page);
   await page.goto("/studio");
+  await liveReady;
   await page.locator("#channel-field-button").click();
   const field = page.locator("[data-channel-value]").nth(1);
   await field.evaluate((element) => {
@@ -205,6 +207,7 @@ test("keeps a typed existing channel through an incoming channel refresh and sav
   });
 
   await writeFromAnotherEditor(page, overlayId, 1, { channels: [login, "remoteroom"] });
+  await expect(page.locator("#status-visible")).toHaveText("Saved, rev 2");
   const refreshedField = page.locator("[data-channel-value]").nth(1);
   await expect(refreshedField).toHaveValue("typedroom");
   await expect(refreshedField).toBeFocused();
