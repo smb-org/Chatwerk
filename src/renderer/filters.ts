@@ -2,7 +2,7 @@ import { DEFAULTS, type ThemeConfig } from "../shared/theme";
 
 export type MessageFilterRules = Pick<
   ThemeConfig,
-  "hideNumbers" | "filterWords" | "filterPrefixes" | "hideBots" | "botNames"
+  "hideNumbers" | "filterWords" | "filterPrefixes" | "hideBots" | "showSharedChat" | "botNames"
 >;
 
 export const DEFAULT_FILTER_RULES: MessageFilterRules = {
@@ -10,13 +10,15 @@ export const DEFAULT_FILTER_RULES: MessageFilterRules = {
   filterWords: DEFAULTS.filterWords,
   filterPrefixes: DEFAULTS.filterPrefixes,
   hideBots: DEFAULTS.hideBots,
+  showSharedChat: DEFAULTS.showSharedChat,
   botNames: DEFAULTS.botNames,
 };
 
 export function shouldFilterMessage(
-  message: { text: string; userLogin: string | null },
+  message: { text: string; userLogin: string | null; roomId?: string | null; sourceRoomId?: string | null },
   rules: MessageFilterRules,
 ): boolean {
+  if (!rules.showSharedChat && message.sourceRoomId && message.sourceRoomId !== message.roomId) return true;
   if (rules.hideNumbers && containsOnlyNumbers(message.text)) return true;
   const normalized = message.text.trim().toLocaleLowerCase("en-US");
   for (const word of rules.filterWords) {

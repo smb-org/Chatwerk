@@ -47,7 +47,7 @@ describe("theme schema", () => {
     expect(messageFields.map((field) => field.ui.label)).toEqual([
       "Lifetime", "Never expire", "Maximum lines", "Maximum chat height", "Line padding", "Text outline", "Motion",
       "Highlight background", "Highlight text", "Emote size", "Gigantified emote size", "Show badges", "Show pronouns",
-      "Recent message backlog", "Name on own line", "Hide names", "Readable names",
+      "Recent message backlog", "Name on own line", "Hide names", "Readable names", "Shared Chat source label", "Text label prefix",
     ]);
     expect(new Set(messageFields.map((field) => field.ui.order)).size).toBe(messageFields.length);
     const textFields = Object.values(THEME_FIELDS).filter((field) => field.ui.group === "Text");
@@ -78,10 +78,13 @@ describe("theme schema", () => {
     const fields = Object.keys(THEME_FIELDS) as Array<keyof typeof THEME_FIELDS>;
     expect(fields.map(cssVariableName)).toContain("--t-font-family");
     expect(Object.keys(themeCssVariables(DEFAULTS))).toEqual(fields
-      .filter((field) => !["channels", "hideNumbers", "filterWords", "filterPrefixes", "hideBots", "botNames"].includes(field))
+      .filter((field) => !["channels", "hideNumbers", "filterWords", "filterPrefixes", "hideBots", "showSharedChat", "botNames"].includes(field))
       .map(cssVariableName));
-    for (const field of ["channels", "hideNumbers", "filterWords", "filterPrefixes", "hideBots", "botNames"] as const) {
+    for (const field of ["channels", "hideNumbers", "filterWords", "filterPrefixes", "hideBots", "showSharedChat", "botNames"] as const) {
       expect(themeCssVariables(DEFAULTS)).not.toHaveProperty(cssVariableName(field));
+    }
+    for (const field of ["sharedChatLabel", "sharedChatPrefix"] as const) {
+      expect(themeCssVariables(DEFAULTS)).toHaveProperty(cssVariableName(field));
     }
   });
 
@@ -164,6 +167,25 @@ describe("theme schema", () => {
     expect(getShareableThemeKeys()).toContain("reactionSubgift");
   });
 
+  it("validates Shared Chat source label styles and prefixes as shareable appearance fields", () => {
+    expect(SCHEMA_VERSION).toBe(1);
+    expect(DEFAULTS.sharedChatLabel).toBe("text");
+    expect(DEFAULTS.sharedChatPrefix).toBe("via");
+    for (const sharedChatLabel of ["text", "pill", "avatar", "avatar-pill", "hidden"] as const) {
+      expect(validateTheme({ ...DEFAULTS, sharedChatLabel }).sharedChatLabel).toBe(sharedChatLabel);
+    }
+    expect(validateTheme({ ...DEFAULTS, sharedChatPrefix: "" }).sharedChatPrefix).toBe("");
+    expect(validateTheme({ ...DEFAULTS, sharedChatPrefix: "source_12345" }).sharedChatPrefix).toBe("source_12345");
+    expect(() => validateTheme({ ...DEFAULTS, sharedChatLabel: "badge" })).toThrow();
+    expect(() => validateTheme({ ...DEFAULTS, sharedChatPrefix: "source-labelx" })).toThrow();
+    expect(() => validateTheme({ ...DEFAULTS, sharedChatPrefix: "via\nuser" })).toThrow();
+    for (const field of ["sharedChatLabel", "sharedChatPrefix"] as const) {
+      expect(THEME_FIELDS[field].ui.group).toBe("Messages");
+      expect(themeCssVariables(DEFAULTS)).toHaveProperty(cssVariableName(field));
+      expect(getShareableThemeKeys()).toContain(field);
+    }
+  });
+
   it("keeps additive values compatible with schema version 1 and loads old-shape themes", () => {
     const expanded = validateTheme({
       schemaVersion: 1,
@@ -175,6 +197,7 @@ describe("theme schema", () => {
       filterWords: ["blocked"],
       filterPrefixes: ["!"],
       hideBots: true,
+      showSharedChat: false,
       botNames: ["bot"],
     });
     expect(expanded).toMatchObject({
@@ -187,6 +210,7 @@ describe("theme schema", () => {
       filterWords: ["blocked"],
       filterPrefixes: ["!"],
       hideBots: true,
+      showSharedChat: false,
       botNames: ["bot"],
     });
 
@@ -202,6 +226,7 @@ describe("theme schema", () => {
       filterWords: [],
       filterPrefixes: [],
       hideBots: false,
+      showSharedChat: true,
       botNames: expect.arrayContaining(["nightbot", "streamlabs"]),
       gigantifiedScale: 2.5,
       emoteSpacing: 0,
@@ -216,7 +241,9 @@ describe("theme schema", () => {
     expect(shareable).not.toContain("filterWords");
     expect(shareable).not.toContain("filterPrefixes");
     expect(shareable).not.toContain("hideBots");
+    expect(shareable).not.toContain("showSharedChat");
     expect(shareable).not.toContain("botNames");
+    expect(() => validateTheme({ schemaVersion: 1, showSharedChat: "false" })).toThrow();
   });
 
   it("adds display switches without changing version 1 defaults or existing ranges", () => {

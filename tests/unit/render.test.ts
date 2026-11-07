@@ -841,6 +841,174 @@ describe("text renderer", () => {
     renderer.dispose();
   });
 
+  it("does not render a partner PRIVMSG when shared chat is disabled", () => {
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, showSharedChat: false },
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=partner;room-id=10;source-room-id=20 :viewer!viewer@host PRIVMSG #main :hello")!);
+
+    expect(root.querySelectorAll(".chat-line")).toHaveLength(0);
+    renderer.dispose();
+  });
+
+  it("does not render a partner sharedchatnotice USERNOTICE when shared chat is disabled", () => {
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, showSharedChat: false },
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=partner-notice;msg-id=sharedchatnotice;source-msg-id=raid;room-id=10;source-room-id=20 :tmi.twitch.tv USERNOTICE #main :Raid")!);
+
+    expect(root.querySelectorAll(".chat-line")).toHaveLength(0);
+    renderer.dispose();
+  });
+
+  it("updates the existing shared-chat source label and accessible name after resolution", async () => {
+    let resolveName!: (name: { displayName: string; logo: string | null } | null) => void;
+    const roomNames = { lookup: vi.fn(() => new Promise<{ displayName: string; logo: string | null } | null>((resolve) => { resolveName = resolve; })) };
+    const renderer = createChatRenderer({
+      root,
+      theme: DEFAULTS,
+      roomNames,
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=partner;room-id=10;source-room-id=20 :viewer!viewer@host PRIVMSG #main :hello")!);
+    const row = root.querySelector<HTMLElement>(".chat-line")!;
+    const source = row.querySelector<HTMLElement>(".chat-source-room")!;
+
+    expect(source.textContent).toBe("via 20");
+    expect(source.getAttribute("aria-label")).toBe("Shared chat source room 20");
+    resolveName({ displayName: "PartnerName", logo: null });
+    await Promise.resolve();
+
+    expect(root.querySelector(".chat-line")).toBe(row);
+    expect(source.textContent).toBe("via PartnerName");
+    expect(source.getAttribute("aria-label")).toBe("Shared chat source room PartnerName");
+    expect(source.dataset.roomId).toBe("20");
+    renderer.dispose();
+  });
+
+  it("does not reset an active ticker duration when the source name resolves", async () => {
+    let resolveName!: (name: { displayName: string; logo: string | null } | null) => void;
+    const roomNames = { lookup: vi.fn(() => new Promise<{ displayName: string; logo: string | null } | null>((resolve) => { resolveName = resolve; })) };
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, layout: "ticker" },
+      roomNames,
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=ticker-partner;room-id=10;source-room-id=20 :viewer!viewer@host PRIVMSG #main :hello")!);
+    const row = root.querySelector<HTMLElement>(".chat-line")!;
+    Object.defineProperty(row, "getAnimations", { value: () => [{ playState: "running" }] });
+    const duration = row.style.getPropertyValue("--ticker-duration");
+
+    resolveName({ displayName: "A much longer partner channel name", logo: null });
+    await Promise.resolve();
+
+    expect(root.querySelector(".chat-source-room")?.textContent).toBe("via A much longer partner channel name");
+    expect(row.style.getPropertyValue("--ticker-duration")).toBe(duration);
+    renderer.dispose();
+  });
+
+  it("keeps the numeric source label when a room name lookup fails", async () => {
+    const roomNames = { lookup: vi.fn(async () => null) };
+    const renderer = createChatRenderer({
+      root,
+      theme: DEFAULTS,
+      roomNames,
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=partner;room-id=10;source-room-id=20 :viewer!viewer@host PRIVMSG #main :hello")!);
+    await Promise.resolve();
+
+    expect(root.querySelector(".chat-source-room")?.textContent).toBe("via 20");
+    expect(root.querySelector(".chat-source-room")?.getAttribute("aria-label")).toBe("Shared chat source room 20");
+    renderer.dispose();
+  });
+
+  it.each([
+    "text", "pill", "avatar", "avatar-pill", "hidden",
+  ] as const)("renders the %s Shared Chat source label style", async (sharedChatLabel) => {
+    const roomNames = { lookup: vi.fn(async () => ({
+      displayName: "PartnerName", logo: "https://static-cdn.jtvnw.net/user.png",
+    })) };
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, sharedChatLabel, sharedChatPrefix: "from" },
+      roomNames,
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=partner;room-id=10;source-room-id=20 :viewer!viewer@host PRIVMSG #main :hello")!);
+    await Promise.resolve();
+
+    const row = root.querySelector<HTMLElement>(".chat-line")!;
+    const source = row.querySelector<HTMLElement>(".chat-source-room")!;
+    expect(row.querySelector(".chat-message")?.textContent).toBe("hello");
+    expect(source.getAttribute("aria-label")).toBe(sharedChatLabel === "hidden"
+      ? "Shared chat source room 20"
+      : "Shared chat source room PartnerName");
+    if (sharedChatLabel === "text") expect(source.textContent).toBe("from PartnerName");
+    if (sharedChatLabel === "pill") {
+      expect(source.dataset.style).toBe("pill");
+      expect(source.textContent).toBe("PartnerName");
+      expect(source.querySelector(".chat-source-pill")?.textContent).toBe("PartnerName");
+    }
+    if (sharedChatLabel === "avatar" || sharedChatLabel === "avatar-pill") {
+      expect(source.parentElement?.classList.contains("chat-badges")).toBe(true);
+      expect(source.querySelector("img.chat-source-avatar")?.getAttribute("src")).toBe("https://static-cdn.jtvnw.net/user.png");
+      expect(source.querySelector("img.chat-source-avatar")?.getAttribute("alt")).toBe("PartnerName");
+      expect(source.querySelector(".chat-source-avatar-slot")?.hasAttribute("aria-hidden")).toBe(false);
+      if (sharedChatLabel === "avatar") expect(source.querySelector(".chat-source-pill")).toBeNull();
+      else expect(source.querySelector(".chat-source-pill")?.textContent).toBe("PartnerName");
+    }
+    if (sharedChatLabel === "hidden") {
+      expect(source.hidden).toBe(true);
+      expect(roomNames.lookup).not.toHaveBeenCalled();
+    } else expect(roomNames.lookup).toHaveBeenCalledTimes(1);
+    renderer.dispose();
+  });
+
+  it("reserves an avatar slot before resolution and ignores unsafe profile images", async () => {
+    let resolveName!: (name: { displayName: string; logo: string | null } | null) => void;
+    const roomNames = { lookup: vi.fn(() => new Promise<{ displayName: string; logo: string | null } | null>((resolve) => { resolveName = resolve; })) };
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, sharedChatLabel: "avatar" },
+      roomNames,
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    renderer.handle(parseIrcLine("@id=partner-avatar;room-id=10;source-room-id=20 :viewer!viewer@host PRIVMSG #main :hello")!);
+    const row = root.querySelector<HTMLElement>(".chat-line")!;
+    const source = row.querySelector<HTMLElement>(".chat-source-room")!;
+    expect(source.querySelector(".chat-source-avatar-slot")).not.toBeNull();
+    expect(source.querySelector("img")).toBeNull();
+    resolveName({ displayName: "PartnerName", logo: "https://evil.invalid/user.png" });
+    await Promise.resolve();
+    expect(source.getAttribute("aria-label")).toBe("Shared chat source room PartnerName");
+    expect(source.querySelector("img")).toBeNull();
+    renderer.dispose();
+  });
+
+  it("uses fixed Studio partner metadata without looking up its fake room ID", () => {
+    const roomNames = { lookup: vi.fn(async () => ({ displayName: "WrongName", logo: null })) };
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, sharedChatLabel: "avatar" },
+      roomNames,
+      scheduler: (callback) => { callback(); return 1; },
+    });
+    const event = parseIrcLine("@id=studio-partner;room-id=10001;source-room-id=10002 :guest!guest@host PRIVMSG #sample :hello")!;
+    if (event.type !== "PRIVMSG") throw new Error("Expected a chat message");
+    renderer.handle({ ...event, sourceRoomName: "LunaLive", sourceRoomLogo: null });
+
+    expect(roomNames.lookup).not.toHaveBeenCalled();
+    expect(root.querySelector(".chat-source-room")?.getAttribute("aria-label")).toBe("Shared chat source room LunaLive");
+    expect(root.querySelector(".chat-source-avatar-slot")?.textContent).toBe("L");
+    renderer.dispose();
+  });
+
   it("styles highlighted messages and leaves animated power-ups at normal size", () => {
     const renderer = createChatRenderer({
       root,

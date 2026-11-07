@@ -171,6 +171,8 @@ test("previews shareable ticker and power-up values without joining IRC or expan
     filterPrefixes: ["!private"],
     hideBots: true,
     botNames: ["privatebot"],
+    sharedChatLabel: "avatar-pill",
+    sharedChatPrefix: "from",
   });
   const sockets: string[] = [];
   page.on("websocket", (socket) => sockets.push(socket.url()));
@@ -199,16 +201,17 @@ test("previews shareable ticker and power-up values without joining IRC or expan
   await expect(page.locator('[data-value="tickerSpeed"]')).toHaveText("160 px/s");
   await expect(page.locator('[data-value="gigantifiedScale"]')).toHaveText("3 em");
   await expect(page.locator('[data-value="showPronouns"]')).toHaveText("On");
-  for (const key of ["channels", "hideNumbers", "filterWords", "filterPrefixes", "hideBots", "botNames"]) {
+  for (const key of ["channels", "hideNumbers", "filterWords", "filterPrefixes", "hideBots", "showSharedChat", "botNames"]) {
     await expect(page.locator(`[data-value="${key}"]`)).toHaveCount(0);
   }
   const previewFrame = page.frames().find((item) => item.url().includes("/overlay#client=studio"));
   const previewTheme = await previewFrame?.evaluate(() =>
     (window as Window & { galleryPreviewTheme?: Record<string, unknown> }).galleryPreviewTheme);
   expect(previewTheme).toBeTruthy();
-  for (const key of ["channels", "hideNumbers", "filterWords", "filterPrefixes", "hideBots", "botNames"]) {
+  for (const key of ["channels", "hideNumbers", "filterWords", "filterPrefixes", "hideBots", "showSharedChat", "botNames"]) {
     expect(previewTheme).not.toHaveProperty(key);
   }
+  expect(previewTheme).toMatchObject({ sharedChatLabel: "avatar-pill", sharedChatPrefix: "from" });
   const pageWidth = await page.evaluate(() => ({ width: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth }));
   expect(pageWidth.scrollWidth).toBe(pageWidth.width);
   await page.locator('[data-value="layout"]').scrollIntoViewIfNeeded();

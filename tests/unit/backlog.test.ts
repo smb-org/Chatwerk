@@ -75,6 +75,18 @@ describe("recent message backlog", () => {
     expect(Object.keys(result[0]!.event.tags).some((tag) => tag.startsWith("source-"))).toBe(false);
   });
 
+  it("filters partner backlog messages before stripping their original source tags", async () => {
+    const fetcher = vi.fn(async () => response([
+      line("partner", now - 1_000, "hello", ";room-id=10;source-room-id=20;source-id=relay-1"),
+    ]));
+
+    const result = await fetchRecentBacklog(["room"], {
+      ...DEFAULTS, lifetime: 10_000, showSharedChat: false,
+    }, { fetcher, now });
+
+    expect(result).toEqual([]);
+  });
+
   it("drops a channel response whose streamed body exceeds 2 MB", async () => {
     const oversized = "x".repeat(2 * 1024 * 1024);
     const fetcher = vi.fn(async () => response([line("bounded", now - 1_000), oversized]));

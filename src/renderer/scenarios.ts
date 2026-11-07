@@ -68,11 +68,11 @@ const raidLines = [
 const subLines = [["newfriend09", "Thanks for the welcome!", "#CBA6F7"]] as const;
 const bitsLines = [["cheerer", "Cheer250 That was huge!", "#E9A23B"]] as const;
 
-export function createScenarioMessages(name: ScenarioName, channel: string): CommonMessage[] {
+export function createScenarioMessages(name: ScenarioName, channel: string, includeSharedChat = false): CommonMessage[] {
   const rows = name === "flood"
     ? Array.from({ length: 100 }, (_, index) => floodLines[index % floodLines.length]!)
     : name === "quiet" ? quietLines : name === "raid" ? raidLines : name === "sub" ? subLines : bitsLines;
-  return rows.map(([userLogin, text, color], index) => ({
+  const messages: CommonMessage[] = rows.map(([userLogin, text, color], index): CommonMessage => ({
     type: ["raid", "sub"].includes(name) && index === 0 ? "USERNOTICE" : "PRIVMSG",
     channel: `#${channel.replace(/^#/u, "")}`,
     userLogin,
@@ -94,15 +94,36 @@ export function createScenarioMessages(name: ScenarioName, channel: string): Com
       ...(name === "bits" && index === 0 ? { bits: "250" } : {}),
     },
   }));
+  if (name === "quiet" && includeSharedChat) {
+    messages.push({
+      type: "PRIVMSG",
+      channel: `#${channel.replace(/^#/u, "")}`,
+      userLogin: "luna_guest",
+      id: "studio-quiet-shared-chat",
+      roomId: "10001",
+      sourceRoomId: "10002",
+      sourceRoomName: "LunaLive",
+      sourceRoomLogo: null,
+      sourceId: null,
+      displayName: "luna_guest",
+      color: "#CBA6F7",
+      badges: [],
+      emotes: [],
+      text: "Joining from the partner stream!",
+      tags: { login: "luna_guest", "display-name": "luna_guest", color: "#CBA6F7" },
+    });
+  }
+  return messages;
 }
 
 export function runScenario(
   name: ScenarioName,
   emit: (message: CommonMessage) => void,
   channel = "sample",
+  includeSharedChat = false,
 ): () => void {
   const timers = new Set<ReturnType<typeof setTimeout>>();
-  createScenarioMessages(name, channel).forEach((message, index) => {
+  createScenarioMessages(name, channel, includeSharedChat).forEach((message, index) => {
     if (name === "quiet") {
       emit(message);
       return;

@@ -112,6 +112,8 @@ describe("look gallery API", () => {
       filterPrefixes: ["!private"],
       hideBots: true,
       botNames: ["mybot"],
+      sharedChatLabel: "avatar-pill",
+      sharedChatPrefix: "from",
     } as never, 0, 1);
 
     const response = await publish(source.ownerId, source.overlayId, "Night Ledger");
@@ -126,11 +128,12 @@ describe("look gallery API", () => {
       .bind(published.id).first<{ values_json: string }>();
     const storedValues = JSON.parse(stored!.values_json) as Record<string, unknown>;
     const listedValues = listed.looks.find((look) => look.id === published.id)!.values;
-    const privateKeys = ["channels", "hideNumbers", "filterWords", "filterPrefixes", "hideBots", "botNames"];
+    const privateKeys = ["channels", "hideNumbers", "filterWords", "filterPrefixes", "hideBots", "showSharedChat", "botNames"];
 
     expect(response?.status).toBe(201);
     for (const values of [storedValues, published.values, listedValues, result.values]) {
       expect(values).toMatchObject({ fontSize: 24 });
+      expect(values).toMatchObject({ sharedChatLabel: "avatar-pill", sharedChatPrefix: "from" });
       expect(values).not.toHaveProperty("customCss");
       expect(values).not.toHaveProperty("customCssEnabled");
       for (const key of privateKeys) expect(values).not.toHaveProperty(key);
@@ -148,6 +151,8 @@ describe("look gallery API", () => {
       filterPrefixes: ["!private"],
       hideBots: true,
       botNames: ["mybot"],
+      sharedChatLabel: "pill",
+      sharedChatPrefix: "via",
     });
     await env.DB.prepare("INSERT INTO themes(id, owner_id, slug, name, name_key, values_json) VALUES (?, ?, ?, ?, ?, ?)")
       .bind(id, owner.ownerId, "old-private-look", "Old private look", "old private look", values).run();
@@ -158,13 +163,14 @@ describe("look gallery API", () => {
     ]);
     const list = await listResponse?.json() as { looks: Array<{ id: string; values: Record<string, unknown> }> };
     const publicLook = await publicResponse?.json() as { values: Record<string, unknown> };
-    const privateKeys = ["channels", "hideNumbers", "filterWords", "filterPrefixes", "hideBots", "botNames"];
+    const privateKeys = ["channels", "hideNumbers", "filterWords", "filterPrefixes", "hideBots", "showSharedChat", "botNames"];
     const listed = list.looks.find((look) => look.id === id)!.values;
 
     expect(listResponse?.status).toBe(200);
     expect(publicResponse?.status).toBe(200);
     for (const result of [listed, publicLook.values]) {
       expect(result).toMatchObject({ fontSize: 29 });
+      expect(result).toMatchObject({ sharedChatLabel: "pill", sharedChatPrefix: "via" });
       for (const key of privateKeys) expect(result).not.toHaveProperty(key);
     }
   });
