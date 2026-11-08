@@ -225,7 +225,7 @@ describe("theme schema", () => {
       hideNumbers: false,
       filterWords: [],
       filterPrefixes: [],
-      hideBots: false,
+      hideBots: true,
       showSharedChat: true,
       botNames: expect.arrayContaining(["nightbot", "streamlabs"]),
       gigantifiedScale: 2.5,
