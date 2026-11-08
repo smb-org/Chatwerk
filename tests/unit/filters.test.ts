@@ -15,7 +15,7 @@ describe("fixed message filter rules", () => {
     expect(shouldFilterMessage({ text: "hello", userLogin: "NightBot" }, {
       ...DEFAULT_FILTER_RULES, hideBots: true,
     })).toBe(true);
-    expect(shouldFilterMessage({ text: "hello", userLogin: "NightBot" }, DEFAULT_FILTER_RULES)).toBe(false);
+    expect(shouldFilterMessage({ text: "hello", userLogin: "NightBot" }, { ...DEFAULT_FILTER_RULES, hideBots: false })).toBe(false);
   });
 
   it("hides partner PRIVMSG and sharedchatnotice USERNOTICE messages when shared chat is disabled", () => {
