@@ -4,6 +4,7 @@ import { isTransientCloudflareFailure } from "../../../scripts/deploy.mjs";
 describe("isTransientCloudflareFailure", () => {
   it.each([
     ["D1 API error: request failed", true],
+    ["✘ [ERROR] A request to the Cloudflare API (/accounts/123/d1/database/456/query) failed.", true],
     ["Request failed with status code: 503", true],
     ["Cloudflare API returned error 522", true],
     ["no healthy upstream", true],

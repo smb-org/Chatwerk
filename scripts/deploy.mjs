@@ -19,6 +19,7 @@ export function isTransientCloudflareFailure(output) {
   const text = String(output ?? "");
 
   return /\bD1 API error\b/i.test(text)
+    || /\brequest to the Cloudflare API\b[^\r\n]*\bfailed\b/i.test(text)
     || /\bno healthy upstream\b/i.test(text)
     || /\b(?:invalid|malformed) API response\b|\b(?:invalid|malformed) response from (?:the )?API\b/i.test(text)
     || /\b(?:unexpected end of JSON input|invalid JSON response)\b/i.test(text)
