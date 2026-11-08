@@ -74,8 +74,8 @@ test("invites a helper through login, syncs edits, revokes access, and shows own
   });
   await helperPage.goto(inviteUrl);
   await expect(helperPage).toHaveURL(/\/login\?/u);
-  const loginNext = await helperPage.locator("#login-next").inputValue();
-  expect(loginNext).toBe(`/studio?invite=${inviteToken}`);
+  const loginNext = `/studio?invite=${inviteToken}`;
+  expect(new URL(await helperPage.locator("#login-button").getAttribute("href") ?? "", helperPage.url()).searchParams.get("next")).toBe(loginNext);
   const cookie = await mintSessionCookie(TEST_SESSION_KEY, helperId);
   await helperContext.addCookies([{
     name: "session", value: cookie.slice("session=".length), url: e2eOrigin,
@@ -89,7 +89,7 @@ test("invites a helper through login, syncs edits, revokes access, and shows own
   await helperPage.route(acceptUrl, (route) => route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "Authentication required" }) }));
   await helperPage.getByRole("button", { name: "Accept" }).click();
   await expect(helperPage).toHaveURL(/\/login\?/u);
-  expect(await helperPage.locator("#login-next").inputValue()).toBe(`/studio?invite=${inviteToken}`);
+  expect(new URL(await helperPage.locator("#login-button").getAttribute("href") ?? "", helperPage.url()).searchParams.get("next")).toBe(loginNext);
   await helperPage.unroute(acceptUrl);
   await helperPage.goto(loginNext);
   await expect(helperPage.getByRole("button", { name: "Accept" })).toBeVisible();

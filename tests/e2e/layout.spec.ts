@@ -6,7 +6,7 @@ import { addStudioOverlay, e2eOrigin, seedStudioSession, selectSettingsTabForFie
 test("keeps logged-out Studio access on the login route", async ({ page }) => {
   await page.goto("/studio");
   await expect(page).toHaveURL(/\/login\?next=%2Fstudio$/u);
-  await expect(page.getByRole("button", { name: "Log in with Twitch" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Log in with Twitch" })).toBeVisible();
 });
 
 test("keeps landmarks, accessible controls, and focus in the Studio shell", async ({ page }) => {
