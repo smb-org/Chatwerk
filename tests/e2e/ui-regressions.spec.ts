@@ -29,12 +29,38 @@ async function studioWithUndo(page: Page, identity: StudioIdentity): Promise<voi
   await expect(page.locator("#undo-look")).toBeVisible();
 }
 
-test("login form preserves its next destination", async ({ page }) => {
+test("login link preserves its next destination and follows the Twitch redirect", async ({ page }) => {
   await page.goto("/login?next=%2Fthemes");
-  await page.route("**/auth/login**", (route) => route.abort());
-  const request = page.waitForRequest((item) => item.url().includes("/auth/login"));
-  await page.locator("#login-button").click();
-  expect(new URL((await request).url()).search).toBe("?next=%2Fthemes");
+  const action = page.getByRole("link", { name: "Log in with Twitch" });
+  await expect(action).toHaveAttribute("href", "/auth/login?next=%2Fthemes");
+  let loginRequestUrl = "";
+  const authorizeMock = `${e2eOrigin}/__e2e/twitch/authorize`;
+  await page.route("**/auth/login**", async (route) => {
+    loginRequestUrl = route.request().url();
+    await route.fulfill({
+      status: 302,
+      headers: { location: authorizeMock },
+    });
+  });
+  await page.route(authorizeMock, (route) =>
+    route.fulfill({ contentType: "text/html", body: "<title>Mock Twitch login</title>" }));
+
+  await action.click();
+
+  await expect(page).toHaveURL(authorizeMock);
+  expect(new URL(loginRequestUrl).pathname).toBe("/auth/login");
+  expect(new URL(loginRequestUrl).search).toBe("?next=%2Fthemes");
+});
+
+test("login link shows its opening state when clicked", async ({ page }) => {
+  await page.goto("/login");
+  const action = page.locator("#login-button");
+  await action.evaluate((link) => {
+    link.addEventListener("click", (event) => event.preventDefault(), { capture: true, once: true });
+  });
+  await action.click();
+  await expect(action).toHaveAttribute("aria-disabled", "true");
+  await expect(action).toHaveText("Opening Twitch...");
 });
 
 test("gallery skips a malformed look and keeps valid rows", async ({ page }) => {

@@ -10,13 +10,12 @@ const errorLine = document.querySelector<HTMLElement>("#login-error");
 const params = new URLSearchParams(window.location.search);
 if (params.has("error") && errorLine) errorLine.textContent = translate(language, "loginError");
 
-const form = document.querySelector<HTMLFormElement>("#login-form");
-const loginButton = document.querySelector<HTMLButtonElement>("#login-button");
-if (form && loginButton) {
-  const next = document.querySelector<HTMLInputElement>("#login-next");
-  if (next) next.value = params.get("next") ?? "";
-  form.addEventListener("submit", () => {
-    loginButton.disabled = true;
+const loginButton = document.querySelector<HTMLAnchorElement>("#login-button");
+if (loginButton) {
+  const next = params.get("next");
+  if (next !== null) loginButton.setAttribute("href", `/auth/login?next=${encodeURIComponent(next)}`);
+  loginButton.addEventListener("click", () => {
+    loginButton.setAttribute("aria-disabled", "true");
     loginButton.textContent = translate(language, "loginOpening");
   });
 }
