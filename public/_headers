@@ -40,6 +40,27 @@
   X-Frame-Options: SAMEORIGIN
   Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__ __PUBLIC_WSS__ __PUBLIC_SOCKET__ __OVERLAY_CONNECT_ORIGINS__; img-src __PUBLIC_ORIGIN__ data: blob: __OVERLAY_IMAGE_ORIGINS__; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; frame-src __PUBLIC_ORIGIN__; form-action __PUBLIC_ORIGIN__; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
 
+/admin
+  Cache-Control: no-cache
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__; img-src __PUBLIC_ORIGIN__; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; frame-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
+
+/admin/
+  Cache-Control: no-cache
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__; img-src __PUBLIC_ORIGIN__; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; frame-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
+
+/admin.html
+  Cache-Control: no-cache
+  Referrer-Policy: no-referrer
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Content-Security-Policy: default-src __PUBLIC_ORIGIN__; connect-src __PUBLIC_ORIGIN__; img-src __PUBLIC_ORIGIN__; style-src __PUBLIC_ORIGIN__ 'unsafe-inline'; font-src __PUBLIC_ORIGIN__; script-src __PUBLIC_ORIGIN__; frame-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors __PUBLIC_ORIGIN__
+
 /export*
   Cache-Control: no-cache
   Referrer-Policy: no-referrer

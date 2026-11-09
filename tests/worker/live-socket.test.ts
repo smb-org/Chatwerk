@@ -58,6 +58,29 @@ describe("live socket acknowledgements", () => {
     studio.socket.close();
   });
 
+  it("returns configured channels and acknowledged output counts without counting the Studio socket", async () => {
+    const overlay = await seedOverlay(env.DB);
+    const object = env.OVERLAY.get(env.OVERLAY.idFromName(overlay.overlayId)) as unknown as {
+      get(generation: number): Promise<{ revision: number }>;
+      save(patch: Record<string, unknown>, baseRevision: number, generation: number): Promise<unknown>;
+      getAdminStats(): Promise<{ channels: string[] | null; connectedOutputs: number }>;
+    };
+    const snapshot = await object.get(1);
+    await object.save({ channels: ["first_room", "second_room"] }, snapshot.revision, 1);
+    const studio = await openSocket(overlay.token, "studio");
+    const output = await openSocket(overlay.token, "widget");
+    await waitFor(() => output.messages.some((message) => message.type === "config"));
+    output.socket.send(JSON.stringify({ type: "ack", revision: 1, chatStatus: "connected" }));
+    await waitFor(() => studio.messages.some((message) => message.type === "clients" &&
+      ((message.counts as Record<string, number>).widget ?? 0) === 1));
+
+    expect(await object.getAdminStats()).toEqual({
+      channels: ["first_room", "second_room"], connectedOutputs: 1,
+    });
+    output.socket.close();
+    studio.socket.close();
+  });
+
   it("reports valid build ids and treats missing or malformed ids as unknown", async () => {
     const overlay = await seedOverlay(env.DB);
     const studio = await openSocket(overlay.token, "studio");

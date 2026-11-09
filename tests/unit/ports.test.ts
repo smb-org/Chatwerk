@@ -7,7 +7,9 @@ describe("fixed local ports", () => {
     const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
       scripts: { dev: string };
     };
-    const wrangler = JSON.parse(readFileSync(resolve("wrangler.jsonc"), "utf8")) as {
+    const wranglerSource = readFileSync(resolve("wrangler.jsonc"), "utf8")
+      .split(/\r?\n/u).filter((line) => !line.trimStart().startsWith("//")).join("\n");
+    const wrangler = JSON.parse(wranglerSource) as {
       dev: { port: number };
     };
     const playwright = readFileSync(resolve("playwright.config.ts"), "utf8");

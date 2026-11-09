@@ -13,7 +13,8 @@
     "binding": "ASSETS",
     "directory": "./dist/client",
     "html_handling": "none",
-    "run_worker_first": ["/", "/api/*", "/auth/*", "/health", "/login*", "/overlay", "/overlay/*", "/overlay.html", "/studio*", "/export*", "/themes*", "/t/*", "/gallery.html", "/theme.html"]
+    // Cloudflare Assets redirects /%2Fadmin.html before route auth; admin.html contains no data.
+    "run_worker_first": ["/", "/api/*", "/auth/*", "/health", "/login*", "/admin*", "/overlay", "/overlay/*", "/overlay.html", "/studio*", "/export*", "/themes*", "/t/*", "/gallery.html", "/theme.html"]
   },
   "durable_objects": {
     "bindings": [{ "name": "OVERLAY", "class_name": "OverlayObject" }]

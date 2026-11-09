@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { env as workerEnv } from "cloudflare:workers";
 import { handlePageRequest, type PageEnvironment } from "../../src/worker/pages";
 import { mintSessionCookie } from "./worker-test-helpers";
 
 const sessionKey = "test-session-key-with-enough-entropy";
 
-function pageEnv(): PageEnvironment {
+function pageEnv(adminId = "123456789"): PageEnvironment {
   return {
+    DB: workerEnv.DB,
     SESSION_KEY: sessionKey,
+    ADMIN_TWITCH_IDS: adminId,
     ASSETS: {
       fetch: async (request: Request) => new Response(new URL(request.url).pathname),
     } as Fetcher,
@@ -48,6 +51,7 @@ describe("Studio page routing", () => {
     const cookie = await mintSessionCookie(sessionKey, "owner-assets");
     const requestedAssets: string[] = [];
     const env: PageEnvironment = {
+      DB: workerEnv.DB,
       SESSION_KEY: sessionKey,
       ASSETS: {
         fetch: async (request: Request) => {
@@ -97,6 +101,40 @@ describe("Studio page routing", () => {
     expect(signedOut?.status).toBe(302);
     expect(signedOut?.headers.get("location")).toBe("https://chatwerk.test/login?next=%2Fthemes");
     expect(await signedIn?.text()).toBe("/gallery.html");
+  });
+
+  it("serves the operator page only to an allowlisted session", async () => {
+    const adminId = `8${Date.now()}${Math.floor(Math.random() * 10000)}`;
+    await workerEnv.DB.prepare("INSERT INTO users (id, login) VALUES (?, ?)").bind(adminId, "operator_test").run();
+    const adminCookie = await mintSessionCookie(sessionKey, adminId);
+    const otherCookie = await mintSessionCookie(sessionKey, "987654321");
+    const admin = await handlePageRequest(new Request("https://chatwerk.test/admin", {
+      headers: { cookie: adminCookie },
+    }), pageEnv(adminId));
+    const directAsset = await handlePageRequest(new Request("https://chatwerk.test/admin.html", {
+      headers: { cookie: adminCookie },
+    }), pageEnv(adminId));
+    const noSession = await handlePageRequest(new Request("https://chatwerk.test/admin"), pageEnv());
+    const otherSession = await handlePageRequest(new Request("https://chatwerk.test/admin", {
+      headers: { cookie: otherCookie },
+    }), pageEnv());
+    const noSecret = await handlePageRequest(new Request("https://chatwerk.test/admin", {
+      headers: { cookie: adminCookie },
+    }), { ...pageEnv(adminId), ADMIN_TWITCH_IDS: "" });
+    const headAsset = await handlePageRequest(new Request("https://chatwerk.test/admin.html", { method: "HEAD" }), pageEnv());
+    const missingUserId = `7${Date.now()}${Math.floor(Math.random() * 10000)}`;
+    await workerEnv.DB.prepare("DELETE FROM users WHERE id = ?").bind(missingUserId).run();
+    const missingUser = await handlePageRequest(new Request("https://chatwerk.test/admin", {
+      headers: { cookie: await mintSessionCookie(sessionKey, missingUserId) },
+    }), pageEnv(missingUserId));
+
+    expect(await admin?.text()).toBe("/admin.html");
+    expect(await directAsset?.text()).toBe("/admin.html");
+    expect(noSession?.status).toBe(404);
+    expect(otherSession?.status).toBe(404);
+    expect(noSecret?.status).toBe(404);
+    expect(headAsset?.status).toBe(404);
+    expect(missingUser?.status).toBe(404);
   });
 
   it("serves public look pages without login and keeps gallery assets private", async () => {

@@ -221,6 +221,8 @@ describe("Twitch login and session cookie", () => {
     const firstOverlay = await env.DB.prepare(
       "SELECT id, owner_id, link_token, name, channel FROM overlays WHERE owner_id = ? AND name = 'Main'",
     ).bind(userId).first<{ id: string; owner_id: string; link_token: string; name: string; channel: string }>();
+    const firstLastLogin = await env.DB.prepare("SELECT last_login_at FROM users WHERE id = ?")
+      .bind(userId).first<string>("last_login_at");
     const updatedLogin = `${login}_new`;
     const second = await completeLogin(userId, updatedLogin);
     const all = await env.DB.prepare(
@@ -235,6 +237,7 @@ describe("Twitch login and session cookie", () => {
     expect(firstOverlay?.link_token).toMatch(/^[A-Za-z0-9_-]{43}$/u);
     expect(firstOverlay?.name).toBe("Main");
     expect(firstOverlay?.channel).toBe(login);
+    expect(firstLastLogin).toMatch(/^\d{4}-\d{2}-\d{2} /u);
     await env.DB.prepare("UPDATE overlays SET channel = 'custom_room' WHERE id = ?").bind(firstOverlay?.id).run();
     const third = await completeLogin(userId, `${updatedLogin}_again`);
     const retainedChannel = await env.DB.prepare("SELECT channel FROM overlays WHERE id = ?")
@@ -243,6 +246,8 @@ describe("Twitch login and session cookie", () => {
     expect(third.response?.status).toBe(302);
     expect(retainedChannel).toBe("custom_room");
     expect(await env.DB.prepare("SELECT login FROM users WHERE id = ?").bind(userId).first("login")).toBe(`${updatedLogin}_again`);
+    expect(await env.DB.prepare("SELECT last_login_at FROM users WHERE id = ?").bind(userId).first<string>("last_login_at"))
+      .toMatch(/^\d{4}-\d{2}-\d{2} /u);
   });
 
   it("allows two Twitch ids to use the same recycled login", async () => {

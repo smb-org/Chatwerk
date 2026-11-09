@@ -42,7 +42,8 @@
       "tests/worker/hype-train.test.ts",
       "tests/worker/live-socket.test.ts",
       "tests/worker/pages.test.ts",
-      "tests/worker/rotate-link.test.ts"
+      "tests/worker/rotate-link.test.ts",
+      "tests/worker/admin.test.ts"
     ],
     "src/shared/**": [
       "tests/unit/backlog.test.ts",
@@ -69,6 +70,16 @@
     "scripts/**": [
       "tests/unit/deployment/headers.test.ts",
       "tests/unit/ports.test.ts"
+    ],
+    "migrations/**": [
+      "tests/unit/admin-migration.test.ts",
+      "tests/worker/admin.test.ts"
+    ],
+    "vite.config.ts": [
+      "tests/unit/studio-assets.test.ts"
+    ],
+    "worker-configuration.d.ts": [
+      "tests/worker/admin.test.ts"
     ]
   },
   "empty_lanes": [

@@ -11,6 +11,7 @@ describe("worker page asset paths", () => {
     const cookie = await mintSessionCookie(sessionKey, "owner-built-assets");
     const requestedAssets: string[] = [];
     const env: PageEnvironment = {
+      DB: {} as D1Database,
       SESSION_KEY: sessionKey,
       ASSETS: {
         fetch: async (request: Request) => {

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#17181B" />
+    <title>Chatwerk</title>
+  </head>
+  <body class="admin-page">
+    <div class="admin-shell">
+      <header class="studio-header admin-header">
+        <a class="wordmark" href="/studio" data-i18n="brand">Chatwerk</a>
+        <nav class="top-nav" data-i18n-aria-label="primaryNavigation">
+          <a href="/studio" data-i18n="studioTitle">Studio</a>
+          <a href="/themes" data-i18n="themes"></a>
+          <a href="/studio/export" data-i18n="setup"></a>
+        </nav>
+      </header>
+
+      <main class="admin-main">
+        <h1 class="page-title" id="admin-title" data-i18n="adminTitle"></h1>
+        <section class="admin-totals" data-i18n-aria-label="adminTotals">
+          <div class="admin-total"><span data-i18n="adminUsers"></span><strong id="admin-total-users">—</strong></div>
+          <div class="admin-total"><span data-i18n="adminOverlays"></span><strong id="admin-total-overlays">—</strong></div>
+          <div class="admin-total"><span data-i18n="adminConnectedOutputs"></span><strong id="admin-total-connected">—</strong></div>
+        </section>
+        <p class="admin-state" id="admin-state" role="status" aria-live="polite" data-i18n="adminLoading"></p>
+        <div class="admin-table-viewport" id="admin-table-viewport" tabindex="0" data-i18n-aria-label="adminTableScroll">
+          <table class="admin-table" id="admin-table">
+            <caption class="visually-hidden" data-i18n="adminTableCaption"></caption>
+            <thead>
+              <tr>
+                <th scope="col" data-i18n="adminUser"></th>
+                <th scope="col" data-i18n="adminCreated"></th>
+                <th scope="col" data-i18n="adminLastLogin"></th>
+                <th scope="col" data-i18n="adminOverlays"></th>
+                <th scope="col" data-i18n="adminEditorLogins"></th>
+                <th scope="col" data-i18n="adminPendingInvite"></th>
+                <th scope="col" data-i18n="adminActiveLooks"></th>
+              </tr>
+            </thead>
+            <tbody id="admin-table-body"></tbody>
+          </table>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="./admin.ts"></script>
+  </body>
+</html>
