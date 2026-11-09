@@ -68,6 +68,41 @@ describe("7TV paints", () => {
       .toEqual({ type: "image", value: 'url("https://cdn.7tv.app/paint/paint/1x.webp")' });
   });
 
+  it("accepts a bundled image paint and can seed a bundled 7TV badge", () => {
+    expect(buildPaintStyle({ function: "URL", image_url: "/assets/samples/name-paint.svg" }))
+      .toEqual({ type: "image", value: 'url("/assets/samples/name-paint.svg")' });
+
+    const paints = createPaintLookup({ enabled: false, badgesEnabled: true });
+    paints.set("7100002", { function: "URL", image_url: "/assets/samples/name-paint.svg" }, true);
+    paints.setBadge("7100002", { name: "Sample 7TV badge", url: "/assets/samples/seventv-badge.svg" }, true);
+    expect(paints.resolve("7100002")).toBeUndefined();
+    expect(paints.resolve("7100002", true)).toEqual({
+      type: "image", value: 'url("/assets/samples/name-paint.svg")',
+    });
+    expect(paints.resolveBadge("7100002")).toBeUndefined();
+    expect(paints.resolveBadge("7100002", true)).toEqual({
+      name: "Sample 7TV badge", url: "/assets/samples/seventv-badge.svg",
+    });
+
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(6 * 60_000);
+    expect(paints.resolve("7100002", true)).toEqual({
+      type: "image", value: 'url("/assets/samples/name-paint.svg")',
+    });
+    expect(paints.resolveBadge("7100002", true)).toEqual({
+      name: "Sample 7TV badge", url: "/assets/samples/seventv-badge.svg",
+    });
+    paints.dispose();
+  });
+
+  it("does not resolve a live paint with a CSS injection payload", () => {
+    const paints = createPaintLookup({ enabled: false });
+    paints.set("42", { function: "URL", image_url: '/assets/unused"),url("/health?x' });
+
+    expect(paints.resolve("42")).toBeUndefined();
+    paints.dispose();
+  });
+
   it("requests and resolves top-level fields for a first paint lookup", async () => {
     vi.useFakeTimers();
     let paintQuery = "";

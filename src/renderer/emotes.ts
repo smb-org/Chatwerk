@@ -1,5 +1,6 @@
 import type { IrcEmote } from "./irc-parse";
 import { createSevenTvEventApi, type SevenTvEvent, type SevenTvEventApi } from "./seventv-events";
+import { isAllowedImageUrl } from "../shared/hosts";
 
 export interface EmoteAsset {
   name: string;
@@ -212,7 +213,10 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
   return {
     resolve(name, selectedChannelId) {
       const manual = scopes.get("manual")?.get(name);
-      if (manual) return manual;
+      if (manual) {
+        const provider = manual.provider.trim().toUpperCase();
+        if (!["7TV", "BTTV", "FFZ"].includes(provider) || enabledProviders.has(provider)) return manual;
+      }
       const channelId = selectedChannelId && /^\d+$/u.test(selectedChannelId) ? selectedChannelId : channelIds[0];
       if (channelId) {
         for (const provider of orderedProviderNames()) {
@@ -239,12 +243,14 @@ export function createEmoteLookup(options: EmoteLookupOptions = {}): EmoteLookup
     setEnabledProviders(nextProviders) {
       if (disposed) return;
       const next = new Set(nextProviders.map((name) => name.trim().toUpperCase()));
+      const previous = new Set(enabledProviders);
+      enabledProviders.clear();
+      for (const name of next) enabledProviders.add(name);
       for (const provider of providers) {
         const name = scopeProviderName(provider);
-        const wasEnabled = enabledProviders.has(name);
+        const wasEnabled = previous.has(name);
         const isEnabled = next.has(name);
         if (wasEnabled && !isEnabled) {
-          enabledProviders.delete(name);
           for (const scope of [...tasks.keys()]) {
             if (scope === `${name}:global` || scope.startsWith(`${name}:channel:`)) cancelTask(scope);
           }
@@ -345,13 +351,16 @@ export function splitMessage(
       const start = codePointToUtf16[range.start]!;
       const end = codePointToUtf16[range.end + 1]!;
       const name = text.slice(start, end);
+      const localAsset = lookup?.resolve(name, channelId);
       indexed.push({
         start,
         end,
         part: {
           type: "emote",
           name,
-          url: `https://static-cdn.jtvnw.net/emoticons/v2/${encodeURIComponent(emote.id)}/default/dark/2.0`,
+          url: localAsset?.provider.toUpperCase() === "TWITCH" && isAllowedImageUrl(localAsset.url)
+            ? localAsset.url
+            : `https://static-cdn.jtvnw.net/emoticons/v2/${encodeURIComponent(emote.id)}/default/dark/2.0`,
           zeroWidth: false,
         },
       });

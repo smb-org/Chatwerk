@@ -5,6 +5,7 @@ export const ALLOWED_IMAGE_HOSTS = hostConfig.imageHosts;
 
 export function isAllowedImageUrl(value: unknown): value is string {
   if (typeof value !== "string") return false;
+  if (isBundledAssetPath(value)) return true;
   try {
     const url = new URL(value);
     return url.protocol === "https:" && url.username === "" && url.password === "" &&
@@ -13,4 +14,8 @@ export function isAllowedImageUrl(value: unknown): value is string {
   } catch {
     return false;
   }
+}
+
+function isBundledAssetPath(value: string): boolean {
+  return /^\/assets\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\.(?:svg|png|webp|gif)$/u.test(value);
 }

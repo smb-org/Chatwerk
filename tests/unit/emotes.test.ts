@@ -42,6 +42,21 @@ describe("emote lookup", () => {
     lookup.dispose();
   });
 
+  it("keeps bundled provider emotes behind their matching provider toggle", () => {
+    const lookup = createEmoteLookup({
+      providers: [],
+      enabledProviders: [],
+    });
+    lookup.add([{ name: "SampleSeven", url: "/assets/samples/seventv-emote.svg", provider: "7TV" }]);
+
+    expect(lookup.resolve("SampleSeven")).toBeUndefined();
+    lookup.setProviderEnabled("7TV", true);
+    expect(lookup.resolve("SampleSeven")).toMatchObject({ provider: "7TV" });
+    lookup.setProviderEnabled("7TV", false);
+    expect(lookup.resolve("SampleSeven")).toBeUndefined();
+    lookup.dispose();
+  });
+
   it.each([
     ["7TV", "7tv.io"],
     ["BTTV", "betterttv.net"],
@@ -83,6 +98,16 @@ describe("emote lookup", () => {
       { type: "emote", name: "Kappa", url: "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/2.0", zeroWidth: false },
       { type: "text", value: " ok" },
     ]);
+  });
+
+  it("uses a bundled Twitch emote when its IRC range matches a local Twitch asset", () => {
+    const lookup = createEmoteLookup({ providers: [] });
+    lookup.add([{ name: "Kappa", url: "/assets/samples/twitch-emote.svg", provider: "TWITCH" }]);
+
+    expect(splitMessage("Kappa", [{ id: "25", ranges: [{ start: 0, end: 4 }] }], lookup)).toEqual([
+      { type: "emote", name: "Kappa", url: "/assets/samples/twitch-emote.svg", zeroWidth: false },
+    ]);
+    lookup.dispose();
   });
 
   it("maps an emote at the end of a message after an emoji", () => {

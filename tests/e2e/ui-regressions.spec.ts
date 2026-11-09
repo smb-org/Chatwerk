@@ -431,9 +431,9 @@ test("copy retries retain a client idempotency key", async ({ page }) => {
 
 test("look preview seeds chat quickly inside a visible stage boundary", async ({ page }) => {
   await gallery(page);
-  await expect(page.frameLocator("#look-preview").locator("#chat > *")).toHaveCount(3, { timeout: 1000 });
+  await expect(page.frameLocator("#look-preview").locator("#chat > *")).toHaveCount(9, { timeout: 1000 });
   await expect(page.locator("#gallery-frame-wrap")).toHaveCSS("outline-style", "solid");
   await page.route("**/api/looks/sample", (route) => route.fulfill({ json: validLook }));
   await page.goto("/t/sample");
-  await expect(page.frameLocator("#look-preview").locator("#chat > *")).toHaveCount(3, { timeout: 1000 });
+  await expect(page.frameLocator("#look-preview").locator("#chat > *")).toHaveCount(9, { timeout: 1000 });
 });

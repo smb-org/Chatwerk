@@ -40,7 +40,7 @@ test("Hype Train rehearsal shows the frame ring and chip, then clears", async ({
   expect(ring.style).toBe("solid");
   expect(ring.color).not.toBe("rgba(0, 0, 0, 0)");
   await expect(preview.locator(".hype-train-chip")).toContainText("LV 1");
-  await expect(chat.locator(".chat-line")).toHaveCount(3);
+  await expect(chat.locator(".chat-line")).toHaveCount(9);
   const chatText = await chat.locator(".chat-line").evaluateAll((lines) => lines.map((line) => line.textContent ?? "").join(" "));
   expect(chatText).not.toContain("Hype Train");
   await chat.screenshot({ path: `${shots}/hype-active-400x600.png` });

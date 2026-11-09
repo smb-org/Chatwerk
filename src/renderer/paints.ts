@@ -8,13 +8,14 @@ export type PaintStyle =
   | { type: "solid"; value: string; filter?: string };
 
 export interface PaintLookup {
-  resolve(twitchUserId: string): PaintStyle | undefined;
-  resolveBadge(twitchUserId: string): SevenTvBadge | undefined;
+  resolve(twitchUserId: string, sample?: boolean): PaintStyle | undefined;
+  resolveBadge(twitchUserId: string, sample?: boolean): SevenTvBadge | undefined;
   load(twitchUserId: string): Promise<void>;
   setChannelId(channelId: string): void;
   setEnabled(enabled: boolean): void;
   setBadgesEnabled(enabled: boolean): void;
-  set(twitchUserId: string, paint: unknown): void;
+  set(twitchUserId: string, paint: unknown, sample?: boolean): void;
+  setBadge(twitchUserId: string, badge: SevenTvBadge, sample?: boolean): void;
   subscribe(listener: (twitchUserId: string) => void): () => void;
   dispose(): void;
 }
@@ -60,6 +61,8 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
   const timeoutMs = Math.max(MIN_TIMEOUT_MS, options.timeoutMs ?? MIN_TIMEOUT_MS);
   const cache = new Map<string, CacheEntry>();
   const badgeCache = new Map<string, { badge: SevenTvBadge | null; expiresAt: number }>();
+  const samplePaints = new Map<string, PaintStyle | null>();
+  const sampleBadges = new Map<string, SevenTvBadge | null>();
   const pendingUsers = new Set<string>();
   const resolvingUsers = new Set<string>();
   const pendingPaints = new Map<string, Set<string>>();
@@ -507,7 +510,8 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
   };
 
   return {
-    resolve(userId) {
+    resolve(userId, sample = false) {
+      if (sample) return samplePaints.get(userId) ?? undefined;
       const entry = cache.get(userId);
       if (!entry || entry.expiresAt <= Date.now()) {
         if (entry) cache.delete(userId);
@@ -515,8 +519,9 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
       }
       return entry.style ?? undefined;
     },
-    resolveBadge(userId) {
+    resolveBadge(userId, sample = false) {
       if (!badgesEnabled) return undefined;
+      if (sample) return sampleBadges.get(userId) ?? undefined;
       const entry = badgeCache.get(userId);
       if (!entry || entry.expiresAt <= Date.now()) {
         if (entry) badgeCache.delete(userId);
@@ -560,8 +565,29 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
       resolvingUsers.clear();
       pendingPaints.clear();
     },
-    set(userId, paint) {
+    set(userId, paint, sample = false) {
+      if (sample) {
+        if (!/^\d+$/u.test(userId) || disposed) return;
+        samplePaints.delete(userId);
+        samplePaints.set(userId, buildPaintStyle(paint));
+        while (samplePaints.size > cacheLimit) samplePaints.delete(samplePaints.keys().next().value as string);
+        notify(userId);
+        return;
+      }
       setCache(userId, buildPaintStyle(paint));
+    },
+    setBadge(userId, badge, sample = false) {
+      const name = typeof badge?.name === "string" ? badge.name.trim().slice(0, 100) : "";
+      const url = typeof badge?.url === "string" && isAllowedImageUrl(badge.url) ? badge.url : "";
+      if (sample) {
+        if (!/^\d+$/u.test(userId) || disposed) return;
+        sampleBadges.delete(userId);
+        sampleBadges.set(userId, name && url ? { name, url } : null);
+        while (sampleBadges.size > cacheLimit) sampleBadges.delete(sampleBadges.keys().next().value as string);
+        notify(userId);
+        return;
+      }
+      setBadgeCache(userId, name && url ? { name, url } : null);
     },
     subscribe(listener) {
       updateListeners.add(listener);
@@ -576,6 +602,8 @@ export function createPaintLookup(options: PaintLookupOptions = {}): PaintLookup
       for (const unsubscribe of channelSubscriptions.splice(0)) unsubscribe();
       cache.clear();
       badgeCache.clear();
+      samplePaints.clear();
+      sampleBadges.clear();
       pendingUsers.clear();
       resolvingUsers.clear();
       pendingPaints.clear();
@@ -727,6 +755,7 @@ function validatedColor(value: unknown): string | null {
 
 function safeImageUrl(value: unknown): string | null {
   if (!isAllowedImageUrl(value)) return null;
+  if (value.startsWith("/assets/")) return value;
   try {
     const url = new URL(value);
     return url.hostname.toLowerCase() === "cdn.7tv.app" ? url.href : null;

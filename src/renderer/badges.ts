@@ -19,12 +19,13 @@ export type BadgeSource =
 export interface BadgeLookup {
   loadGlobal(): Promise<boolean>;
   loadBroadcaster(broadcasterId: string): Promise<boolean>;
-  resolve(badges: IrcBadge[], broadcasterId: string | null): BadgeImage[];
+  resolve(badges: IrcBadge[], broadcasterId: string | null, sample?: boolean): BadgeImage[];
   dispose(): void;
 }
 
 export interface BadgeLookupOptions {
   source: BadgeSource;
+  sampleData?: EmbeddedBadgeData;
   fetcher?: typeof fetch;
   timeoutMs?: number;
 }
@@ -35,6 +36,8 @@ export function createBadgeLookup(options: BadgeLookupOptions): BadgeLookup {
   const timeoutMs = options.timeoutMs ?? 5_000;
   const global = new Map<string, BadgeImage>();
   const broadcaster = new Map<string, Map<string, BadgeImage>>();
+  const sampleGlobal = new Map<string, BadgeImage>();
+  const sampleBroadcaster = new Map<string, Map<string, BadgeImage>>();
   const broadcasterLoadingData = new Map<string, Map<string, BadgeImage>>();
   const loading = new Map<string, Promise<boolean>>();
   const completed = new Set<string>();
@@ -90,6 +93,14 @@ export function createBadgeLookup(options: BadgeLookupOptions): BadgeLookup {
       broadcaster.set(id, entries);
     }
   }
+  if (options.sampleData) {
+    readInto(options.sampleData.global, sampleGlobal);
+    for (const [id, value] of Object.entries(options.sampleData.broadcasters)) {
+      const entries = new Map<string, BadgeImage>();
+      readInto(value, entries);
+      sampleBroadcaster.set(id, entries);
+    }
+  }
 
   return {
     async loadGlobal() {
@@ -106,10 +117,14 @@ export function createBadgeLookup(options: BadgeLookupOptions): BadgeLookup {
       broadcasterLoadingData.delete(id);
       return populated;
     },
-    resolve(badges, broadcasterId) {
+    resolve(badges, broadcasterId, sample = false) {
       const channel = broadcasterId ? broadcaster.get(broadcasterId) : undefined;
+      const sampleChannel = sample && broadcasterId ? sampleBroadcaster.get(broadcasterId) : undefined;
       return badges.flatMap((badge) => {
-        const item = channel?.get(`${badge.name}/${badge.version}`) ?? global.get(`${badge.name}/${badge.version}`);
+        const key = `${badge.name}/${badge.version}`;
+        const item = sample
+          ? sampleChannel?.get(key) ?? sampleGlobal.get(key)
+          : channel?.get(key) ?? global.get(key);
         return item ? [item] : [];
       });
     },
@@ -117,6 +132,8 @@ export function createBadgeLookup(options: BadgeLookupOptions): BadgeLookup {
       disposed = true;
       global.clear();
       broadcaster.clear();
+      sampleGlobal.clear();
+      sampleBroadcaster.clear();
       broadcasterLoadingData.clear();
       loading.clear();
       completed.clear();

@@ -1,4 +1,7 @@
 import type { CommonMessage } from "./irc-parse";
+import type { EmoteAsset } from "./emotes";
+import type { EmbeddedBadgeData } from "./badges";
+import type { SevenTvBadge } from "./paints";
 import type { HypeTrainReactionMessage } from "./reactions";
 
 export type ScenarioName = "quiet" | "flood" | "raid" | "sub" | "bits";
@@ -25,37 +28,87 @@ export function runHypeTrainScenario(emit: (message: HypeTrainReactionMessage) =
   };
 }
 
+export const QUIET_SAMPLE_PAINTS: Record<string, unknown> = {
+  "7100002": {
+    function: "LINEAR_GRADIENT",
+    angle: 90,
+    stops: [{ at: 0, color: "#f48fb1" }, { at: 1, color: "#80deea" }],
+  },
+  "7100003": { function: "URL", image_url: "/assets/samples/name-paint.svg" },
+  "7100004": { color: "#a78bfa" },
+};
+
+export const QUIET_SAMPLE_SEVENTV_BADGE: SevenTvBadge = {
+  name: "Sample 7TV badge",
+  url: "/assets/samples/seventv-badge.svg",
+};
+
+export const QUIET_SAMPLE_TWITCH_BADGES: EmbeddedBadgeData = {
+  global: [
+    { set_id: "moderator", versions: [{ id: "1", image_url_2x: "/assets/samples/moderator-badge.svg" }] },
+    { set_id: "vip", versions: [{ id: "1", image_url_2x: "/assets/samples/vip-badge.svg" }] },
+    { set_id: "subscriber", versions: [{ id: "12", image_url_2x: "/assets/samples/subscriber-badge.svg" }] },
+  ],
+  broadcasters: {
+    "7100001": [{ set_id: "broadcaster", versions: [{ id: "1", image_url_2x: "/assets/samples/broadcaster-badge.svg" }] }],
+  },
+};
+
+export const QUIET_SAMPLE_EMOTES: EmoteAsset[] = [
+  { name: "Kappa", url: "/assets/samples/twitch-emote.svg", provider: "TWITCH" },
+  { name: "WaveHi", url: "/assets/samples/seventv-emote.svg", provider: "7TV" },
+  { name: "PartyPop", url: "/assets/samples/bttv-emote.svg", provider: "BTTV" },
+];
+
 const quietLines = [
-  ["pixelfox", "Evening everyone!", "#E9A23B"],
-  ["mira_gg", "That was a clean round.", "#89B4FA"],
-  ["tobi_builds", "Nice shots!", "#A6E3A1"],
+  ["sample_pixelfox", "That round felt endless, but the team stayed calm, rotated together, and made the final move work exactly as planned.", "#E9A23B"],
+  ["sample_mira", "Kappa that was a clean round.", "#89B4FA"],
+  ["sample_tobi", "WaveHi good to see everyone here.", "#A6E3A1"],
+  ["sample_amber", "PartyPop the timing was perfect!", "#F28B7D"],
+  ["sample_modmoth", "Moderator, subscriber, and VIP all in one chat.", "#CBA6F7"],
+  ["sample_jay", "waves hello to @sample as everyone arrives!", "#94E2D5"],
+  ["sample_ember", "Thanks for the highlighted reward message!", "#F5C2E7"],
+  ["sample_cheer", "Cheer250 let's go!", "#E9A23B"],
+  ["sample_wordsmith", "supercalifragilisticexpialidocious".repeat(3), "#A6E3A1"],
 ] as const;
 
+const quietDetails: Array<Partial<Pick<CommonMessage, "badges" | "emotes">> & { tags: Record<string, string> }> = [
+  { badges: [{ name: "broadcaster", version: "1" }], tags: { "user-id": "7100001" } },
+  { badges: [{ name: "moderator", version: "1" }], tags: { "user-id": "7100002", "sample-paint": "gradient" }, emotes: [{ id: "25", ranges: [{ start: 0, end: 4 }] }] },
+  { badges: [{ name: "vip", version: "1" }], tags: { "user-id": "7100003", "sample-paint": "image" } },
+  { badges: [{ name: "subscriber", version: "12" }], tags: { "user-id": "7100004", "sample-paint": "solid" } },
+  { badges: [{ name: "moderator", version: "1" }, { name: "subscriber", version: "12" }, { name: "vip", version: "1" }], tags: { "user-id": "7100005" } },
+  { tags: { "user-id": "7100006", "message-type": "action" } },
+  { badges: [{ name: "vip", version: "1" }], tags: { "user-id": "7100007", "msg-id": "highlighted-message", "custom-reward-id": "sample-reward" } },
+  { badges: [{ name: "subscriber", version: "12" }], tags: { "user-id": "7100008" } },
+  { tags: { "user-id": "7100009" } },
+];
+
 const floodLines = [
-  ["pixelfox", "Wait, that timing!", "#E9A23B"],
-  ["mira_gg", "The whole squad is here", "#89B4FA"],
-  ["tobi_builds", "Clip it!", "#A6E3A1"],
-  ["amberbyte", "One more round", "#F28B7D"],
-  ["pixelfox", "Go left!", "#E9A23B"],
-  ["mira_gg", "Huge play", "#89B4FA"],
-  ["tobi_builds", "GG", "#A6E3A1"],
-  ["amberbyte", "That was close", "#F28B7D"],
-  ["pixelfox", "Again again", "#E9A23B"],
-  ["mira_gg", "We are so back", "#89B4FA"],
-  ["tobi_builds", "No way", "#A6E3A1"],
-  ["amberbyte", "Let's go!", "#F28B7D"],
-  ["pixelfox", "Chat is moving", "#E9A23B"],
-  ["mira_gg", "Great stream", "#89B4FA"],
-  ["tobi_builds", "Another one", "#A6E3A1"],
-  ["amberbyte", "That was wild", "#F28B7D"],
-  ["pixelfox", "W", "#E9A23B"],
-  ["mira_gg", "Everybody saw that", "#89B4FA"],
-  ["tobi_builds", "Clean finish", "#A6E3A1"],
-  ["amberbyte", "GGs", "#F28B7D"],
+  ["sample_pixelfox", "Wait, that timing!", "#E9A23B"],
+  ["sample_mira", "The whole squad is here", "#89B4FA"],
+  ["sample_tobi", "Clip it!", "#A6E3A1"],
+  ["sample_amber", "One more round", "#F28B7D"],
+  ["sample_pixelfox", "Go left!", "#E9A23B"],
+  ["sample_mira", "Huge play", "#89B4FA"],
+  ["sample_tobi", "GG", "#A6E3A1"],
+  ["sample_amber", "That was close", "#F28B7D"],
+  ["sample_pixelfox", "Again again", "#E9A23B"],
+  ["sample_mira", "We are so back", "#89B4FA"],
+  ["sample_tobi", "No way", "#A6E3A1"],
+  ["sample_amber", "Let's go!", "#F28B7D"],
+  ["sample_pixelfox", "Chat is moving", "#E9A23B"],
+  ["sample_mira", "Great stream", "#89B4FA"],
+  ["sample_tobi", "Another one", "#A6E3A1"],
+  ["sample_amber", "That was wild", "#F28B7D"],
+  ["sample_pixelfox", "W", "#E9A23B"],
+  ["sample_mira", "Everybody saw that", "#89B4FA"],
+  ["sample_tobi", "Clean finish", "#A6E3A1"],
+  ["sample_amber", "GGs", "#F28B7D"],
 ] as const;
 
 const raidLines = [
-  ["newfriend01", "We came from Luna's stream!", "#F28B7D"],
+  ["newfriend01", "We came from sample_partner_demo's stream!", "#F28B7D"],
   ["newfriend02", "Thanks for welcoming us", "#89B4FA"],
   ["newfriend03", "Raid party checking in", "#A6E3A1"],
   ["newfriend04", "Hello, Chatwerk!", "#E9A23B"],
@@ -77,18 +130,19 @@ export function createScenarioMessages(name: ScenarioName, channel: string, incl
     channel: `#${channel.replace(/^#/u, "")}`,
     userLogin,
     id: `studio-${name}-${index}`,
-    roomId: null,
+    roomId: name === "quiet" ? "7100001" : null,
     sourceRoomId: null,
     sourceId: null,
     displayName: userLogin,
     color,
-    badges: [],
-    emotes: [],
+    badges: name === "quiet" ? quietDetails[index]?.badges ?? [] : [],
+    emotes: name === "quiet" ? quietDetails[index]?.emotes ?? [] : [],
     text,
     tags: {
       login: userLogin,
       "display-name": userLogin,
       color,
+      ...(name === "quiet" ? { "chatwerk-sample": "1", ...quietDetails[index]?.tags } : {}),
       ...(name === "raid" && index === 0 ? { "msg-id": "raid", "msg-param-viewerCount": "57" } : {}),
       ...(name === "sub" && index === 0 ? { "msg-id": "sub", "msg-param-months": "1" } : {}),
       ...(name === "bits" && index === 0 ? { bits: "250" } : {}),
@@ -98,19 +152,19 @@ export function createScenarioMessages(name: ScenarioName, channel: string, incl
     messages.push({
       type: "PRIVMSG",
       channel: `#${channel.replace(/^#/u, "")}`,
-      userLogin: "luna_guest",
+      userLogin: "sample_guest",
       id: "studio-quiet-shared-chat",
       roomId: "10001",
       sourceRoomId: "10002",
-      sourceRoomName: "LunaLive",
+      sourceRoomName: "sample_partner_demo",
       sourceRoomLogo: null,
       sourceId: null,
-      displayName: "luna_guest",
+      displayName: "sample_guest",
       color: "#CBA6F7",
       badges: [],
       emotes: [],
       text: "Joining from the partner stream!",
-      tags: { login: "luna_guest", "display-name": "luna_guest", color: "#CBA6F7" },
+      tags: { login: "sample_guest", "display-name": "sample_guest", color: "#CBA6F7", "chatwerk-sample": "1" },
     });
   }
   return messages;

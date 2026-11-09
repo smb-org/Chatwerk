@@ -1179,15 +1179,86 @@ describe("text renderer", () => {
     const emotes = createEmoteLookup({ providers: [] });
     emotes.add([
       { name: "Safe", url: "https://cdn.7tv.app/emote/safe/2x.webp", provider: "test" },
+      { name: "Bundled", url: "/assets/samples/provider-emote.svg", provider: "test" },
       { name: "Unsafe", url: "https://evil.example/emote.png", provider: "test" },
     ]);
     const renderer = createChatRenderer({ root, theme: DEFAULTS, emotes, scheduler: (callback) => callback() });
-    renderer.handle(parseIrcLine(":viewer!viewer@host PRIVMSG #room :Safe Unsafe")!);
-    expect(root.querySelectorAll("img.chat-emote")).toHaveLength(1);
+    renderer.handle(parseIrcLine(":viewer!viewer@host PRIVMSG #room :Safe Bundled Unsafe")!);
+    expect(root.querySelectorAll("img.chat-emote")).toHaveLength(2);
     expect(root.querySelector("img.chat-emote")?.getAttribute("alt")).toBe("Safe");
+    expect(root.querySelector('img.chat-emote[alt="Bundled"]')?.getAttribute("src")).toBe("/assets/samples/provider-emote.svg");
     expect(root.textContent).toContain("Unsafe");
     renderer.dispose();
     emotes.dispose();
+  });
+
+  it("keeps bundled sample emotes isolated from live messages and applies provider toggles", () => {
+    const emotes = createEmoteLookup({ providers: [] });
+    const sampleEmotes = createEmoteLookup({ providers: [], enabledProviders: [] });
+    sampleEmotes.add([
+      { name: "Kappa", url: "/assets/samples/twitch-emote.svg", provider: "TWITCH" },
+      { name: "WaveHi", url: "/assets/samples/seventv-emote.svg", provider: "7TV" },
+    ]);
+    const renderer = createChatRenderer({ root, theme: DEFAULTS, emotes, sampleEmotes, scheduler: (callback) => callback() });
+    renderer.handle(parseIrcLine("@id=live-emote;emotes=25:0-4 :viewer!viewer@host PRIVMSG #room :Kappa")!);
+    renderer.handle(parseIrcLine("@id=sample-emote;chatwerk-sample=1;emotes=25:0-4 :sample!sample@host PRIVMSG #room :Kappa")!);
+    renderer.handle(parseIrcLine("@id=sample-provider-emote;chatwerk-sample=1 :sample!sample@host PRIVMSG #room :WaveHi")!);
+
+    const liveRow = root.querySelectorAll<HTMLElement>(".chat-line")[0]!;
+    const sampleTwitchRow = root.querySelectorAll<HTMLElement>(".chat-line")[1]!;
+    const sampleProviderRow = root.querySelectorAll<HTMLElement>(".chat-line")[2]!;
+    expect(liveRow.querySelector("img.chat-emote")?.getAttribute("src")).toContain("static-cdn.jtvnw.net");
+    expect(sampleTwitchRow.querySelector("img.chat-emote")?.getAttribute("src")).toBe("/assets/samples/twitch-emote.svg");
+    expect(sampleProviderRow.querySelector("img.chat-emote")?.getAttribute("src")).toBe("/assets/samples/seventv-emote.svg");
+
+    renderer.setTheme({ ...DEFAULTS, emotes7tv: false });
+    expect(sampleProviderRow.querySelector("img.chat-emote")).toBeNull();
+    expect(sampleProviderRow.querySelector(".chat-message")?.textContent).toContain("WaveHi");
+    renderer.setTheme({ ...DEFAULTS, emotes7tv: true });
+    expect(sampleProviderRow.querySelector("img.chat-emote")?.getAttribute("src")).toBe("/assets/samples/seventv-emote.svg");
+    renderer.dispose();
+  });
+
+  it("keeps sample cosmetics local and skips live cosmetic lookups on theme changes", () => {
+    const fetcher = vi.fn(async () => new Response("{}", { status: 200 }));
+    const paints = createPaintLookup({ fetcher, badgesEnabled: true });
+    paints.set("7100001", { color: "#ff0000" }, true);
+    paints.setBadge("7100001", { name: "Sample 7TV badge", url: "/assets/samples/seventv-badge.svg" }, true);
+    const badges = createBadgeLookup({
+      source: { type: "route" },
+      sampleData: {
+        global: [{ set_id: "moderator", versions: [{ id: "1", image_url_2x: "/assets/samples/moderator-badge.svg" }] }],
+        broadcasters: {},
+      },
+      fetcher,
+    });
+    const thirdPartyBadges = {
+      setEnabled: vi.fn(), load: vi.fn(async () => undefined), resolve: vi.fn(() => []),
+      subscribe: vi.fn(() => () => undefined), dispose: vi.fn(),
+    };
+    const pronouns = { lookup: vi.fn(async () => "she/her"), dispose: vi.fn() };
+    const paintLoad = vi.spyOn(paints, "load");
+    const renderer = createChatRenderer({
+      root,
+      theme: { ...DEFAULTS, showPronouns: true, badges7tv: true, showBadges: true, showPaints: true },
+      badges,
+      paints,
+      thirdPartyBadges,
+      pronouns,
+      scheduler: (callback) => callback(),
+    });
+    renderer.handle(parseIrcLine("@id=sample-cosmetics;chatwerk-sample=1;user-id=7100001;badges=moderator/1 :sample!sample@host PRIVMSG #room :fixed fixtures")!);
+
+    const name = root.querySelector<HTMLElement>(".chat-name")!;
+    expect(name.classList.contains("chat-name-painted")).toBe(true);
+    expect(root.querySelector('img.chat-badge[src="/assets/samples/moderator-badge.svg"]')).not.toBeNull();
+    expect(root.querySelector('img.chat-badge[src="/assets/samples/seventv-badge.svg"]')).not.toBeNull();
+    renderer.setTheme({ ...DEFAULTS, showPronouns: true, badges7tv: true, showBadges: true, showPaints: true, spacing: 11 });
+    expect(paintLoad).not.toHaveBeenCalled();
+    expect(thirdPartyBadges.load).not.toHaveBeenCalled();
+    expect(pronouns.lookup).not.toHaveBeenCalled();
+    expect(fetcher).not.toHaveBeenCalled();
+    renderer.dispose();
   });
 
   it("shows no paint styling or requests while paints are off, then applies it on a live toggle", () => {
@@ -1634,6 +1705,7 @@ describe("text renderer", () => {
       setEnabled: vi.fn(),
       setBadgesEnabled: vi.fn(),
       set: vi.fn(),
+      setBadge: vi.fn(),
       subscribe: () => () => undefined,
       dispose: vi.fn(),
     };

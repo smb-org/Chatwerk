@@ -147,13 +147,16 @@ test("shows published looks in a keyboard-operable listbox with one sandboxed pr
   await expect(list.getByRole("option")).toHaveCount(2);
   await expect(page.locator("#look-preview")).toHaveCount(1);
   await expect(page.locator("#look-preview")).toHaveAttribute("sandbox", "allow-scripts");
-  await expect(page.frameLocator("#look-preview").locator("#chat > *")).toHaveCount(3, { timeout: 1000 });
-  await screenshot(page, "themes-data");
+  await page.locator("#look-sort").selectOption("name");
   await list.focus();
-  await expect(list).toBeFocused();
+  await list.press("Home");
+  await expect(list.locator('[aria-selected="true"]')).toContainText("First Theme");
+  await expect(page.frameLocator("#look-preview").locator("#chat > *")).toHaveCount(9, { timeout: 1000 });
+  await screenshot(page, "themes-data");
   const selectedBefore = await list.locator('[aria-selected="true"]').getAttribute("data-look-id");
   await list.press("ArrowDown");
   await expect.poll(() => list.locator('[aria-selected="true"]').getAttribute("data-look-id")).not.toBe(selectedBefore);
+  await expect(page.frameLocator("#look-preview").locator("#chat > *")).toHaveCount(5, { timeout: 1000 });
   await expect(page.getByRole("button", { name: "Use on Main overlay" })).toBeVisible();
 });
 
