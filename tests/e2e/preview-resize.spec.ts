@@ -706,7 +706,7 @@ test("a fading row keeps its transition when the iframe resizes", async ({ page 
   await page.locator("#rehearse-flood").click();
   const chat = page.frameLocator("#studio-preview").locator("#chat");
   await expect.poll(() => chat.locator(".chat-line").count(), { timeout: 10_000 }).toBeGreaterThan(8);
-  await expect.poll(async () => chat.locator(".chat-line").last().textContent()).toContain("GGs");
+  await expect.poll(async () => chat.locator(".chat-line").last().textContent(), { intervals: [10, 20, 30], timeout: 10_000 }).toContain("GGs");
   const sampleRow = chat.locator(".chat-line").filter({ hasText: "GGs" }).first();
   await expect(sampleRow).toBeVisible();
   await sampleRow.evaluate((element) => { element.dataset.resizeFadeRow = "true"; });

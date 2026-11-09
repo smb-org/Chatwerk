@@ -12,7 +12,15 @@ import { createRoomScopeCoordinator } from "./room-scopes";
 import { createSevenTvEventApi } from "./seventv-events";
 import { createThirdPartyBadgeLookup } from "./third-party-badges";
 import { fetchRecentBacklog } from "./backlog";
-import { runHypeTrainScenario, runScenario, type ScenarioName } from "./scenarios";
+import {
+  QUIET_SAMPLE_EMOTES,
+  QUIET_SAMPLE_PAINTS,
+  QUIET_SAMPLE_SEVENTV_BADGE,
+  QUIET_SAMPLE_TWITCH_BADGES,
+  runHypeTrainScenario,
+  runScenario,
+  type ScenarioName,
+} from "./scenarios";
 
 const chat = document.querySelector<HTMLElement>("#chat");
 if (chat) {
@@ -20,11 +28,15 @@ if (chat) {
   chat.dataset.placement = liveLocation.placement;
   const sevenTvEvents = createSevenTvEventApi();
   const emotes = createEmoteLookup({ eventApi: sevenTvEvents, enabledProviders: [] });
-  const badges = createBadgeLookup({ source: { type: "route" } });
+  const sampleEmotes = createEmoteLookup({ eventApi: sevenTvEvents, providers: [], enabledProviders: [] });
+  sampleEmotes.add(QUIET_SAMPLE_EMOTES);
+  const badges = createBadgeLookup({ source: { type: "route" }, sampleData: QUIET_SAMPLE_TWITCH_BADGES });
   const paints = createPaintLookup({ eventApi: sevenTvEvents, enabled: false });
+  for (const [userId, paint] of Object.entries(QUIET_SAMPLE_PAINTS)) paints.set(userId, paint, true);
+  paints.setBadge("7100005", QUIET_SAMPLE_SEVENTV_BADGE, true);
   const thirdPartyBadges = createThirdPartyBadgeLookup();
   const pronouns = createPronounLookup();
-  const renderer = createChatRenderer({ root: chat, theme: DEFAULTS, emotes, badges, paints, pronouns, thirdPartyBadges, deferProviderSettings: true });
+  const renderer = createChatRenderer({ root: chat, theme: DEFAULTS, emotes, sampleEmotes, badges, paints, pronouns, thirdPartyBadges, deferProviderSettings: true });
   let currentTheme = DEFAULTS;
   let irc: IrcClient | undefined;
   let legacyChannel = "";

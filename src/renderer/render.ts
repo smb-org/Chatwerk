@@ -32,6 +32,7 @@ export interface ChatRendererOptions {
   cancelScheduled?: (handle: unknown) => void;
   deferProviderSettings?: boolean;
   emotes?: EmoteLookup;
+  sampleEmotes?: EmoteLookup;
   badges?: BadgeLookup;
   paints?: PaintLookup;
   pronouns?: PronounLookup;
@@ -181,8 +182,12 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       options.emotes?.setProviderEnabled("7TV", theme.emotes7tv);
       options.emotes?.setProviderEnabled("BTTV", theme.emotesBttv);
       options.emotes?.setProviderEnabled("FFZ", theme.emotesFfz);
+      options.sampleEmotes?.setProviderEnabled("7TV", theme.emotes7tv);
+      options.sampleEmotes?.setProviderEnabled("BTTV", theme.emotesBttv);
+      options.sampleEmotes?.setProviderEnabled("FFZ", theme.emotesFfz);
       options.paints?.setEnabled(theme.showPaints);
       options.paints?.setBadgesEnabled(theme.showBadges && theme.badges7tv);
+      refreshSampleEmotes();
     }
     for (const provider of ["badgesBttv", "badgesFfz", "badgesChatterino", "badgesHomies"] as const) {
       options.thirdPartyBadges?.setEnabled(provider, theme.showBadges && theme[provider]);
@@ -213,19 +218,20 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       watchLineImages(line.node);
       const pronounContainer = line.node.querySelector<HTMLElement>(".chat-pronouns");
       if ((!theme.showPronouns || theme.hideNames) && pronounContainer) pronounContainer.textContent = "";
-      else if (theme.showPronouns && !theme.hideNames && pronounContainer && !pronounContainer.textContent && options.pronouns && line.userLogin) {
+      else if (line.event.tags["chatwerk-sample"] !== "1" && theme.showPronouns && !theme.hideNames && pronounContainer && !pronounContainer.textContent && options.pronouns && line.userLogin) {
         void options.pronouns.lookup(line.userLogin).then((value) => {
           if (value && lines.has(line)) pronounContainer.textContent = ` (${value})`;
         });
       }
       const name = line.node.querySelector<HTMLElement>(".chat-name");
       if (name) {
-        const paint = theme.showPaints && !providerSettingsDeferred ? options.paints?.resolve(line.userId ?? "") : undefined;
+        const sample = line.event.tags["chatwerk-sample"] === "1";
+        const paint = theme.showPaints && !providerSettingsDeferred ? options.paints?.resolve(line.userId ?? "", sample) : undefined;
         applyNamePaint(name, paint, nameColorFor(line.event, theme, isHighlighted(line.node)));
-        if (line.userId && !providerSettingsDeferred && (theme.showPaints || (theme.showBadges && theme.badges7tv))) {
+        if (!sample && line.userId && !providerSettingsDeferred && (theme.showPaints || (theme.showBadges && theme.badges7tv))) {
           void options.paints?.load(line.userId);
         }
-        if (line.userId && theme.showBadges) void options.thirdPartyBadges?.load(line.userId);
+        if (!sample && line.userId && theme.showBadges) void options.thirdPartyBadges?.load(line.userId);
       }
       if (theme.layout === "stack" && theme.neverFade) {
         if (line.lifetimeTimer !== undefined) clearTimeout(line.lifetimeTimer);
@@ -712,17 +718,18 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       }
       scheduleFlush();
       const broadcasterId = event.sourceRoomId && event.sourceRoomId !== event.roomId ? event.sourceRoomId : event.roomId;
-      if (theme.showBadges && options.badges && event.badges.length > 0) {
+      const sample = event.tags["chatwerk-sample"] === "1";
+      if (!sample && theme.showBadges && options.badges && event.badges.length > 0) {
         const loads = [options.badges.loadGlobal()];
         if (broadcasterId) loads.push(options.badges.loadBroadcaster(broadcasterId));
         void Promise.allSettled(loads).then((results) => {
           if (results.some((result) => result.status === "fulfilled" && result.value)) refreshBadges();
         });
       }
-      if ((theme.showPaints || (theme.showBadges && theme.badges7tv)) && !providerSettingsDeferred && event.tags["user-id"] && options.paints) {
+      if (!sample && (theme.showPaints || (theme.showBadges && theme.badges7tv)) && !providerSettingsDeferred && event.tags["user-id"] && options.paints) {
         void options.paints.load(event.tags["user-id"]).then(() => refreshPaints(event.tags["user-id"]));
       }
-      if (theme.showBadges && event.tags["user-id"] && options.thirdPartyBadges) {
+      if (!sample && theme.showBadges && event.tags["user-id"] && options.thirdPartyBadges) {
         void options.thirdPartyBadges.load(event.tags["user-id"]);
       }
       return;
@@ -857,6 +864,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
       unsubscribePaints?.();
       unsubscribeThirdPartyBadges?.();
       options.emotes?.dispose();
+      options.sampleEmotes?.dispose();
       options.badges?.dispose();
       options.thirdPartyBadges?.dispose();
       options.paints?.dispose();
@@ -899,14 +907,15 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     const color = nameColorFor(event, config, highlighted);
     name.style.setProperty("color", color);
     const userId = event.tags["user-id"] ?? "";
-    const paint = config.showPaints && !providerSettingsDeferred ? options.paints?.resolve(userId) : undefined;
+    const sample = event.tags["chatwerk-sample"] === "1";
+    const paint = config.showPaints && !providerSettingsDeferred ? options.paints?.resolve(userId, sample) : undefined;
     applyNamePaint(name, paint, color);
     const pronouns = document.createElement("span");
     pronouns.setAttribute("class", "chat-pronouns");
     const message = document.createElement("span");
     message.setAttribute("class", "chat-message");
     const foreignRoom = Boolean(event.sourceRoomId && event.roomId && event.sourceRoomId !== event.roomId);
-    const parts = splitEventMessage(event, options.emotes);
+    const parts = splitEventMessage(event, options.emotes, options.sampleEmotes);
     appendMessageParts(message, parts, config, gigantified);
     const badges = document.createElement("span");
     badges.setAttribute("class", "chat-badges");
@@ -960,7 +969,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     };
     applySourceRoomStyle(record);
     record.tickerWidth = measureTickerWidth(event, config, parts, displayName, badges, sourceRoom, channelMarker, document);
-    if (config.showPronouns && !config.hideNames && options.pronouns && event.userLogin) {
+    if (!sample && config.showPronouns && !config.hideNames && options.pronouns && event.userLogin) {
       void options.pronouns.lookup(event.userLogin).then((value) => {
         if (value && lines.has(record) && !theme.hideNames) pronouns.textContent = ` (${value})`;
       });
@@ -980,9 +989,10 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
 
   function refreshEmotes(channelIds: Set<string>, allRooms: boolean): void {
     for (const line of lines) {
+      if (line.event.tags["chatwerk-sample"] === "1") continue;
       const roomId = emoteRoomIdFor(line.event);
       if (!allRooms && roomId && !channelIds.has(roomId)) continue;
-      const parts = splitEventMessage(line.event, options.emotes);
+      const parts = splitEventMessage(line.event, options.emotes, options.sampleEmotes);
       if (!hasNewEmoteCoverage(line.messageParts, parts)) continue;
       line.message.replaceChildren();
       appendMessageParts(line.message, parts, theme, isGigantified(line.event));
@@ -993,11 +1003,30 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     }
   }
 
+  function refreshSampleEmotes(): void {
+    if (!options.sampleEmotes) return;
+    let changed = false;
+    for (const line of lines) {
+      if (line.event.tags["chatwerk-sample"] !== "1") continue;
+      const parts = splitEventMessage(line.event, options.emotes, options.sampleEmotes);
+      if (JSON.stringify(line.messageParts) === JSON.stringify(parts)) continue;
+      line.message.replaceChildren();
+      appendMessageParts(line.message, parts, theme, isGigantified(line.event));
+      line.messageParts = parts;
+      remeasureTickerWidth(line);
+      watchLineImages(line.node);
+      changed = true;
+    }
+    if (changed) scheduleHeightPrune();
+  }
+
   function refreshName(lineNode: HTMLElement): void {
     const line = [...lines].find((candidate) => candidate.node === lineNode);
     const name = lineNode.querySelector<HTMLElement>(".chat-name");
     if (!line || !name) return;
-    const paint = theme.showPaints && !providerSettingsDeferred ? options.paints?.resolve(line.userId ?? "") : undefined;
+    const paint = theme.showPaints && !providerSettingsDeferred
+      ? options.paints?.resolve(line.userId ?? "", line.event.tags["chatwerk-sample"] === "1")
+      : undefined;
     applyNamePaint(name, paint, nameColorFor(line.event, theme, isHighlighted(lineNode)));
   }
 
@@ -1056,7 +1085,7 @@ export function createChatRenderer(options: ChatRendererOptions): ChatRenderer {
     for (const line of lines) {
       if (userId && line.userId !== userId) continue;
       const name = line.node.querySelector<HTMLElement>(".chat-name");
-      if (name) applyNamePaint(name, options.paints?.resolve(line.userId ?? ""), nameColorFor(line.event, theme, isHighlighted(line.node)));
+      if (name) applyNamePaint(name, options.paints?.resolve(line.userId ?? "", line.event.tags["chatwerk-sample"] === "1"), nameColorFor(line.event, theme, isHighlighted(line.node)));
     }
   }
 }
@@ -1091,15 +1120,16 @@ function appendBadgeImages(
     image.style.setProperty("width", "auto");
     container.appendChild(image);
   };
-  for (const badge of badges?.resolve(event.badges, broadcasterId) ?? []) {
+  const isSample = event.tags["chatwerk-sample"] === "1";
+  for (const badge of badges?.resolve(event.badges, broadcasterId, isSample) ?? []) {
     append(`${badge.name} ${badge.version}`, badge.url, "twitch");
   }
   const userId = event.tags["user-id"] ?? "";
-  const sevenTvBadge = paints?.resolveBadge(userId) as SevenTvBadge | undefined;
+  const sevenTvBadge = paints?.resolveBadge(userId, isSample) as SevenTvBadge | undefined;
   if (sevenTvBadge && isExpectedBadgeHost(sevenTvBadge.url, "cdn.7tv.app")) {
     append(sevenTvBadge.name, sevenTvBadge.url, "7tv");
   }
-  for (const badge of thirdPartyBadges?.resolve(userId) ?? []) {
+  for (const badge of (isSample ? [] : thirdPartyBadges?.resolve(userId) ?? [])) {
     const host = badge.provider === "badgesBttv" ? "cdn.betterttv.net"
       : badge.provider === "badgesFfz" ? "cdn.frankerfacez.com"
       : badge.provider === "badgesChatterino" ? "fourtf.com" : "cdn.chatterinohomies.com";
@@ -1108,11 +1138,16 @@ function appendBadgeImages(
   if (sourceRoom) container.appendChild(sourceRoom);
 }
 
-function splitEventMessage(event: CommonMessage, emotes: EmoteLookup | undefined): MessagePart[] {
+function splitEventMessage(
+  event: CommonMessage,
+  emotes: EmoteLookup | undefined,
+  sampleEmotes?: EmoteLookup,
+): MessagePart[] {
   const foreignRoom = Boolean(event.sourceRoomId && event.roomId && event.sourceRoomId !== event.roomId);
   const includeProviderEmotes = !foreignRoom;
   const roomId = emoteRoomIdFor(event);
-  return splitMessage(event.text || event.tags["system-msg"] || "", event.emotes, emotes, includeProviderEmotes, roomId);
+  const lookup = event.tags["chatwerk-sample"] === "1" ? sampleEmotes ?? emotes : emotes;
+  return splitMessage(event.text || event.tags["system-msg"] || "", event.emotes, lookup, includeProviderEmotes, roomId);
 }
 
 function emoteRoomIdFor(event: CommonMessage): string | undefined {
@@ -1199,6 +1234,7 @@ function isRangeCovered(ranges: Array<{ start: number; end: number }>, start: nu
 
 function isExpectedBadgeHost(value: string, hostname: string): boolean {
   if (!isAllowedImageUrl(value)) return false;
+  if (value.startsWith("/assets/")) return true;
   try {
     return new URL(value).hostname.toLowerCase() === hostname;
   } catch {

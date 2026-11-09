@@ -11,9 +11,10 @@ describe("Studio rehearsal scenarios", () => {
     const sub = createScenarioMessages("sub", "sample");
     const bits = createScenarioMessages("bits", "sample");
     expect(quiet.length).toBeGreaterThan(0);
-    expect(studioQuiet.at(-1)).toMatchObject({ sourceRoomId: "10002", roomId: "10001", sourceRoomName: "LunaLive", sourceRoomLogo: null });
-    expect(quiet).toHaveLength(3);
-    expect(studioQuiet).toHaveLength(4);
+    expect(studioQuiet.at(-1)).toMatchObject({ sourceRoomId: "10002", roomId: "10001", sourceRoomName: "sample_partner_demo", sourceRoomLogo: null });
+    expect(studioQuiet.every((message) => message.tags["chatwerk-sample"] === "1")).toBe(true);
+    expect(quiet).toHaveLength(9);
+    expect(studioQuiet).toHaveLength(10);
     expect(flood).toHaveLength(100);
     expect(raid.every((message) => message.type === "USERNOTICE" || message.type === "PRIVMSG")).toBe(true);
     expect([...quiet, ...flood, ...raid, ...sub, ...bits].every((message) => message.channel === "#sample")).toBe(true);
@@ -22,10 +23,27 @@ describe("Studio rehearsal scenarios", () => {
     expect(parseReactionEvent(bits[0]!)).toEqual({ type: "bits", amount: 250 });
   });
 
+  it("includes supported visual examples and the requested action tag in the quiet sample", () => {
+    const quiet = createScenarioMessages("quiet", "sample");
+    const bits = createScenarioMessages("bits", "sample");
+
+    expect(quiet.some((message) => message.badges.some((badge) => badge.name === "broadcaster"))).toBe(true);
+    expect(quiet.some((message) => message.badges.length > 1)).toBe(true);
+    expect(quiet.some((message) => message.tags["sample-paint"] !== undefined)).toBe(true);
+    expect(quiet.some((message) => message.emotes.length > 0)).toBe(true);
+    expect(quiet.some((message) => message.text.length > 100 && message.text.includes(" "))).toBe(true);
+    expect(quiet.some((message) => !message.text.includes(" ") && message.text.length > 100)).toBe(true);
+    expect(quiet.some((message) => message.tags["message-type"] === "action")).toBe(true);
+    expect(quiet.some((message) => message.tags["msg-id"] === "highlighted-message")).toBe(true);
+    expect(quiet.some((message) => message.text === "Cheer250 let's go!")).toBe(true);
+    expect(quiet.every((message) => message.tags.bits === undefined)).toBe(true);
+    expect(bits[0]?.tags.bits).toBe("250");
+  });
+
   it("shows several quiet messages immediately when a preview starts", () => {
     const emit = vi.fn();
     const stop = runScenario("quiet", emit);
-    expect(emit).toHaveBeenCalledTimes(3);
+    expect(emit).toHaveBeenCalledTimes(9);
     stop();
   });
 
