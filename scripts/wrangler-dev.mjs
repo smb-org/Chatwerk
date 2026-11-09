@@ -25,7 +25,7 @@ probe.listen(port, "127.0.0.1", () => {
     mkdirSync(".wrangler/logs", { recursive: true });
     const registryPath = resolve(".wrangler/registry");
     const bindings = process.env.CHATWERK_E2E === "1"
-      ? ["TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET", "SESSION_KEY"]
+      ? ["TWITCH_CLIENT_ID", "TWITCH_CLIENT_SECRET", "SESSION_KEY", "ADMIN_TWITCH_IDS"]
         .flatMap((name) => process.env[name] ? ["--var", `${name}:${process.env[name]}`] : [])
       : [];
     const testFeatureDefine = process.env.CHATWERK_TEST_FEATURES === "1"

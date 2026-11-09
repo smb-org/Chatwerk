@@ -101,6 +101,7 @@ Abgelehnt wegen ungeklärter Lizenz, Einzelentwickler und Auslegung auf eine lok
 | `/api/o/:id/live` | WebSocket für Live-Updates | nur lesen |
 | `/api/twitch/badges` | Twitch-Badges per App-Token, gecacht | öffentlich, `*` |
 | `/studio`, `/themes`, `/t/:slug` | Editor, Galerie, geteilter Look | Editor nur mit Login |
+| `/admin` | Read-only Operator-Übersicht | Session plus Twitch-ID in `ADMIN_TWITCH_IDS` |
 | `/auth/*` | Twitch-OAuth; bis zur Reaktions-Phase nur Identität ohne zusätzliche Scopes | Session-Cookie `HttpOnly` |
 
 `:id` ist eine zufällige, nicht erratbare ID. Der Besitzer kann sie neu erzeugen, falls ein Link geleakt ist.
@@ -1178,6 +1179,8 @@ After Wrangler reports a successful deploy, the script waits up to 60 seconds fo
 - `CLOUDFLARE_ACCOUNT_ID`
 
 Use a scoped API token with account-level **Workers Scripts: Edit** and **D1: Edit** permissions. Because `wrangler.jsonc` binds `chatwerk.esembe.app` as a custom domain, Cloudflare also requires **Workers Routes: Edit** (API permission `Workers Routes Write`) scoped to the `esembe.app` zone when Wrangler creates or changes that route. These scopes follow Cloudflare's [Workers permissions guidance](https://developers.cloudflare.com/workers/authorization/workers/) and [D1 API permission requirements](https://developers.cloudflare.com/api/resources/d1/subresources/database/methods/list/).
+
+Worker runtime secrets include `TWITCH_CLIENT_SECRET`, `SESSION_KEY`, and `ADMIN_TWITCH_IDS`. The operator allowlist is a comma-separated list of numeric Twitch user IDs. Set it in production with `pnpm exec wrangler secret put ADMIN_TWITCH_IDS`; for local development, put it in `.dev.vars` (see `.dev.vars.example`). Leave it unset to keep `/admin` and `/api/admin/*` hidden.
 
 ## GSTACK REVIEW REPORT
 

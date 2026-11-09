@@ -5,7 +5,9 @@ import { publicOriginFor, renderHeaders } from "../../../scripts/lib/headers.mjs
 import { ALLOWED_CONNECT_ORIGINS, ALLOWED_IMAGE_HOSTS } from "../../../src/shared/hosts";
 
 const source = readFileSync(path.join(process.cwd(), "public/_headers"), "utf8");
-const wrangler = JSON.parse(readFileSync(path.join(process.cwd(), "wrangler.jsonc"), "utf8")) as {
+const wranglerSource = readFileSync(path.join(process.cwd(), "wrangler.jsonc"), "utf8")
+  .split(/\r?\n/u).filter((line) => !line.trimStart().startsWith("//")).join("\n");
+const wrangler = JSON.parse(wranglerSource) as {
   assets: { run_worker_first: string[] };
 };
 
@@ -60,6 +62,10 @@ describe("deployment headers", () => {
     expect(rulesMatchingPath("/overlay.html")).toEqual(["/overlay.html"]);
     expect(rulesMatchingPath("/overlay/x")).toEqual(["/overlay/*"]);
     expect(rulesMatchingPath("/studio")).toEqual(["/studio*"]);
+    expect(rulesMatchingPath("/admin")).toEqual(["/admin"]);
+    expect(rulesMatchingPath("/admin.html")).toEqual(["/admin.html"]);
+    expect(rulesMatchingPath("/admin/")).toEqual(["/admin/"]);
+    expect(rulesMatchingPath("/administrator")).toEqual([]);
     expect(rulesMatchingPath("/login")).toEqual(["/login*"]);
     expect(rulesMatchingPath("/assets/a.js")).toEqual(["/assets/*"]);
 
@@ -79,7 +85,7 @@ describe("deployment headers", () => {
   });
 
   it("keeps framing protection on protected HTML routes after matching-rule union", () => {
-    for (const path of ["/login", "/login.html", "/studio", "/studio.html"]) {
+    for (const path of ["/login", "/login.html", "/studio", "/studio.html", "/admin", "/admin/", "/admin.html"]) {
       const headers = headersForPath(path);
       expect(headerValues(headers, "X-Frame-Options")).toEqual(["SAMEORIGIN"]);
       expect(headerValues(headers, "Content-Security-Policy").join("\n")).toContain("frame-ancestors __PUBLIC_ORIGIN__");
@@ -95,6 +101,18 @@ describe("deployment headers", () => {
     expect(wrangler.assets.run_worker_first).toContain("/export*");
     expect(headerValues(headersForPath("/studio"), "Content-Security-Policy").join("\n"))
       .toContain("frame-src __PUBLIC_ORIGIN__");
+    const adminPolicy = headerValues(headersForPath("/admin"), "Content-Security-Policy").join(" ");
+    expect(adminPolicy).toContain("connect-src __PUBLIC_ORIGIN__;");
+    expect(adminPolicy).toContain("img-src __PUBLIC_ORIGIN__;");
+    expect(adminPolicy).not.toContain("__PUBLIC_WSS__");
+    expect(adminPolicy).not.toContain("__PUBLIC_SOCKET__");
+    expect(adminPolicy).not.toContain("__OVERLAY_CONNECT_ORIGINS__");
+    expect(adminPolicy).not.toContain("__OVERLAY_IMAGE_ORIGINS__");
+    expect(adminPolicy).toContain("frame-src 'none';");
+    expect(adminPolicy).not.toContain("blob:");
+    expect(headersForPath("/administrator")).toEqual([]);
+    expect(headersForPath("/api/admin/overview")).toEqual([]);
+    expect(wrangler.assets.run_worker_first).toContain("/admin*");
     for (const path of ["/login", "/login.html", "/studio", "/studio.html"]) {
       expect(headerValues(headersForPath(path), "Content-Security-Policy")).toHaveLength(1);
     }

@@ -86,6 +86,20 @@ export async function sessionForRequest(request: Request, sessionKey: string | u
   return verifySessionCookie(readCookie(request.headers.get("cookie"), SESSION_COOKIE), sessionKey);
 }
 
+export async function adminSessionForRequest(
+  request: Request,
+  db: D1Database,
+  sessionKey: string | undefined,
+  adminTwitchIds: string | undefined,
+): Promise<VerifiedSession | null> {
+  const allowedIds = new Set((adminTwitchIds ?? "").split(",").map((id) => id.trim()).filter((id) => /^\d+$/u.test(id)));
+  if (allowedIds.size === 0) return null;
+  const session = await sessionForRequest(request, sessionKey);
+  if (!session || !/^\d+$/u.test(session.userId) || !allowedIds.has(session.userId)) return null;
+  const user = await db.prepare("SELECT id FROM users WHERE id = ?").bind(session.userId).first<{ id: string }>();
+  return user ? session : null;
+}
+
 export function isSameOriginMutation(request: Request): boolean {
   const origin = request.headers.get("origin");
   if (!origin) return false;
@@ -318,7 +332,7 @@ async function ensureDefaultOverlay(db: D1Database, userId: string, login: strin
   const overlayId = crypto.randomUUID();
   const token = randomToken(32);
   await db.batch([
-    db.prepare("INSERT INTO users (id, login) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET login = excluded.login")
+    db.prepare("INSERT INTO users (id, login, last_login_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(id) DO UPDATE SET login = excluded.login, last_login_at = CURRENT_TIMESTAMP")
       .bind(userId, login),
     db.prepare(`
       INSERT INTO overlays (id, owner_id, link_token, name, channel)

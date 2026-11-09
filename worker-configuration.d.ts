@@ -5,6 +5,7 @@ interface __BaseEnv_Env {
 	DB: D1Database;
 	ASSETS: Fetcher;
 	OVERLAY: DurableObjectNamespace<import("./src/worker/index").OverlayObject>;
+	ADMIN_TWITCH_IDS?: string;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {

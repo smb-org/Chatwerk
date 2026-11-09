@@ -71,6 +71,32 @@ export class OverlayObject extends DurableObject<Env> {
     return this.readSnapshot();
   }
 
+  async getAdminStats(): Promise<{ channels: string[] | null; connectedOutputs: number }> {
+    let channels: string[] | null = null;
+    try {
+      const row = this.ctx.storage.sql.exec<{ config_json: string }>(
+        "SELECT config_json FROM overlay_config WHERE singleton = 1",
+      ).toArray()[0];
+      if (row) {
+        const stored = JSON.parse(row.config_json) as unknown;
+        if (isRecord(stored) && Array.isArray(stored.channels) && stored.channels.every((channel) => typeof channel === "string")) {
+          channels = stored.channels;
+        }
+      }
+    } catch {
+      // New overlays may not have initialized config storage yet.
+    }
+    const counts = { browser: 0, obs: 0, widget: 0 };
+    for (const socket of this.ctx.getWebSockets(SOCKET_TAG)) {
+      if (socket.readyState !== WebSocket.OPEN) continue;
+      const attachment = socket.deserializeAttachment() as Partial<SocketAttachment> | null;
+      if (!attachment || !isClientType(attachment.client) || attachment.client === "studio" ||
+        !Number.isSafeInteger(attachment.acknowledgedRevision) || (attachment.acknowledgedRevision as number) < 0) continue;
+      counts[attachment.client] += 1;
+    }
+    return { channels, connectedOutputs: counts.browser + counts.obs + counts.widget };
+  }
+
   async save(
     patch: Record<string, unknown>,
     baseRevision: number,

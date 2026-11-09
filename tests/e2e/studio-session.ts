@@ -42,6 +42,20 @@ export async function seedStudioSession(page: Page, options: { channel?: string 
   return { ownerId, overlayId, token, login };
 }
 
+export async function seedAdminSession(page: Page): Promise<StudioIdentity> {
+  const ownerId = "123456789";
+  const login = `e2e_admin_${randomBytes(4).toString("hex")}`;
+  const overlayId = randomUUID();
+  const token = randomBytes(32).toString("base64url");
+  executeLocalSql(`INSERT INTO users (id, login) VALUES ('${ownerId}', '${login}') ON CONFLICT(id) DO UPDATE SET login = excluded.login; INSERT INTO overlays (id, owner_id, link_token, name, channel, link_generation) VALUES ('${overlayId}', '${ownerId}', '${token}', 'Admin example', '${login}', 1);`);
+  const cookie = await mintSessionCookie(TEST_SESSION_KEY, ownerId);
+  await page.context().addCookies([{
+    name: "session", value: cookie.slice("session=".length), url: e2eOrigin,
+    httpOnly: true, secure: true, sameSite: "Lax",
+  }]);
+  return { ownerId, overlayId, token, login };
+}
+
 export function addStudioOverlay(ownerId: string, name: string, channel: string): { overlayId: string; token: string } {
   const overlayId = randomUUID();
   const token = randomBytes(32).toString("base64url");

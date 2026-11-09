@@ -1,13 +1,21 @@
-import { sessionForRequest } from "./auth";
+import { adminSessionForRequest, sessionForRequest } from "./auth";
 
 export interface PageEnvironment {
   ASSETS: Fetcher;
+  DB: D1Database;
   SESSION_KEY?: string;
+  ADMIN_TWITCH_IDS?: string;
 }
 
 export async function handlePageRequest(request: Request, env: PageEnvironment): Promise<Response | null> {
-  if (request.method !== "GET") return null;
   const url = new URL(request.url);
+
+  if (["/admin", "/admin/", "/admin.html"].includes(url.pathname)) {
+    if (request.method !== "GET") return adminNotFound();
+    const session = await adminSessionForRequest(request, env.DB, env.SESSION_KEY, env.ADMIN_TWITCH_IDS);
+    return session ? asset(request, env, "/admin.html") : adminNotFound();
+  }
+  if (request.method !== "GET") return null;
 
   if (url.pathname === "/") {
     const destination = await sessionForRequest(request, env.SESSION_KEY) ? "/studio" : "/login";
@@ -64,6 +72,10 @@ export async function handlePageRequest(request: Request, env: PageEnvironment):
   }
 
   return null;
+}
+
+function adminNotFound(): Response {
+  return Response.json({ error: "Not found" }, { status: 404, headers: { "Cache-Control": "no-store" } });
 }
 
 function asset(request: Request, env: PageEnvironment, pathname: string): Promise<Response> {

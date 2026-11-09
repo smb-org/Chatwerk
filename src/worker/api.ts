@@ -1,4 +1,4 @@
-import { isSameOriginMutation, verifySessionCookie } from "./auth";
+import { adminSessionForRequest, isSameOriginMutation, verifySessionCookie } from "./auth";
 import {
   countActiveLooks,
   getLookByName,
@@ -31,6 +31,12 @@ export interface ApiEnvironment {
   DB: D1Database;
   OVERLAY: DurableObjectNamespace;
   SESSION_KEY?: string;
+  ADMIN_TWITCH_IDS?: string;
+}
+
+interface AdminOverlayStats {
+  channels: string[] | null;
+  connectedOutputs: number;
 }
 
 interface OverlayConfigSnapshot {
@@ -47,10 +53,14 @@ interface OverlayStub extends DurableObjectStub {
   resetForDelete(): Promise<void>;
   revoke(nextGeneration?: number): Promise<void>;
   testLine(generation: number): Promise<string>;
+  getAdminStats(): Promise<AdminOverlayStats>;
 }
 
 export async function handleApiRequest(request: Request, env: ApiEnvironment): Promise<Response | null> {
   const url = new URL(request.url);
+  if (url.pathname === "/api/admin" || url.pathname.startsWith("/api/admin/")) {
+    return readAdminOverview(request, env, url.pathname);
+  }
   if (url.pathname === "/api/overlay/config" && request.method === "OPTIONS") {
     return withBearerCors(new Response(null, {
       status: 204,
@@ -114,6 +124,138 @@ export async function handleApiRequest(request: Request, env: ApiEnvironment): P
   if (action === "rotate-link" && request.method === "POST") return rotateLink(request, env, overlayId!);
   if (action === "test-line" && request.method === "POST") return sendTestLine(request, env, overlayId!);
   return Response.json({ error: "Method not allowed" }, { status: 405, headers: { Allow: allowedMethod(action!) } });
+}
+
+interface AdminOverlayRow {
+  id: string;
+  owner_id: string;
+  name: string;
+  channel: string;
+  created_at: string;
+}
+
+interface AdminOverviewUser {
+  twitchId: string;
+  login: string;
+  createdAt: string;
+  lastLoginAt: string | null;
+  overlays: Array<{
+    name: string;
+    channels: string[];
+    createdAt: string;
+    connectedOutputs: number | null;
+  }>;
+  editorLogins: string[];
+  pendingInvite: boolean;
+  activeGalleryLooks: number;
+}
+
+async function readAdminOverview(request: Request, env: ApiEnvironment, pathname: string): Promise<Response> {
+  const session = await adminSessionForRequest(request, env.DB, env.SESSION_KEY, env.ADMIN_TWITCH_IDS);
+  if (!session) return adminNotFound();
+  if (request.method !== "GET" || pathname !== "/api/admin/overview") return adminNotFound();
+  if (request.headers.has("origin") && !isSameOriginMutation(request)) return adminNotFound();
+
+  const now = Math.floor(Date.now() / 1000);
+  const [usersResult, overlaysResult, editorsResult, inviteResult, looksResult] = await Promise.all([
+    env.DB.prepare(`
+      SELECT id, login, created_at, last_login_at
+      FROM users
+      ORDER BY last_login_at IS NULL ASC, last_login_at DESC, created_at DESC, id ASC
+    `).all<{ id: string; login: string; created_at: string; last_login_at: string | null }>(),
+    env.DB.prepare(`
+      SELECT id, owner_id, name, channel, created_at
+      FROM overlays
+      ORDER BY owner_id, created_at DESC, name COLLATE NOCASE ASC, id ASC
+    `).all<AdminOverlayRow>(),
+    env.DB.prepare(`
+      SELECT DISTINCT overlay.owner_id AS owner_id, editor.login AS login
+      FROM overlay_editors AS membership
+      JOIN overlays AS overlay ON overlay.id = membership.overlay_id
+      JOIN users AS editor ON editor.id = membership.user_id
+      ORDER BY overlay.owner_id, editor.login COLLATE NOCASE ASC
+    `).all<{ owner_id: string; login: string }>(),
+    env.DB.prepare(`
+      SELECT DISTINCT overlay.owner_id AS owner_id
+      FROM overlays AS overlay
+      JOIN overlay_invites AS invite ON invite.overlay_id = overlay.id
+      WHERE invite.expires_at > ?
+    `).bind(now).all<{ owner_id: string }>(),
+    env.DB.prepare(`
+      SELECT owner_id, COUNT(*) AS count
+      FROM themes
+      WHERE withdrawn_at IS NULL
+      GROUP BY owner_id
+    `).all<{ owner_id: string; count: number }>(),
+  ]);
+
+  const users: AdminOverviewUser[] = usersResult.results.map((row) => ({
+    twitchId: row.id,
+    login: row.login,
+    createdAt: row.created_at,
+    lastLoginAt: row.last_login_at,
+    overlays: [],
+    editorLogins: [],
+    pendingInvite: false,
+    activeGalleryLooks: 0,
+  }));
+  const usersById = new Map(users.map((user) => [user.twitchId, user]));
+  for (const row of editorsResult.results) usersById.get(row.owner_id)?.editorLogins.push(row.login);
+  for (const row of inviteResult.results) {
+    const user = usersById.get(row.owner_id);
+    if (user) user.pendingInvite = true;
+  }
+  for (const row of looksResult.results) {
+    const user = usersById.get(row.owner_id);
+    if (user) user.activeGalleryLooks = row.count;
+  }
+
+  // ponytail: This fan-out makes one Durable Object call per overlay and is bounded by Workers subrequest limits; counts degrade to unknown when calls fail. Upgrade by paginating users and aggregating totals in SQL.
+  const overlaySummaries = await mapWithConcurrency(overlaysResult.results, 8, async (row) => {
+    let channels: string[] = row.channel ? [row.channel] : [];
+    let connectedOutputs: number | null = null;
+    try {
+      const stats = await overlayStub(env, row.id).getAdminStats();
+      if (!Number.isSafeInteger(stats.connectedOutputs) || stats.connectedOutputs < 0) throw new TypeError("Invalid output count");
+      if (stats.channels?.length) channels = stats.channels;
+      connectedOutputs = stats.connectedOutputs;
+    } catch {
+      // The operator overview remains available when an individual overlay is unavailable.
+    }
+    return {
+      ownerId: row.owner_id,
+      overlay: { name: row.name, channels, createdAt: row.created_at, connectedOutputs },
+    };
+  });
+  for (const item of overlaySummaries) usersById.get(item.ownerId)?.overlays.push(item.overlay);
+
+  const totalOutputs = overlaySummaries.reduce((total, item) => {
+    if (item.overlay.connectedOutputs === null || total === null) return null;
+    return total + item.overlay.connectedOutputs;
+  }, 0 as number | null);
+  return Response.json({
+    totals: { users: users.length, overlays: overlaysResult.results.length, connectedOutputs: totalOutputs },
+    users,
+  }, { headers: { "Cache-Control": "no-store" } });
+}
+
+async function mapWithConcurrency<T, U>(items: T[], concurrency: number, operation: (item: T) => Promise<U>): Promise<U[]> {
+  const results = new Array<U>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(items.length, concurrency);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      results[index] = await operation(items[index]!);
+    }
+  }));
+  return results;
+}
+
+function adminNotFound(): Response {
+  return Response.json({ error: "Not found" }, { status: 404, headers: { "Cache-Control": "no-store" } });
 }
 
 async function listOverlays(request: Request, env: ApiEnvironment): Promise<Response> {

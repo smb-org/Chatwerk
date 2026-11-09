@@ -32,6 +32,7 @@ export default defineConfig({
       SESSION_KEY: TEST_SESSION_KEY,
       TWITCH_CLIENT_ID: "chatwerk-e2e-client",
       TWITCH_CLIENT_SECRET: "chatwerk-e2e-secret",
+      ADMIN_TWITCH_IDS: "123456789",
     },
   },
 });
