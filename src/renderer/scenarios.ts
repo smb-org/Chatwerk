@@ -123,31 +123,40 @@ const bitsLines = [["cheerer", "Cheer250 That was huge!", "#E9A23B"]] as const;
 
 export function createScenarioMessages(name: ScenarioName, channel: string, includeSharedChat = false): CommonMessage[] {
   const rows = name === "flood"
-    ? Array.from({ length: 100 }, (_, index) => floodLines[index % floodLines.length]!)
+    ? Array.from({ length: 100 }, (_, index) => index % 3 === 2
+      ? quietLines[Math.floor(index / 3) % quietLines.length]!
+      : floodLines[(index - Math.floor(index / 3)) % floodLines.length]!)
     : name === "quiet" ? quietLines : name === "raid" ? raidLines : name === "sub" ? subLines : bitsLines;
-  const messages: CommonMessage[] = rows.map(([userLogin, text, color], index): CommonMessage => ({
-    type: ["raid", "sub"].includes(name) && index === 0 ? "USERNOTICE" : "PRIVMSG",
-    channel: `#${channel.replace(/^#/u, "")}`,
-    userLogin,
-    id: `studio-${name}-${index}`,
-    roomId: name === "quiet" ? "7100001" : null,
-    sourceRoomId: null,
-    sourceId: null,
-    displayName: userLogin,
-    color,
-    badges: name === "quiet" ? quietDetails[index]?.badges ?? [] : [],
-    emotes: name === "quiet" ? quietDetails[index]?.emotes ?? [] : [],
-    text,
-    tags: {
-      login: userLogin,
-      "display-name": userLogin,
+  const messages: CommonMessage[] = rows.map(([userLogin, text, color], index): CommonMessage => {
+    const quietSampleIndex = name === "quiet" ? index : name === "flood" && index % 3 === 2
+      ? Math.floor(index / 3) % quietLines.length
+      : null;
+    const detailIndex = quietSampleIndex ?? (name === "flood" && userLogin === "sample_mira" ? 1 : null);
+    const isSample = name === "quiet" || name === "flood";
+    return {
+      type: ["raid", "sub"].includes(name) && index === 0 ? "USERNOTICE" : "PRIVMSG",
+      channel: `#${channel.replace(/^#/u, "")}`,
+      userLogin,
+      id: `studio-${name}-${index}`,
+      roomId: isSample ? "7100001" : null,
+      sourceRoomId: null,
+      sourceId: null,
+      displayName: userLogin,
       color,
-      ...(name === "quiet" ? { "chatwerk-sample": "1", ...quietDetails[index]?.tags } : {}),
-      ...(name === "raid" && index === 0 ? { "msg-id": "raid", "msg-param-viewerCount": "57" } : {}),
-      ...(name === "sub" && index === 0 ? { "msg-id": "sub", "msg-param-months": "1" } : {}),
-      ...(name === "bits" && index === 0 ? { bits: "250" } : {}),
-    },
-  }));
+      badges: detailIndex !== null ? quietDetails[detailIndex]?.badges ?? [] : [],
+      emotes: quietSampleIndex !== null ? quietDetails[quietSampleIndex]?.emotes ?? [] : [],
+      text,
+      tags: {
+        login: userLogin,
+        "display-name": userLogin,
+        color,
+        ...(isSample ? { "chatwerk-sample": "1", ...(detailIndex !== null ? quietDetails[detailIndex]?.tags : {}) } : {}),
+        ...(name === "raid" && index === 0 ? { "msg-id": "raid", "msg-param-viewerCount": "57" } : {}),
+        ...(name === "sub" && index === 0 ? { "msg-id": "sub", "msg-param-months": "1" } : {}),
+        ...(name === "bits" && index === 0 ? { bits: "250" } : {}),
+      },
+    };
+  });
   if (name === "quiet" && includeSharedChat) {
     messages.push({
       type: "PRIVMSG",
