@@ -40,6 +40,16 @@ describe("Studio rehearsal scenarios", () => {
     expect(bits[0]?.tags.bits).toBe("250");
   });
 
+  it("mixes tagged quiet visuals and the long message into flood", () => {
+    const flood = createScenarioMessages("flood", "sample");
+
+    expect(flood.some((message) => message.badges.length > 0)).toBe(true);
+    expect(flood.some((message) => message.emotes.length > 0)).toBe(true);
+    expect(flood.some((message) => message.tags["sample-paint"] !== undefined && message.tags["user-id"] === "7100002")).toBe(true);
+    expect(flood.some((message) => message.text.length > 100)).toBe(true);
+    expect(flood.every((message) => message.tags["chatwerk-sample"] === "1" && message.roomId === "7100001")).toBe(true);
+  });
+
   it("shows several quiet messages immediately when a preview starts", () => {
     const emit = vi.fn();
     const stop = runScenario("quiet", emit);
